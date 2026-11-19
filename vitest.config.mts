@@ -12,6 +12,7 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['src/**/*.test.ts'],
-    env: { PGLITE_DATA_DIR: 'memory://' },
+    // Override, not default: a DATABASE_URL exported in the developer's shell must never reach the tests.
+    env: { DATABASE_URL: '', DATABASE_URL_UNPOOLED: '', VERCEL: '', VERCEL_ENV: '', PGLITE_DATA_DIR: 'memory://' },
   },
 })

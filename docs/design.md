@@ -157,7 +157,7 @@ Lưu ý trên Vercel: cache của `"use cache"` nằm trong bộ nhớ từng in
 | **Production** | Vercel, domain chính | Neon nhánh chính | Seed lần đầu, sau đó admin quản lý | Fake (đến khi mở bán) |
 
 - Bước build trên Vercel: `npm run build:vercel` = migrate → seed (bỏ qua khi production đã có dữ liệu) → `next build`. Production được seed trước lần build đầu tiên có trang đọc DB.
-- Seed **không bao giờ** chạy trên production sau lần khởi tạo; script seed từ chối chạy khi `VERCEL_ENV=production` trừ khi có cờ `--allow-production`.
+- Seed **không bao giờ** chạy trên production sau lần khởi tạo. Script seed dùng danh sách cho phép: PGlite luôn được seed; Postgres chỉ được seed khi `VERCEL_ENV=preview` hoặc có cờ `--allow-production` — mọi trường hợp khác (không đặt, sai chính tả, VPS) bị coi là production và bị từ chối trước mọi câu lệnh DB.
 - Secret chỉ nằm trong biến môi trường của Vercel và GitHub Secrets.
 
 ## 8. Các mốc
