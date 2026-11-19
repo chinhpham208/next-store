@@ -169,7 +169,7 @@ Lưu ý trên Vercel: cache của `"use cache"` nằm trong bộ nhớ từng in
 
 ## 8. Các mốc
 
-Mỗi mốc: thiết kế màn hình (nếu có giao diện mới) → plan (`docs/plans/M<n>.md`) → ticket → code theo PR vào `develop` → QA trên Dev / preview → demo cho chủ dự án → release PR `develop → production` được duyệt, gắn tag `v0.<mốc>.0`, deploy production. Chi tiết quy trình: [`process.md`](./process.md).
+Mỗi mốc: thiết kế màn hình (nếu có giao diện mới) → plan (`docs/plans/M<n>.md`) → ticket → code theo PR vào `develop` → QA trên Dev / preview → demo cho chủ dự án → release PR `develop → production` được duyệt, gắn tag `v0.<mốc>.<n>` (quy tắc đánh số ở [`conventions.md`](./conventions.md) §8), deploy production. Chi tiết quy trình: [`process.md`](./process.md).
 
 | Mốc | Nội dung | User stories |
 |---|---|---|
@@ -184,7 +184,7 @@ Mỗi mốc: thiết kế màn hình (nếu có giao diện mới) → plan (`do
 
 **Mỗi PR:** CI xanh (typecheck, lint, `check:deps`, Vitest, build, Playwright); review không còn lỗi chặn; preview deploy chạy được.
 
-**Mỗi mốc:** mọi tiêu chí chấp nhận của các story trong mốc có test E2E hoặc test tích hợp tương ứng và đều qua; QA đã thử trên Dev / preview; chủ dự án duyệt demo và release PR `develop → production`; release đã merge bằng merge commit, có tag `v0.<mốc>.0`; production deploy thành công.
+**Mỗi mốc:** mọi tiêu chí chấp nhận của các story trong mốc có test E2E hoặc test tích hợp tương ứng và đều qua; QA đã thử trên Dev / preview; chủ dự án duyệt demo và release PR `develop → production`; release đã merge bằng merge commit, có tag `v0.<mốc>.<n>` (tag cuối cùng của mốc là release cuối mốc); production deploy thành công.
 
 ## 10. Môi trường phát triển
 

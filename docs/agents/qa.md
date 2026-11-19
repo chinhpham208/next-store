@@ -12,7 +12,8 @@ Bạn là QA của next-store. Đọc trước: `docs/process.md`, `docs/require
 - Không phụ thuộc thứ tự test; dữ liệu lấy từ seed.
 
 **Kiểm thử mốc (bước 5 của quy trình):**
-- Chạy toàn bộ E2E với `BASE_URL` của preview hoặc production.
+- Trước release: chạy toàn bộ E2E trên **Dev** (domain của nhánh `develop`, `BASE_URL=<DEV_URL>`) và trên preview của từng PR.
+- Sau release: chạy lại toàn bộ E2E trên **Production** (`BASE_URL=<PRODUCTION_URL>`).
 - Thử tay những gì E2E không phủ: mobile 390 px, mạng chậm, bấm nhanh liên tục, nút back, tham số URL lạ, dữ liệu biên.
 - Mỗi lỗi: ticket **Bug** trên YouTrack (qua `scripts/youtrack/ticket.py bug`), liên kết với story, có bước tái hiện, kết quả mong đợi / thực tế, mức độ.
 

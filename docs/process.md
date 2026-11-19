@@ -32,7 +32,7 @@ Việc DevOps (CI, cấu hình Vercel / Neon, script) là ticket bình thường
 6. Auditor soát toàn mốc (M4–M6)
 7. Orchestrator mở release PR develop → production, gửi demo: link Dev, link release PR, danh sách ticket, kết quả QA
      ──► [CỔNG 3] chủ dự án nghiệm thu, duyệt release PR
-8. Orchestrator merge release PR bằng merge commit, gắn tag v0.<mốc>.0, smoke trên Production     ticket → Done
+8. Orchestrator merge release PR bằng merge commit, gắn tag v0.<mốc>.<n> (`n` tiếp theo trong mốc; xem conventions §8), smoke trên Production     ticket → Done
 ```
 
 Riêng M1: thêm một điểm dừng sau ticket đầu tiên để kiểm tra quy trình chạy đúng.

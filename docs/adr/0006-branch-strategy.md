@@ -40,7 +40,7 @@ Ràng buộc: GitHub Free, repo riêng tư → không có branch protection, quy
 
 ## Hệ quả
 
-- **Phiên bản:** `v0.<mốc>.0` cho release cuối mỗi mốc (M1 → `v0.1.0`); hotfix tăng số cuối (`v0.1.1`). Tag đặt trên merge commit của release PR hoặc hotfix PR, do Orchestrator tạo sau khi merge.
+- **Phiên bản:** tag có dạng `v0.<mốc>.<n>`. `n` bắt đầu từ 0 cho release đầu tiên của mốc và tăng 1 cho mọi release sau trong cùng mốc (release trung gian, release cuối mốc hoặc hotfix). Tag không bao giờ bị di chuyển hay tái sử dụng. Release cuối mốc chỉ là tag cuối cùng của mốc đó (M1: `v0.1.0` là bản đầu tiên, các bản sau là `v0.1.1`, `v0.1.2`, …). Tag đặt trên merge commit của release PR hoặc hotfix PR, do Orchestrator tạo sau khi merge.
 - **Release:** Orchestrator mở PR `head=develop`, `base=production` → CI xanh → chủ dự án duyệt (CỔNG 3) → merge bằng `merge_method=merge` → tag → smoke trên Production. `develop` là nhánh mặc định nên không bị tự xoá khi làm head.
 - **Hotfix và back-merge:** sau khi hotfix PR merge vào `production` và gắn tag, Orchestrator tạo nhánh `sync/production-to-develop-v0.x.y` trỏ vào commit hiện tại của `production`, mở PR vào `develop` và merge bằng merge commit. Nhánh tạm bị tự xoá sau khi merge; nếu dùng `production` làm head, cài đặt tự xoá sẽ xoá luôn nhánh `production`.
 - **Quy tắc merge commit:** release PR, hotfix PR và back-merge PR luôn dùng merge commit. Squash ở các PR này làm hai nhánh lệch lịch sử, release sau sẽ xung đột với chính những thay đổi đã lên production. Chỉ PR ticket vào `develop` dùng squash.

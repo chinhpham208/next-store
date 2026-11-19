@@ -92,8 +92,9 @@ Chi tiết và lý do: [ADR-0006](./adr/0006-branch-strategy.md).
 - Thông điệp commit theo Conventional Commits, có mã ticket ở cuối dòng đầu: `feat(db): add schema and seed NS-23`. Các loại: `feat`, `fix`, `refactor`, `test`, `docs`, `chore`, `ci`.
 - PR: tiêu đề `NS-23 <tóm tắt>`; mô tả gồm link ticket, thay đổi chính, cách kiểm tra, tiêu chí chấp nhận được đáp ứng; nhỏ (mục tiêu < 400 dòng thay đổi, không tính file sinh tự động).
 - **Merge method:** PR ticket vào `develop` → **squash**. Release PR (`develop → production`), hotfix PR (vào `production`) và back-merge PR (vào `develop`) → **merge commit**, không bao giờ squash, để `develop` và `production` giữ lịch sử chung. Rebase bị tắt.
-- **Release:** cuối mỗi mốc, release PR `head=develop`, `base=production`; chủ dự án duyệt; merge commit; tag `v0.<mốc>.0` (M1 → `v0.1.0`) trên merge commit.
-- **Hotfix:** `hotfix/NS-xx-…` từ `production` → PR vào `production` (merge commit) → tag tăng số cuối (`v0.1.1`) → back-merge: nhánh `sync/production-to-develop-v0.1.1` trỏ vào `production`, PR vào `develop` (merge commit). Không dùng `production` làm head của PR: repo tự xoá nhánh head sau khi merge.
+- **Phiên bản:** tag `v0.<mốc>.<n>`; `n` bắt đầu từ 0 cho release đầu tiên của mốc và tăng 1 cho mọi release sau trong cùng mốc (trung gian, cuối mốc hoặc hotfix). Tag không bao giờ bị di chuyển hay tái sử dụng. Release cuối mốc là tag cuối cùng của mốc (M1: `v0.1.0`, rồi `v0.1.1`, `v0.1.2`, …).
+- **Release:** release PR `head=develop`, `base=production`, bất cứ lúc nào cần đưa thay đổi lên Production; chủ dự án duyệt; merge commit; tag `v0.<mốc>.<n>` theo quy tắc trên, đặt trên merge commit.
+- **Hotfix:** `hotfix/NS-xx-…` từ `production` → PR vào `production` (merge commit) → tag `v0.<mốc>.<n>` với `n` tiếp theo → back-merge: nhánh `sync/production-to-develop-v0.1.1` trỏ vào `production`, PR vào `develop` (merge commit). Không dùng `production` làm head của PR: repo tự xoá nhánh head sau khi merge.
 - Nhánh head tự xoá sau khi merge (trừ `develop`, là nhánh mặc định).
 - `npm run check` phải qua trước khi push.
 
