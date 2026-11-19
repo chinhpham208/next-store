@@ -7,7 +7,7 @@ tools: Read, Grep, Glob, Bash
 
 Bạn là reviewer của next-store. Đọc trước: `docs/conventions.md`, task tương ứng trong `docs/plans/M<n>.md`, tiêu chí chấp nhận của story liên quan trong `docs/requirements.md`.
 
-**Đầu vào:** số PR hoặc tên nhánh. Lấy diff bằng `git fetch origin <nhánh> && git diff origin/main...origin/<nhánh>` hoặc danh sách file của PR qua `gh api repos/chinhpham208/next-store/pulls/<n>/files`. Xác nhận check `check` đã xanh trên head SHA qua `gh api repos/chinhpham208/next-store/commits/<sha>/check-runs`.
+**Đầu vào:** số PR hoặc tên nhánh. Lấy diff bằng `git fetch origin && git diff origin/develop...origin/<nhánh>` (hotfix: `origin/production...origin/<nhánh>`; luôn so với đúng base của PR, không bao giờ `origin/main`) hoặc danh sách file của PR qua `gh api repos/chinhpham208/next-store/pulls/<n>/files`. Xác nhận check `check` đã xanh trên head SHA qua `gh api repos/chinhpham208/next-store/commits/<sha>/check-runs`.
 
 **Kiểm tra theo thứ tự:**
 1. **Đúng yêu cầu:** làm đủ task và tiêu chí chấp nhận liên quan; không làm thừa ngoài phạm vi.

@@ -24,22 +24,26 @@ Việc DevOps (CI, cấu hình Vercel / Neon, script) là ticket bình thường
 2. Orchestrator tạo ticket trên YouTrack bằng script
 3. Designer thiết kế màn hình mới của mốc     ──► [CỔNG 2] chủ dự án duyệt thiết kế
 4. Với từng ticket, tuần tự:
-     a. Implementer: nhánh NS-xx, TDD, scripts/verify.sh, mở PR trên GitHub      ticket → In Progress
+     a. Implementer: nhánh NS-xx từ develop, TDD, scripts/verify.sh, mở PR vào develop      ticket → In Progress
      b. Reviewer (+ Auditor nếu chạm vùng nhạy cảm), song song, chỉ đọc
      c. Có lỗi chặn → quay lại (a); tối đa 2 vòng
-     d. CI xanh + không còn lỗi chặn → Orchestrator squash-merge qua API sau khi CI xanh     ticket → To Verify
-5. QA chạy E2E + thử tay trên production/preview theo tiêu chí chấp nhận; lỗi → ticket Bug
+     d. CI xanh + không còn lỗi chặn → Orchestrator squash-merge vào develop qua API; Vercel deploy Dev      ticket → To Verify
+5. QA chạy E2E + thử tay trên Dev / preview theo tiêu chí chấp nhận; lỗi → ticket Bug
 6. Auditor soát toàn mốc (M4–M6)
-7. Orchestrator gửi demo: link production, danh sách ticket, kết quả QA ──► [CỔNG 3] chủ dự án nghiệm thu → Done
+7. Orchestrator mở release PR develop → production, gửi demo: link Dev, link release PR, danh sách ticket, kết quả QA
+     ──► [CỔNG 3] chủ dự án nghiệm thu, duyệt release PR
+8. Orchestrator merge release PR bằng merge commit, gắn tag v0.<mốc>.0, smoke trên Production     ticket → Done
 ```
 
 Riêng M1: thêm một điểm dừng sau ticket đầu tiên để kiểm tra quy trình chạy đúng.
+
+Nhánh, merge method, tag, hotfix và back-merge: [`conventions.md`](./conventions.md) §8 và [ADR-0006](./adr/0006-branch-strategy.md). `main` đóng băng, không dùng nữa.
 
 ## 3. Trạng thái trên YouTrack
 
 | Loại | Open | In Progress | To Verify | Done |
 |---|---|---|---|---|
-| **Task / Bug** | Đã tạo | Implementer bắt đầu (có nhánh) | PR đã merge, đã deploy | Chủ dự án nghiệm thu |
+| **Task / Bug** | Đã tạo | Implementer bắt đầu (có nhánh) | PR đã merge vào `develop`, đã lên Dev | Chủ dự án nghiệm thu |
 | **User Story** | Chưa bắt đầu | Có task đang làm | Mọi task xong, E2E của story xanh | Chủ dự án nghiệm thu |
 | **Epic** | Chưa bắt đầu | Mốc đang chạy | Chờ CỔNG 3 | Chủ dự án nghiệm thu |
 
@@ -68,11 +72,16 @@ Riêng M1: thêm một điểm dừng sau ticket đầu tiên để kiểm tra q
 
 GraphQL bị chặn bởi proxy của phiên, nên dùng REST:
 
-- Mở PR: `gh api repos/chinhpham208/next-store/pulls -f title=… -f head=… -f base=main -f body=…`
+- Mở PR ticket: `gh api repos/chinhpham208/next-store/pulls -f title=… -f head=NS-xx-… -f base=develop -f body=…`
 - Check: `gh api repos/chinhpham208/next-store/commits/<sha>/check-runs`
-- Merge (chỉ Orchestrator): `gh api -X PUT repos/chinhpham208/next-store/pulls/<n>/merge -f merge_method=squash`
-- Cài đặt repo: chỉ squash-merge; nhánh tự xoá sau khi merge. Vì repo tự xoá nhánh sau khi merge, thường không cần xoá nhánh thủ công. Nếu còn nhánh cần xoá, lệnh xoá qua proxy bị chặn → Orchestrator xử lý.
-- Branch protection không khả dụng (GitHub Free, repo riêng tư), nên quy tắc "chỉ merge khi CI xanh và review đã duyệt" do Orchestrator đảm bảo.
+- Merge PR ticket (chỉ Orchestrator): `gh api -X PUT repos/chinhpham208/next-store/pulls/<n>/merge -f merge_method=squash`
+- Release (chỉ Orchestrator, sau khi chủ dự án duyệt):
+  - Mở PR: `gh api repos/chinhpham208/next-store/pulls -f title="Release v0.x.y" -f head=develop -f base=production -f body=…`
+  - Merge: `gh api -X PUT repos/chinhpham208/next-store/pulls/<n>/merge -f merge_method=merge` (merge commit, **không** squash)
+  - Tag trên merge commit (`merge_commit_sha` trong kết quả merge): `gh api repos/chinhpham208/next-store/git/refs -f ref=refs/tags/v0.x.y -f sha=<merge_commit_sha>`
+- Hotfix: PR `head=hotfix/NS-xx-…`, `base=production`, `merge_method=merge`, rồi tag. Back-merge: tạo nhánh tạm từ `production` — `gh api repos/chinhpham208/next-store/git/refs -f ref=refs/heads/sync/production-to-develop-v0.x.y -f sha=<sha của production>` — rồi PR `head=sync/production-to-develop-v0.x.y`, `base=develop`, `merge_method=merge`. Không dùng `production` làm head (sẽ bị tự xoá sau khi merge).
+- Cài đặt repo: nhánh mặc định `develop`; cho phép squash và merge commit, tắt rebase; nhánh head tự xoá sau khi merge (nhánh mặc định không bị xoá). Thường không cần xoá nhánh thủ công; nếu còn nhánh cần xoá, lệnh xoá qua proxy bị chặn → Orchestrator xử lý.
+- Branch protection không khả dụng (GitHub Free, repo riêng tư), nên quy tắc "chỉ merge khi CI xanh và review đã duyệt", đúng base và đúng merge method do Orchestrator đảm bảo.
 
 ## 6. Cuối mỗi mốc
 
