@@ -39,3 +39,14 @@ jobs:
         run: npm run build
       - name: smoke
         run: npm run smoke
+      - name: install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: e2e
+        run: npm run e2e
+      - name: upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
