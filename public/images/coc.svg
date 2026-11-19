@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" width="800" height="800">
+<rect width="800" height="800" fill="#fbe6c8"/>
+<ellipse cx="400" cy="672" rx="210" ry="22" fill="#efcf9f"/>
+<g fill="none" stroke="#b45309" stroke-width="14" stroke-linecap="round" opacity="0.55">
+<path d="M330 215 q-24 -32 0 -64 q24 -32 0 -64"/>
+<path d="M400 215 q-24 -32 0 -64 q24 -32 0 -64"/>
+<path d="M470 215 q-24 -32 0 -64 q24 -32 0 -64"/>
+</g>
+<path d="M560 340 h30 a76 76 0 0 1 0 152 h-30" fill="none" stroke="#b45309" stroke-width="38"/>
+<rect x="240" y="260" width="320" height="400" rx="52" fill="#b45309"/>
+<rect x="240" y="260" width="320" height="40" rx="20" fill="#8f3f05"/>
+<g fill="none" stroke="#fbe6c8" stroke-width="20" stroke-linecap="round" stroke-linejoin="round">
+<polyline points="330,410 382,460 330,510"/>
+<line x1="420" y1="512" x2="480" y2="512"/>
+</g>
+</svg>
