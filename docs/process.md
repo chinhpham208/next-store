@@ -71,7 +71,7 @@ GraphQL bị chặn bởi proxy của phiên, nên dùng REST:
 - Mở PR: `gh api repos/chinhpham208/next-store/pulls -f title=… -f head=… -f base=main -f body=…`
 - Check: `gh api repos/chinhpham208/next-store/commits/<sha>/check-runs`
 - Merge (chỉ Orchestrator): `gh api -X PUT repos/chinhpham208/next-store/pulls/<n>/merge -f merge_method=squash`
-- Cài đặt repo: chỉ squash-merge; nhánh tự xoá sau khi merge. Xoá nhánh qua proxy bị chặn → Orchestrator xử lý.
+- Cài đặt repo: chỉ squash-merge; nhánh tự xoá sau khi merge. Vì repo tự xoá nhánh sau khi merge, thường không cần xoá nhánh thủ công. Nếu còn nhánh cần xoá, lệnh xoá qua proxy bị chặn → Orchestrator xử lý.
 - Branch protection không khả dụng (GitHub Free, repo riêng tư), nên quy tắc "chỉ merge khi CI xanh và review đã duyệt" do Orchestrator đảm bảo.
 
 ## 6. Cuối mỗi mốc
