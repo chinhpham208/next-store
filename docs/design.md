@@ -149,12 +149,16 @@ Lưu ý trên Vercel: cache của `"use cache"` nằm trong bộ nhớ từng in
 
 ## 7. Môi trường
 
-| Môi trường | Ở đâu | Database | Dữ liệu | Thanh toán |
-|---|---|---|---|---|
-| **Local** | Máy dev | PGlite (`.data/`) | Seed | Fake |
-| **CI** | GitHub Actions | PGlite (`memory://` / thư mục tạm) | Seed | Fake |
-| **Preview** | Vercel, một URL cho mỗi PR | Neon branch riêng cho mỗi PR | Seed | Fake |
-| **Production** | Vercel, domain chính | Neon nhánh chính | Seed lần đầu, sau đó admin quản lý | Fake (đến khi mở bán) |
+| Môi trường | Nhánh git | Ở đâu | Database | Dữ liệu | Thanh toán |
+|---|---|---|---|---|---|
+| **Local** | bất kỳ | Máy dev | PGlite (`.data/`) | Seed | Fake |
+| **CI** | mọi PR; push vào `develop`, `production` | GitHub Actions | PGlite (`memory://` / thư mục tạm) | Seed | Fake |
+| **Preview** | mỗi PR | Vercel preview, một URL cho mỗi PR | Neon branch riêng cho mỗi PR | Seed | Fake |
+| **Dev** | `develop` | Vercel preview của nhánh `develop`, domain nhánh cố định | Neon branch `dev` | Seed | Fake |
+| **Production** | `production` | Vercel production (production branch = `production`), domain chính | Neon nhánh chính | Seed lần đầu, sau đó admin quản lý | Fake (đến khi mở bán) |
+
+- Code không kiểm tra tên môi trường; mọi khác biệt nằm trong biến môi trường. Dev là bản preview của Vercel (`VERCEL_ENV=preview`), dùng `DATABASE_URL` đặt ở phạm vi Preview cho riêng nhánh `develop`. Luồng nhánh: [ADR-0006](./adr/0006-branch-strategy.md).
+- Sau này thêm `stg` / `demo`: mỗi cái là một nhánh sống lâu có domain nhánh và Neon branch riêng (Hobby), hoặc Vercel Custom Environments (Pro).
 
 - Bước build trên Vercel: `npm run build:vercel` = migrate → seed (bỏ qua khi production đã có dữ liệu) → `next build`. Production được seed trước lần build đầu tiên có trang đọc DB.
 - Seed **không bao giờ** chạy trên production sau lần khởi tạo. Script seed dùng danh sách cho phép: PGlite luôn được seed; Postgres chỉ được seed khi `VERCEL_ENV=preview` hoặc có cờ `--allow-production` — mọi trường hợp khác (không đặt, sai chính tả, VPS) bị coi là production và bị từ chối trước mọi câu lệnh DB.
@@ -165,7 +169,7 @@ Lưu ý trên Vercel: cache của `"use cache"` nằm trong bộ nhớ từng in
 
 ## 8. Các mốc
 
-Mỗi mốc: thiết kế màn hình (nếu có giao diện mới) → plan (`docs/plans/M<n>.md`) → ticket → code theo PR → QA → deploy preview → demo cho chủ dự án → merge và deploy production. Chi tiết quy trình: [`process.md`](./process.md).
+Mỗi mốc: thiết kế màn hình (nếu có giao diện mới) → plan (`docs/plans/M<n>.md`) → ticket → code theo PR vào `develop` → QA trên Dev / preview → demo cho chủ dự án → release PR `develop → production` được duyệt, gắn tag `v0.<mốc>.<n>` (quy tắc đánh số ở [`conventions.md`](./conventions.md) §8), deploy production. Chi tiết quy trình: [`process.md`](./process.md).
 
 | Mốc | Nội dung | User stories |
 |---|---|---|
@@ -180,10 +184,10 @@ Mỗi mốc: thiết kế màn hình (nếu có giao diện mới) → plan (`do
 
 **Mỗi PR:** CI xanh (typecheck, lint, `check:deps`, Vitest, build, Playwright); review không còn lỗi chặn; preview deploy chạy được.
 
-**Mỗi mốc:** mọi tiêu chí chấp nhận của các story trong mốc có test E2E hoặc test tích hợp tương ứng và đều qua; QA đã thử trên preview; chủ dự án duyệt demo; production deploy thành công.
+**Mỗi mốc:** mọi tiêu chí chấp nhận của các story trong mốc có test E2E hoặc test tích hợp tương ứng và đều qua; QA đã thử trên Dev / preview; chủ dự án duyệt demo và release PR `develop → production`; release đã merge bằng merge commit, có tag `v0.<mốc>.<n>` (tag cuối cùng của mốc là release cuối mốc); production deploy thành công.
 
 ## 10. Môi trường phát triển
 
 - Bản làm việc của đội agent: workspace cloud `/home/claude/next-store` (dùng chung, một người viết tại một thời điểm). **Chủ dự án không chạy `npm` trong workspace này** — `node_modules` ở đây là bản Linux và PGlite chỉ cho một tiến trình truy cập.
-- Chủ dự án chạy thử bằng bản clone riêng trên Mac, kéo từ GitHub `chinhpham208/next-store`, ví dụ `~/Projects/next-store-local`, hoặc xem trên preview / production.
+- Chủ dự án chạy thử bằng bản clone riêng trên Mac, kéo nhánh `develop` từ GitHub `chinhpham208/next-store`, ví dụ `~/Projects/next-store-local`, hoặc xem trên preview / Dev / production. `main` đóng băng, không dùng để chạy thử.
 - Không cần Docker hay tài khoản thanh toán để chạy local.

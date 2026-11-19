@@ -1,6 +1,6 @@
 # ADR-0005: Hosting trên Vercel + Neon, CI trên GitHub Actions
 
-- Trạng thái: Đề xuất — chờ chủ dự án xác nhận tài khoản
+- Trạng thái: Đề xuất — chờ chủ dự án xác nhận tài khoản; thay thế một phần bởi [ADR-0006](./0006-branch-strategy.md) (nhánh kích hoạt deploy production, bảo vệ nhánh `main`)
 - Ngày: 2026-11-19
 
 ## Bối cảnh
@@ -19,8 +19,8 @@ Sản phẩm cần chạy công khai trên internet, có môi trường preview 
 
 - **App:** Vercel, gói Hobby trong giai đoạn hiện tại (chưa thu tiền); chuyển Pro trước khi mở bán.
 - **Database:** Neon Free — 1 GB mỗi project, đủ cho giai đoạn này; nâng cấp là đổi gói, không cần chuyển dữ liệu. Tích hợp Neon ↔ Vercel để mỗi preview có branch DB riêng.
-- **CI:** GitHub Actions chạy typecheck, lint, `check:deps`, Vitest, build, Playwright trên mọi PR, dùng PGlite (không cần DB thật). Nhánh `main` được bảo vệ: phải qua CI và có review.
-- **Deploy:** Vercel tự deploy preview cho mỗi PR và production khi merge vào `main`. Bước build trên Vercel: `npm run build:vercel` = migrate → seed (preview luôn seed; production chỉ seed khi DB trống) → `next build`.
+- **CI:** GitHub Actions chạy typecheck, lint, `check:deps`, Vitest, build, Playwright trên mọi PR, dùng PGlite (không cần DB thật). Nhánh `main` được bảo vệ: phải qua CI và có review. (đã thay bằng ADR-0006: CI chạy trên mọi PR và trên push vào `develop` / `production`; `main` đóng băng)
+- **Deploy:** Vercel tự deploy preview cho mỗi PR và production khi merge vào `main`. (đã thay bằng ADR-0006: Dev deploy từ `develop`, Production deploy từ nhánh `production` qua release PR) Bước build trên Vercel: `npm run build:vercel` = migrate → seed (preview luôn seed; production chỉ seed khi DB trống) → `next build`.
 
 ## Hệ quả
 
