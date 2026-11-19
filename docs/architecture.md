@@ -160,21 +160,25 @@ flowchart LR
   ci["GitHub Actions<br/>check · test · build · E2E<br/>(PGlite)"]
   subgraph vercel["Vercel"]
     preview["Preview<br/>mỗi PR một URL"]
-    prod["Production<br/>domain chính"]
+    devenv["Dev<br/>nhánh develop, domain cố định"]
+    prod["Production<br/>nhánh production, domain chính"]
   end
   subgraph neon["Neon Postgres"]
-    nbranch[("branch theo PR")]
+    nbranch[("branch theo nhánh git<br/>(tích hợp Neon tự tạo)")]
+    ndev[("branch tự tạo cho<br/>nhánh git develop")]
     nmain[("nhánh chính")]
   end
   yt["YouTrack NS"]
 
   agents -->|push nhánh NS-xx| gh
-  owner -->|duyệt, merge| gh
+  owner -->|duyệt release PR| gh
   gh --> ci
-  gh --> preview --> nbranch
-  gh -->|merge vào main| prod --> nmain
+  gh -->|PR NS-xx → develop| preview --> nbranch
+  gh -->|squash-merge vào develop| devenv --> ndev
+  gh -->|release PR develop → production<br/>merge commit + tag v0.x.y| prod --> nmain
   agents -.->|trạng thái ticket| yt
 ```
 
-- Local và CI dùng PGlite; preview và production dùng Neon. Chi tiết: [ADR-0005](./adr/0005-hosting.md).
+- `main` đóng băng, không deploy. Ticket PR vào `develop`; cuối mốc, release PR `develop → production`. Hotfix: `hotfix/NS-xx-…` từ `production`, sau đó back-merge vào `develop`. Chi tiết: [ADR-0006](./adr/0006-branch-strategy.md).
+- Local và CI dùng PGlite; preview, Dev và production dùng Neon. Chi tiết: [ADR-0005](./adr/0005-hosting.md).
 - Đội agent làm việc trong `/home/claude/next-store` (máy ảo Linux); chủ dự án không chạy `npm` ở thư mục đó mà dùng bản clone riêng.

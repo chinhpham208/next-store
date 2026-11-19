@@ -78,3 +78,25 @@ describe('resolveMigrationUrl', () => {
     expect(run).not.toThrow(/s3cr3t|neon\.tech/)
   })
 })
+
+// The exact pair the Vercel ↔ Neon Marketplace integration injects (credentials are fake).
+describe('resolveMigrationUrl with Neon integration URLs', () => {
+  const QUERY = '?sslmode=require&channel_binding=require'
+  const NEON_POOLED = `postgresql://neondb_owner:npg_FakePass123@ep-fake-dew-a1b2c3d4-pooler.ap-southeast-1.aws.neon.tech/neondb${QUERY}`
+  const NEON_DIRECT = `postgresql://neondb_owner:npg_FakePass123@ep-fake-dew-a1b2c3d4.ap-southeast-1.aws.neon.tech/neondb${QUERY}`
+
+  it('uses DATABASE_URL_UNPOOLED for the direct endpoint of the same Neon branch', () => {
+    expect(resolveMigrationUrl({ pooledUrl: NEON_POOLED, unpooledUrl: NEON_DIRECT })).toBe(NEON_DIRECT)
+  })
+  it('accepts the pair when only sslmode is present', () => {
+    const pooled = NEON_POOLED.replace('&channel_binding=require', '')
+    const direct = NEON_DIRECT.replace('&channel_binding=require', '')
+    expect(resolveMigrationUrl({ pooledUrl: pooled, unpooledUrl: direct })).toBe(direct)
+  })
+  it('refuses the direct endpoint of another Neon branch', () => {
+    const otherBranch = NEON_DIRECT.replace('ep-fake-dew-a1b2c3d4.', 'ep-fake-sun-e5f6g7h8.')
+    const run = () => resolveMigrationUrl({ pooledUrl: NEON_POOLED, unpooledUrl: otherBranch })
+    expect(run).toThrow(MISMATCH)
+    expect(run).not.toThrow(/npg_FakePass123|neon\.tech/)
+  })
+})

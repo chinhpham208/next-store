@@ -5,7 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
+    "build:vercel": "npm run db:migrate && (test \"$VERCEL_ENV\" = production || npm run db:seed) && next build",
     "start": "next start",
+    "smoke": "bash scripts/smoke.sh",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
     "test": "vitest run",

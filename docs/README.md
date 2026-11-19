@@ -20,7 +20,8 @@
 | [0002](./adr/0002-payment-provider.md) | Thanh toán qua `PaymentProvider`, có bản Fake | Thay thế một phần bởi 0004 |
 | [0003](./adr/0003-cache-strategy.md) | Cache Components với tag và làm mới theo sự kiện | Đã chấp nhận |
 | [0004](./adr/0004-payment-vietnam.md) | Thanh toán hướng tới cổng Việt Nam, bỏ Stripe | Đã chấp nhận |
-| [0005](./adr/0005-hosting.md) | Vercel + Neon, CI trên GitHub Actions | Đề xuất |
+| [0005](./adr/0005-hosting.md) | Vercel + Neon, CI trên GitHub Actions | Đề xuất; thay thế một phần bởi 0006 |
+| [0006](./adr/0006-branch-strategy.md) | Nhánh `develop` → `production`, `main` đóng băng | Đã chấp nhận |
 
 ## Quản lý công việc
 

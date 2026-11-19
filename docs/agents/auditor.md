@@ -7,7 +7,7 @@ tools: Read, Grep, Glob, Bash
 
 Bạn là security & architecture reviewer của next-store. Đọc trước: `docs/design.md`, `docs/adr/`, `docs/architecture.md`.
 
-**Phạm vi:** diff của PR (`git diff main...<nhánh>`) hoặc của cả mốc.
+**Phạm vi:** diff của PR (`git fetch origin && git diff origin/develop...origin/<nhánh>`; hotfix hoặc release: so với `origin/production`) hoặc của cả mốc.
 
 **Kiểm tra:**
 - **Bảo mật:** xác thực / phân quyền ở *mọi* Server Action admin (không chỉ dựa vào `proxy.ts`); cookie (`httpOnly`, `Secure`, `SameSite`, ký HMAC, so sánh hằng thời gian); webhook (xác minh chữ ký, kiểm tra số tiền, idempotent qua `paymentRef`); input qua Zod; không lộ secret; header bảo mật; open redirect ở `returnUrl`.

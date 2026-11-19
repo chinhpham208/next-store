@@ -1,10 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" width="800" height="800">
-<rect width="800" height="800" fill="#d6ece8"/>
-<ellipse cx="400" cy="690" rx="190" ry="22" fill="#b4d6cf"/>
-<path d="M250 200 L340 160 Q400 225 460 160 L550 200 L660 300 L590 380 L540 340 L540 640 Q540 660 520 660 L280 660 Q260 660 260 640 L260 340 L210 380 L140 300 Z" fill="#0a6b66"/>
-<g fill="none" stroke="#d6ece8" stroke-width="18" stroke-linecap="round" stroke-linejoin="round">
-<polyline points="355,440 312,484 355,528"/>
-<polyline points="445,440 488,484 445,528"/>
-<line x1="418" y1="430" x2="382" y2="538"/>
-</g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" width="800" height="800" aria-hidden="true"><rect width="800" height="800" fill="#E8EEF0"/><path fill="#0C0F12" d="M176 200 H624 Q648 200 648 224 V392 H552 V600 Q552 624 528 624 H272 Q248 624 248 600 V392 H152 V224 Q152 200 176 200 Z"/><rect x="344" y="200" width="112" height="48" fill="#E8EEF0"/><rect x="456" y="296" width="48" height="48" fill="#08959A" id="cursor"/></svg>
