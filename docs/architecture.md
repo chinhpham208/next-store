@@ -153,7 +153,7 @@ erDiagram
 ```mermaid
 flowchart LR
   subgraph dev["Phát triển"]
-    agents["Đội agent<br/>~/Projects/next-store"]
+    agents["Đội agent<br/>/home/claude/next-store"]
     owner["Chủ dự án<br/>bản clone riêng"]
   end
   gh["GitHub<br/>PR + review"]
@@ -177,4 +177,4 @@ flowchart LR
 ```
 
 - Local và CI dùng PGlite; preview và production dùng Neon. Chi tiết: [ADR-0005](./adr/0005-hosting.md).
-- Đội agent làm việc trong `~/Projects/next-store` (máy ảo Linux); chủ dự án không chạy `npm` ở thư mục đó mà dùng bản clone riêng.
+- Đội agent làm việc trong `/home/claude/next-store` (máy ảo Linux); chủ dự án không chạy `npm` ở thư mục đó mà dùng bản clone riêng.
