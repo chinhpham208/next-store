@@ -1,13 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" width="800" height="800">
-<rect width="800" height="800" fill="#d9e4f5"/>
-<ellipse cx="410" cy="672" rx="200" ry="20" fill="#bccdea"/>
-<rect x="556" y="196" width="26" height="436" rx="8" fill="#f4f7fc"/>
-<rect x="250" y="170" width="316" height="470" rx="22" fill="#1f4e8c"/>
-<rect x="250" y="170" width="44" height="470" rx="22" fill="#17396a"/>
-<path d="M470 170 v118 l26 -24 l26 24 v-118 z" fill="#f2a33a"/>
-<g fill="#d9e4f5">
-<rect x="330" y="390" width="190" height="18" rx="9"/>
-<rect x="330" y="432" width="140" height="18" rx="9"/>
-<rect x="330" y="474" width="170" height="18" rx="9"/>
-</g>
-</svg>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" width="800" height="800" aria-hidden="true"><rect width="800" height="800" fill="#0C0F12"/><path fill="#E8EEF0" d="M248 168 H520 Q544 168 544 192 V608 Q544 632 520 632 H248 Z"/><rect x="296" y="168" width="16" height="464" fill="#0C0F12"/><path fill="#E8EEF0" d="M560 184 H576 Q592 184 592 200 V600 Q592 616 576 616 H560 Z"/><rect x="352" y="264" width="144" height="32" fill="#0C0F12"/><rect x="352" y="320" width="80" height="32" fill="#0C0F12"/><rect x="448" y="320" width="32" height="32" fill="#08959A" id="cursor"/><rect x="352" y="520" width="96" height="16" fill="#0C0F12"/></svg>

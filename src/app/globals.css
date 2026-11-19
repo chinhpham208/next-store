@@ -1,24 +1,143 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
+/*
+ * Tokens: docs/design-system.md §1 (brand Gin Pham, v2).
+ * Namespaces are reset with `initial` so only the approved palette, type scale, radii and fonts exist as
+ * utilities — `bg-red-500` or `shadow-md` simply do not compile (brand §7: no colours outside the table,
+ * no shadows). Spacing and breakpoints stay Tailwind defaults (--spacing = 0.25rem = 4px).
+ */
+@theme {
+  --color-*: initial;
+  --shadow-*: initial;
+  --inset-shadow-*: initial;
+  --drop-shadow-*: initial;
+  --text-shadow-*: initial;
+  --font-*: initial;
+  --text-*: initial;
+  --radius-*: initial;
+  --tracking-*: initial;
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
+  /* Theme-dependent colours: light values here, dark overrides below on the same variables. */
+  --color-background: #f4f8f9;
+  --color-surface: #ffffff;
+  --color-surface-muted: #eaeeef;
+  --color-foreground: #0c0f12;
+  --color-muted-foreground: #4d5660;
+  --color-border: #d0d8da;
+  --color-border-strong: #6b747d;
+  /* Cursor block only — never text. */
+  --color-accent: #08959a;
+  --color-link: #097a7e;
+  --color-ring: #097a7e;
+  --color-danger: #b4312b;
+
+  /* Inverse band (footer): identical in both themes. */
+  --color-inverse: #0c0f12;
+  --color-inverse-foreground: #e8eef0;
+  --color-inverse-muted: #9ba2aa;
+  --color-inverse-accent: #2ee6ea;
+  --color-inverse-border: #38424c;
+
+  /* --font-lexend is declared by next/font/local on <html> (src/app/layout.tsx). */
+  --font-sans: var(--font-lexend), "Lexend", system-ui, sans-serif;
+  /* Lexend has no tabular figures, so prices use mono. */
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Consolas, monospace;
+
+  --tracking-tight: -0.02em;
+  --tracking-label: 0.14em;
+
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1rem;
+  --text-sm: 0.875rem;
+  --text-sm--line-height: 1.25rem;
+  --text-base: 1rem;
+  --text-base--line-height: 1.5rem;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.75rem;
+  --text-xl: 1.25rem;
+  --text-xl--line-height: 1.75rem;
+  --text-2xl: 1.5rem;
+  --text-2xl--line-height: 2rem;
+  --text-3xl: 2rem;
+  --text-3xl--line-height: 2.5rem;
+  --text-3xl--letter-spacing: -0.02em;
+  --text-4xl: 2.5rem;
+  --text-4xl--line-height: 3rem;
+  --text-4xl--letter-spacing: -0.02em;
+  --text-5xl: 3rem;
+  --text-5xl--line-height: 3.5rem;
+  --text-5xl--letter-spacing: -0.02em;
+  --text-8xl: 6rem;
+  --text-8xl--line-height: 6.5rem;
+  --text-8xl--letter-spacing: -0.02em;
+
+  /* The cursor block is never rounded, so there is deliberately no radius token for it. */
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 16px;
+
+  /* `max-w-*` reads --max-width-* first; a --container-page token would only produce `max-w-page`. */
+  --max-width-container-page: 72rem;
+
+  --animate-cursor-blink: cursor-blink 1.06s steps(1, end) infinite;
+
+  @keyframes cursor-blink {
+    50% {
+      opacity: 0;
+    }
+  }
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --color-background: #0c0f12;
+    --color-surface: #141d26;
+    --color-surface-muted: #232c35;
+    --color-foreground: #e8eef0;
+    --color-muted-foreground: #9ba2aa;
+    --color-border: #38424c;
+    --color-border-strong: #6b747d;
+    --color-accent: #2ee6ea;
+    --color-link: #08959a;
+    --color-ring: #08959a;
+    --color-danger: #fe8477;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@layer base {
+  /* Native controls and scrollbars follow the same OS preference as the tokens. */
+  :root {
+    color-scheme: light dark;
+  }
+
+  /* One focus style for every interactive element (design-system §2); the footer overrides the colour. */
+  :focus-visible {
+    outline: 2px solid var(--color-ring);
+    outline-offset: 2px;
+  }
+}
+
+/* In the components layer so utilities (e.g. bg-inverse-accent, size-8) can still override them. */
+@layer components {
+  .cursor-block {
+    display: inline-block;
+    width: 0.5em;
+    height: 0.5em;
+    border-radius: 0;
+    background-color: var(--color-accent);
+  }
+
+  .cursor-block--blink {
+    animation: var(--animate-cursor-blink);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cursor-block--blink {
+      animation: none;
+    }
+  }
+
+  .hero-title {
+    max-width: 11em;
+  }
 }
