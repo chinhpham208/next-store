@@ -5,13 +5,14 @@
 #   BASE_URL=https://<deploy>.vercel.app npm run smoke   # kiểm một URL đã deploy
 #
 # Biến tuỳ chọn:
-#   SMOKE_TEXT                       chuỗi phải có trong HTML trang chủ (mặc định: next-store)
+#   SMOKE_TEXT                       chuỗi phải có trong HTML trang chủ (mặc định: tên một sản phẩm nổi bật trong
+#                                    src/db/seed-data.ts, chứng minh trang đọc được dữ liệu, không chỉ render khung)
 #   SMOKE_PORT                       cổng cho `next start` khi không có BASE_URL (mặc định: 3100)
 #   VERCEL_AUTOMATION_BYPASS_SECRET  có thì gửi header x-vercel-protection-bypass (vượt Deployment Protection)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-SMOKE_TEXT=${SMOKE_TEXT:-next-store}
+SMOKE_TEXT=${SMOKE_TEXT:-Áo thun 404 Not Found}
 SMOKE_PORT=${SMOKE_PORT:-3100}
 BYPASS=${VERCEL_AUTOMATION_BYPASS_SECRET:-}
 SERVER_PID=
