@@ -438,6 +438,59 @@ describe('connection options passed to postgres()', () => {
   })
 })
 
+// The exact shapes the Vercel ↔ Neon Marketplace integration injects (credentials are fake).
+describe('Neon integration URLs (Vercel Marketplace, ap-southeast-1)', () => {
+  const NEON_POOLED = 'postgresql://neondb_owner:npg_FakePass123@ep-fake-dew-a1b2c3d4-pooler.ap-southeast-1.aws.neon.tech/neondb'
+  const NEON_SHAPES = [
+    ['sslmode=require', `${NEON_POOLED}?sslmode=require`, undefined],
+    ['sslmode=require&channel_binding=require', `${NEON_POOLED}?sslmode=require&channel_binding=require`, 'require'],
+    ['channel_binding=require&sslmode=require', `${NEON_POOLED}?channel_binding=require&sslmode=require`, 'require'],
+  ] as const
+
+  it.each(NEON_SHAPES)('accepts %s on Vercel preview as a Postgres target', (_label, url) => {
+    expect(resolveDatabaseTarget({ DATABASE_URL: url, VERCEL: '1', VERCEL_ENV: 'preview' })).toEqual({
+      kind: 'postgres',
+      url,
+    })
+  })
+  it.each(NEON_SHAPES)('connects with verified TLS and channel binding honoured for %s', async (_label, url, binding) => {
+    vi.stubEnv('PGSSLMODE', 'disable')
+    vi.stubEnv('NODE_TLS_REJECT_UNAUTHORIZED', '0')
+    const { passed, effective } = await connect(url)
+    expect(passed?.[0]).toMatchObject({
+      host: ['ep-fake-dew-a1b2c3d4-pooler.ap-southeast-1.aws.neon.tech'],
+      port: [5432],
+      database: 'neondb',
+      username: 'neondb_owner',
+      password: 'npg_FakePass123',
+      ssl: VERIFIED,
+      connection: {},
+    })
+    if (binding === undefined) expect(passed?.[0]).not.toHaveProperty('channel_binding')
+    else expect(passed?.[0]).toHaveProperty('channel_binding', binding)
+    expect(effective.ssl).toEqual(VERIFIED)
+    // postgres-js defaults to 'prefer' (SCRAM-SHA-256-PLUS when offered); `require` must reach the driver as is.
+    expect(effective.channel_binding).toBe(binding ?? 'prefer')
+  })
+  it('still rejects a duplicated sslmode on a Neon URL', () => {
+    const url = `${NEON_POOLED}?sslmode=require&channel_binding=require&sslmode=disable`
+    expect(() => resolveDatabaseTarget({ DATABASE_URL: url, VERCEL: '1', VERCEL_ENV: 'preview' })).toThrow(
+      /DATABASE_URL is invalid/,
+    )
+  })
+  it('still refuses sslmode=disable on a Neon URL', () => {
+    const url = `${NEON_POOLED}?sslmode=disable&channel_binding=require`
+    expect(() => resolveDatabaseTarget({ DATABASE_URL: url })).toThrow(/DATABASE_URL is refused/)
+  })
+  it('logs the Neon host without the password', () => {
+    const line = describeTarget({ kind: 'postgres', url: `${NEON_POOLED}?sslmode=require&channel_binding=require` })
+    expect(line).toBe(
+      'postgres host=ep-fake-dew-a1b2c3d4-pooler.ap-southeast-1.aws.neon.tech port=5432 db=neondb user=neondb_owner',
+    )
+    expect(line).not.toMatch(/npg_FakePass123|channel_binding/)
+  })
+})
+
 describe('describeTarget', () => {
   it('shows host, port, database and user but never password or query', () => {
     const line = describeTarget({ kind: 'postgres', url: SECRET_URL })
