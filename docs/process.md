@@ -24,10 +24,10 @@ Việc DevOps (CI, cấu hình Vercel / Neon, script) là ticket bình thường
 2. Orchestrator tạo ticket trên YouTrack bằng script
 3. Designer thiết kế màn hình mới của mốc     ──► [CỔNG 2] chủ dự án duyệt thiết kế
 4. Với từng ticket, tuần tự:
-     a. Implementer: nhánh NS-xx, TDD, scripts/verify.sh, mở PR      ticket → In Progress
+     a. Implementer: nhánh NS-xx, TDD, scripts/verify.sh, mở PR trên GitHub      ticket → In Progress
      b. Reviewer (+ Auditor nếu chạm vùng nhạy cảm), song song, chỉ đọc
      c. Có lỗi chặn → quay lại (a); tối đa 2 vòng
-     d. CI xanh + không còn lỗi chặn → Orchestrator squash-merge     ticket → To Verify
+     d. CI xanh + không còn lỗi chặn → Orchestrator squash-merge qua API sau khi CI xanh     ticket → To Verify
 5. QA chạy E2E + thử tay trên production/preview theo tiêu chí chấp nhận; lỗi → ticket Bug
 6. Auditor soát toàn mốc (M4–M6)
 7. Orchestrator gửi demo: link production, danh sách ticket, kết quả QA ──► [CỔNG 3] chủ dự án nghiệm thu → Done
@@ -58,9 +58,21 @@ Riêng M1: thêm một điểm dừng sau ticket đầu tiên để kiểm tra q
 
 ## 5. Môi trường làm việc của agent
 
+- Agent làm việc trong workspace cloud `/home/claude/next-store`, dùng chung cho mọi agent; **một người viết tại một thời điểm** (xem §4).
+- Source of truth là GitHub `chinhpham208/next-store` (riêng tư). Máy Mac của chủ dự án kéo code từ GitHub vào một bản clone riêng; chủ dự án không chạy `npm` trong workspace.
 - Shell trên máy ảo Linux; mỗi lệnh tối đa 180 giây → lệnh dài (`npm ci`, `next build`, Playwright) chạy qua `scripts/verify.sh` (chạy nền + đọc log).
-- `yt` (YouTrack CLI) và `gh` đăng nhập bằng token trong `~/Projects/.youtrack-token`, `~/Projects/.github-token` (ngoài repo).
-- Chủ dự án không chạy `npm` trong thư mục làm việc của agent; dùng bản clone riêng.
+- `yt` (YouTrack CLI) và `gh` đã đăng nhập sẵn trong workspace.
+- Secret nằm ngoài repo: `/home/claude/secrets/` (workspace); `~/Projects/.youtrack-token`, `~/Projects/.github-token` (trên Mac).
+
+### GitHub trong workspace
+
+GraphQL bị chặn bởi proxy của phiên, nên dùng REST:
+
+- Mở PR: `gh api repos/chinhpham208/next-store/pulls -f title=… -f head=… -f base=main -f body=…`
+- Check: `gh api repos/chinhpham208/next-store/commits/<sha>/check-runs`
+- Merge (chỉ Orchestrator): `gh api -X PUT repos/chinhpham208/next-store/pulls/<n>/merge -f merge_method=squash`
+- Cài đặt repo: chỉ squash-merge; nhánh tự xoá sau khi merge. Xoá nhánh qua proxy bị chặn → Orchestrator xử lý.
+- Branch protection không khả dụng (GitHub Free, repo riêng tư), nên quy tắc "chỉ merge khi CI xanh và review đã duyệt" do Orchestrator đảm bảo.
 
 ## 6. Cuối mỗi mốc
 

@@ -184,6 +184,6 @@ Mỗi mốc: thiết kế màn hình (nếu có giao diện mới) → plan (`do
 
 ## 10. Môi trường phát triển
 
-- Bản làm việc của đội agent: `~/Projects/next-store` (mount vào máy ảo Linux). **Chủ dự án không chạy `npm` trong thư mục này** — `node_modules` ở đây là bản Linux và PGlite chỉ cho một tiến trình truy cập.
-- Chủ dự án chạy thử bằng một bản clone riêng từ GitHub, ví dụ `~/Projects/next-store-local`, hoặc xem trên preview / production.
+- Bản làm việc của đội agent: workspace cloud `/home/claude/next-store` (dùng chung, một người viết tại một thời điểm). **Chủ dự án không chạy `npm` trong workspace này** — `node_modules` ở đây là bản Linux và PGlite chỉ cho một tiến trình truy cập.
+- Chủ dự án chạy thử bằng bản clone riêng trên Mac, kéo từ GitHub `chinhpham208/next-store`, ví dụ `~/Projects/next-store-local`, hoặc xem trên preview / production.
 - Không cần Docker hay tài khoản thanh toán để chạy local.
