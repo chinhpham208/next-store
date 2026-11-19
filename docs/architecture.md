@@ -164,8 +164,8 @@ flowchart LR
     prod["Production<br/>nhánh production, domain chính"]
   end
   subgraph neon["Neon Postgres"]
-    nbranch[("branch theo PR")]
-    ndev[("branch dev")]
+    nbranch[("branch theo nhánh git<br/>(tích hợp Neon tự tạo)")]
+    ndev[("branch tự tạo cho<br/>nhánh git develop")]
     nmain[("nhánh chính")]
   end
   yt["YouTrack NS"]

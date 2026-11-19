@@ -153,14 +153,14 @@ Lưu ý trên Vercel: cache của `"use cache"` nằm trong bộ nhớ từng in
 |---|---|---|---|---|---|
 | **Local** | bất kỳ | Máy dev | PGlite (`.data/`) | Seed | Fake |
 | **CI** | mọi PR; push vào `develop`, `production` | GitHub Actions | PGlite (`memory://` / thư mục tạm) | Seed | Fake |
-| **Preview** | mỗi PR | Vercel preview, một URL cho mỗi PR | Neon branch riêng cho mỗi PR | Seed | Fake |
-| **Dev** | `develop` | Vercel preview của nhánh `develop`, domain nhánh cố định | Neon branch `dev` | Seed | Fake |
+| **Preview** | mỗi PR | Vercel preview, một URL cho mỗi PR | Neon branch tự tạo cho nhánh git của PR (tích hợp Neon), dùng lại qua các lần deploy của nhánh | Seed | Fake |
+| **Dev** | `develop` | Vercel preview của nhánh `develop`, domain nhánh cố định | Neon branch tự tạo cho nhánh git `develop` (tích hợp Neon) | Seed | Fake |
 | **Production** | `production` | Vercel production (production branch = `production`), domain chính | Neon nhánh chính | Seed lần đầu, sau đó admin quản lý | Fake (đến khi mở bán) |
 
-- Code không kiểm tra tên môi trường; mọi khác biệt nằm trong biến môi trường. Dev là bản preview của Vercel (`VERCEL_ENV=preview`), dùng `DATABASE_URL` đặt ở phạm vi Preview cho riêng nhánh `develop`. Luồng nhánh: [ADR-0006](./adr/0006-branch-strategy.md).
+- Code không kiểm tra tên môi trường; mọi khác biệt nằm trong biến môi trường. Dev là bản preview của Vercel (`VERCEL_ENV=preview`), nhận `DATABASE_URL` / `DATABASE_URL_UNPOOLED` do tích hợp Neon inject cho nhánh git `develop` (cùng một Neon branch qua mọi lần deploy `develop`); không có Neon branch `dev` riêng hay biến ghi đè theo nhánh. Vì seed chạy ở mọi lần build Dev / preview trên một branch có thể đã có dữ liệu, seed phải idempotent (`onConflictDoNothing` theo `slug`). Luồng nhánh: [ADR-0006](./adr/0006-branch-strategy.md).
 - Sau này thêm `stg` / `demo`: mỗi cái là một nhánh sống lâu có domain nhánh và Neon branch riêng (Hobby), hoặc Vercel Custom Environments (Pro).
 
-- Bước build trên Vercel: `npm run build:vercel` = migrate → seed (bỏ qua khi production đã có dữ liệu) → `next build`. Production được seed trước lần build đầu tiên có trang đọc DB.
+- Bước build trên Vercel: `npm run build:vercel` = migrate → seed (bỏ qua khi `VERCEL_ENV=production`) → `next build`. Production được seed trước lần build đầu tiên có trang đọc DB.
 - Seed **không bao giờ** chạy trên production sau lần khởi tạo. Script seed dùng danh sách cho phép: PGlite luôn được seed; Postgres chỉ được seed khi `VERCEL_ENV=preview` hoặc có cờ `--allow-production` — mọi trường hợp khác (không đặt, sai chính tả, VPS) bị coi là production và bị từ chối trước mọi câu lệnh DB.
 - Secret chỉ nằm trong biến môi trường của Vercel và GitHub Secrets.
 - Kết nối tới DB không phải local luôn dùng TLS `verify-full`: server phải trình chứng chỉ do CA công khai cấp, khớp đúng hostname trong `DATABASE_URL` (Neon đáp ứng). Host là địa chỉ IP hoặc chứng chỉ tự ký (VPS) cần thêm `sslrootcert=<đường dẫn CA>` — hostname vẫn được kiểm.
