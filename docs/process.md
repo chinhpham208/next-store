@@ -49,7 +49,7 @@ Riêng M1: thêm một điểm dừng sau ticket đầu tiên để kiểm tra q
 
 ## 4. Quy tắc an toàn
 
-- **Một người viết tại một thời điểm.** Chỉ một agent được ghi vào `~/Projects/next-store`; Reviewer, QA (khi chỉ đọc), Auditor chạy song song được.
+- **Một người viết tại một thời điểm.** Chỉ một agent được ghi vào `/home/claude/next-store`; Reviewer, QA (khi chỉ đọc), Auditor chạy song song được.
 - **Giới hạn vòng lặp.** Implementer sửa tối đa 2 vòng theo review; vẫn hỏng → gọi `deep-reasoner` một lần để chẩn đoán → vẫn hỏng → dừng, hỏi chủ dự án.
 - **Leo thang ngay** (không tự quyết) khi: lệch ADR, thêm thư viện ngoài plan, lùi phiên bản, vấn đề bảo mật, cần tài khoản / chi phí, xoá dữ liệu production.
 - **Bằng chứng thật.** Mọi khẳng định "đã chạy / đã qua" phải kèm output thật từ `scripts/verify.sh` hoặc CI; không viết lại bằng trí nhớ.
