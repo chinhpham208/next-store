@@ -20,8 +20,12 @@ vi.mock('postgres', async (importOriginal) => {
 })
 const postgresFactory = vi.mocked(postgres)
 
-const SECRET_URL = 'postgres://shop:s3cr3t-pass@ep-x-pooler.neon.tech/neondb?sslmode=require&options=s3cr3t-opt'
+const SECRET_URL = 'postgres://shop:s3cr3t-pass@ep-x-pooler.neon.tech/neondb?sslmode=require&options=endpoint%3Dep-s3cr3t'
 const REMOTE = 'postgres://shop:s3cr3t-pass@ep-x-pooler.eu-central-1.aws.neon.tech/neondb'
+// What the client must receive for a verified connection: an object, so Node's process default
+// (NODE_TLS_REJECT_UNAUTHORIZED) cannot turn verification off.
+const VERIFIED = { rejectUnauthorized: true }
+const UNPOOLED = 'DATABASE_URL_UNPOOLED'
 
 beforeEach(() => postgresFactory.mockClear())
 afterEach(() => vi.unstubAllEnvs())
@@ -157,6 +161,45 @@ describe('parsePostgresUrl', () => {
   it('names the variable it was given', () => {
     expect(() => parsePostgresUrl('mysql://h/db', 'DATABASE_URL_UNPOOLED')).toThrow(/^DATABASE_URL_UNPOOLED is invalid/)
   })
+  it.each(['endpoint%3Dep-x', 'endpoint%3Dep-cool-x-123', 'endpoint%3D0'])('accepts options=%s', (value) => {
+    expect(parsePostgresUrl(`${REMOTE}?options=${value}`).params.get('options')).toBe(decodeURIComponent(value))
+  })
+  it.each([
+    ['a server setting', '-c%20search_path%3Ds3cr3t'],
+    ['an endpoint followed by a server setting', 'endpoint%3Dep-x%20-c%20role%3Ds3cr3t'],
+    ['an upper-case endpoint id', 'endpoint%3DEP-S3CR3T'],
+    ['an empty endpoint id', 'endpoint%3D'],
+    ['an empty value', ''],
+    ['an arbitrary value', 's3cr3t-opt'],
+    ['an endpoint id with a dot', 'endpoint%3Dep-s3cr3t.x'],
+  ])('refuses options with %s without echoing it', (_case, value) => {
+    const run = () => parsePostgresUrl(`${REMOTE}?options=${value}`)
+    expect(run).toThrow(/^DATABASE_URL is refused: the options parameter must be exactly endpoint=<id>/)
+    expect(run).not.toThrow(/s3cr3t|search_path|neon\.tech/i)
+  })
+  it('refuses options on a local host as well', () => {
+    expect(() => parsePostgresUrl('postgres://u:p@localhost/db?options=-c%20x%3Dy')).toThrow(
+      /^DATABASE_URL is refused: the options parameter/,
+    )
+  })
+  it('names the variable when refusing options', () => {
+    expect(() => parsePostgresUrl(`${REMOTE}?options=x`, UNPOOLED)).toThrow(/^DATABASE_URL_UNPOOLED is refused: the options/)
+  })
+  it.each([
+    ['no user', 'postgres://ep-x-pooler.eu-central-1.aws.neon.tech/neondb'],
+    ['only a password', 'postgres://:s3cr3t-pass@ep-x-pooler.eu-central-1.aws.neon.tech/neondb'],
+    ['an empty user before @', 'postgres://@ep-x-pooler.eu-central-1.aws.neon.tech/neondb'],
+  ])('refuses %s on a non-local host without echoing it', (_case, url) => {
+    expect(() => parsePostgresUrl(url)).toThrow(/^DATABASE_URL is refused: a non-local host needs a user name/)
+    expect(() => parsePostgresUrl(url)).not.toThrow(/s3cr3t|neon\.tech/)
+    expect(() => parsePostgresUrl(url, UNPOOLED)).toThrow(/^DATABASE_URL_UNPOOLED is refused: a non-local host/)
+  })
+  it.each(['postgres://localhost/db', 'postgres://127.0.0.1:5432/db', 'postgres://[::1]/db'])(
+    'allows %s without a user name',
+    (url) => {
+      expect(parsePostgresUrl(url).username).toBe('')
+    },
+  )
 })
 
 describe('resolveSsl', () => {
@@ -191,6 +234,7 @@ describe('resolveSsl', () => {
     ['sslmode=prefer on localhost', 'postgres://u:p@localhost/db?sslmode=prefer', 'prefer'],
     ['sslmode=require on localhost', 'postgres://u:p@localhost/db?sslmode=require', 'require'],
     ['sslmode=VERIFY-FULL on localhost', 'postgres://u:p@localhost/db?sslmode=VERIFY-FULL', 'verify-full'],
+    ['sslrootcert without sslmode on localhost (no TLS)', 'postgres://u:p@localhost/db?sslrootcert=%2Fetc%2Fca.pem', false],
   ])('honours %s', (_case, url, expected) => {
     expect(resolveSsl(parsePostgresUrl(url))).toBe(expected)
   })
@@ -220,7 +264,7 @@ describe('connection options passed to postgres()', () => {
         database: 'neondb',
         username: 'sh@p',
         password: 's3cr3t pass',
-        ssl: 'verify-full',
+        ssl: VERIFIED,
         channel_binding: 'require',
         connection: { options: 'endpoint=ep-x', application_name: 'next-store' },
         prepare: false,
@@ -234,7 +278,7 @@ describe('connection options passed to postgres()', () => {
       port: [5432],
       database: 'neondb',
       user: 'sh@p',
-      ssl: 'verify-full',
+      ssl: VERIFIED,
       channel_binding: 'require',
     })
   })
@@ -257,29 +301,39 @@ describe('connection options passed to postgres()', () => {
     ['an upper-case SSLMODE', 'SSLMODE=disable'],
   ])('drops the unknown parameter %s', async (_case, query) => {
     const { passed, effective } = await connect(`${REMOTE}?${query}`)
-    expect(passed?.[0]).toMatchObject({ connection: {}, ssl: 'verify-full', database: 'neondb' })
-    expect(effective).toMatchObject({ database: 'neondb', ssl: 'verify-full' })
+    expect(passed?.[0]).toMatchObject({ connection: {}, ssl: VERIFIED, database: 'neondb' })
+    expect(effective).toMatchObject({ database: 'neondb', ssl: VERIFIED })
     expect(effective.connection).toEqual({ application_name: 'postgres.js' })
   })
   it.each([
-    ['no TLS parameter on a remote host', REMOTE, 'verify-full'],
-    ['sslmode=require', `${REMOTE}?sslmode=require`, 'verify-full'],
-    ['sslmode=verify-ca', `${REMOTE}?sslmode=verify-ca`, 'verify-full'],
-    ['ssl=true', `${REMOTE}?ssl=true`, 'verify-full'],
-    ['sslrootcert=system', `${REMOTE}?sslrootcert=system`, 'verify-full'],
+    ['no TLS parameter on a remote host', REMOTE, VERIFIED],
+    ['sslmode=require', `${REMOTE}?sslmode=require`, VERIFIED],
+    ['sslmode=verify-ca', `${REMOTE}?sslmode=verify-ca`, VERIFIED],
+    ['ssl=true', `${REMOTE}?ssl=true`, VERIFIED],
+    ['sslrootcert=system', `${REMOTE}?sslrootcert=system`, VERIFIED],
     ['no TLS parameter on localhost', 'postgres://u:p@localhost:5432/db', false],
     ['sslmode=disable on localhost', 'postgres://u:p@localhost/db?sslmode=disable', false],
     ['sslmode=require on localhost', 'postgres://u:p@localhost/db?sslmode=require', 'require'],
+    ['sslmode=verify-full on localhost', 'postgres://u:p@localhost/db?sslmode=verify-full', VERIFIED],
   ])('passes and keeps ssl for %s', async (_case, url, ssl) => {
     const { passed, effective } = await connect(url)
     expect(passed?.[0]).toMatchObject({ ssl })
-    expect(effective.ssl).toBe(ssl)
+    expect(effective.ssl).toEqual(ssl)
   })
   it('ignores PGSSLMODE=disable for a remote connection', async () => {
     vi.stubEnv('PGSSLMODE', 'disable')
     const { passed, effective } = await connect(REMOTE)
-    expect(passed?.[0]).toMatchObject({ ssl: 'verify-full' })
-    expect(effective.ssl).toBe('verify-full')
+    expect(passed?.[0]).toMatchObject({ ssl: VERIFIED })
+    expect(effective.ssl).toEqual(VERIFIED)
+  })
+  it('keeps rejectUnauthorized: true for a remote connection when NODE_TLS_REJECT_UNAUTHORIZED=0', async () => {
+    // vi.stubEnv writes process.env and afterEach(vi.unstubAllEnvs) restores the previous value.
+    vi.stubEnv('NODE_TLS_REJECT_UNAUTHORIZED', '0')
+    expect(process.env.NODE_TLS_REJECT_UNAUTHORIZED).toBe('0')
+    const { passed, effective } = await connect(REMOTE)
+    expect(passed?.[0]).toMatchObject({ ssl: VERIFIED })
+    expect(effective.ssl).toEqual(VERIFIED)
+    expect(effective.ssl).not.toHaveProperty('checkServerIdentity')
   })
   it('ignores PGSSLMODE=require for a local connection without TLS', async () => {
     vi.stubEnv('PGSSLMODE', 'require')
@@ -352,10 +406,28 @@ describe('connection options passed to postgres()', () => {
       expect((error as Error).cause).toBeUndefined()
     }
   })
+  it('names DATABASE_URL_UNPOOLED when an unreadable sslrootcert comes from that URL', () => {
+    const url = `${REMOTE}?sslrootcert=%2Fnonexistent%2Fs3cr3t-ca.pem`
+    const run = () => createConnection({ kind: 'postgres', url }, { name: UNPOOLED })
+    expect(run).toThrow(/^DATABASE_URL_UNPOOLED sslrootcert could not be read/)
+    expect(run).not.toThrow(/s3cr3t|nonexistent/)
+  })
+  it('names DATABASE_URL_UNPOOLED when the driver constructor fails for that URL', () => {
+    vi.stubEnv('PGTARGETSESSIONATTRS', 's3cr3t-tsa')
+    const run = () => createConnection({ kind: 'postgres', url: REMOTE }, { name: UNPOOLED })
+    expect(run).toThrow(/^Could not create the Postgres client from DATABASE_URL_UNPOOLED/)
+    expect(run).not.toThrow(/s3cr3t/)
+  })
+  it('names DATABASE_URL_UNPOOLED for URL and TLS refusals from createConnection', () => {
+    const create = (url: string) => () => createConnection({ kind: 'postgres', url }, { name: UNPOOLED })
+    expect(create('mysql://h/db')).toThrow(/^DATABASE_URL_UNPOOLED is invalid/)
+    expect(create(`${REMOTE}?sslmode=disable`)).toThrow(/^DATABASE_URL_UNPOOLED is refused/)
+    expect(postgresFactory).not.toHaveBeenCalled()
+  })
   it('wraps a driver constructor error without echoing the value', () => {
     vi.stubEnv('PGTARGETSESSIONATTRS', 's3cr3t-tsa')
     const run = () => createConnection({ kind: 'postgres', url: REMOTE })
-    expect(run).toThrow(/^Could not create the Postgres client/)
+    expect(run).toThrow(/^Could not create the Postgres client from DATABASE_URL$/)
     expect(run).not.toThrow(/s3cr3t/)
     try {
       run()
@@ -367,10 +439,15 @@ describe('connection options passed to postgres()', () => {
 })
 
 describe('describeTarget', () => {
-  it('shows host, port and database but never user, password or query', () => {
+  it('shows host, port, database and user but never password or query', () => {
     const line = describeTarget({ kind: 'postgres', url: SECRET_URL })
-    expect(line).toBe('postgres host=ep-x-pooler.neon.tech port=5432 db=neondb')
-    expect(line).not.toMatch(/shop|s3cr3t|sslmode/)
+    expect(line).toBe('postgres host=ep-x-pooler.neon.tech port=5432 db=neondb user=shop')
+    expect(line).not.toMatch(/s3cr3t|sslmode|endpoint/)
+  })
+  it('shows the decoded user name', () => {
+    expect(describeTarget({ kind: 'postgres', url: 'postgres://sh%40p:pw@h/db' })).toBe(
+      'postgres host=h port=5432 db=db user=sh@p',
+    )
   })
   it('shows the PGlite directory', () => {
     expect(describeTarget({ kind: 'pglite', dataDir: '.data/pglite' })).toBe('pglite dir=.data/pglite')

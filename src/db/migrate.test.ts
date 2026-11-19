@@ -24,6 +24,11 @@ describe('resolveMigrationUrl', () => {
     expect(resolveMigrationUrl({ pooledUrl: POOLED, unpooledUrl: encoded })).toBe(encoded)
     expect(resolveMigrationUrl({ pooledUrl: POOLED.replace('/neondb', '/neon%64b'), unpooledUrl: DIRECT })).toBe(DIRECT)
   })
+  it('accepts the same Neon endpoint options on both URLs', () => {
+    const pooled = `${POOLED}&options=endpoint%3Dep-cool-x-123`
+    const direct = `${DIRECT}&options=endpoint%3Dep-cool-x-123`
+    expect(resolveMigrationUrl({ pooledUrl: pooled, unpooledUrl: direct })).toBe(direct)
+  })
   it('treats an absent port as 5432', () => {
     const explicit = DIRECT.replace('.tech/', '.tech:5432/')
     expect(resolveMigrationUrl({ pooledUrl: POOLED, unpooledUrl: explicit })).toBe(explicit)
@@ -35,10 +40,23 @@ describe('resolveMigrationUrl', () => {
     ['the -pooler suffix on another endpoint', DIRECT.replace('ep-cool-x-123.', 'ep-cool-x-12.')],
     ['a different port', DIRECT.replace('.tech/', '.tech:6543/')],
     ['the pooled host again with other credentials', POOLED.replace('shop:s3cr3t-pass', 'admin:s3cr3t-other')],
+    ['options only on DATABASE_URL_UNPOOLED', `${DIRECT}&options=endpoint%3Dep-other-456`],
   ])('refuses %s without printing either URL', (_case, unpooledUrl) => {
     const run = () => resolveMigrationUrl({ pooledUrl: POOLED, unpooledUrl })
     expect(run).toThrow(MISMATCH)
-    expect(run).not.toThrow(/s3cr3t|neon\.tech|neondb|otherdb|6543/)
+    expect(run).not.toThrow(/s3cr3t|neon\.tech|neondb|otherdb|6543|ep-other/)
+  })
+  it.each([
+    ['options only on DATABASE_URL', `${POOLED}&options=endpoint%3Dep-cool-x-123`, DIRECT],
+    [
+      'different endpoint options',
+      `${POOLED}&options=endpoint%3Dep-cool-x-123`,
+      `${DIRECT}&options=endpoint%3Dep-other-456`,
+    ],
+  ])('refuses %s', (_case, pooledUrl, unpooledUrl) => {
+    const run = () => resolveMigrationUrl({ pooledUrl, unpooledUrl })
+    expect(run).toThrow(MISMATCH)
+    expect(run).not.toThrow(/s3cr3t|neon\.tech|ep-other|ep-cool/)
   })
   it('refuses a pooled host when DATABASE_URL is the direct one', () => {
     expect(() => resolveMigrationUrl({ pooledUrl: DIRECT, unpooledUrl: POOLED })).toThrow(MISMATCH)
@@ -52,6 +70,8 @@ describe('resolveMigrationUrl', () => {
     ['a control character', DIRECT.replace('/neondb', '/neon\tdb'), /^DATABASE_URL_UNPOOLED is invalid/],
     ['a duplicate sslmode', `${DIRECT}&sslmode=disable`, /^DATABASE_URL_UNPOOLED is invalid/],
     ['plaintext TLS', DIRECT.replace('sslmode=require', 'sslmode=disable'), /^DATABASE_URL_UNPOOLED is refused/],
+    ['a truncated URL without user', DIRECT.replace('shop:s3cr3t-pass@', ''), /^DATABASE_URL_UNPOOLED is refused: a non-local/],
+    ['unsupported options', `${DIRECT}&options=-c%20role%3Ds3cr3t`, /^DATABASE_URL_UNPOOLED is refused: the options/],
   ])('names DATABASE_URL_UNPOOLED for %s', (_case, unpooledUrl, message) => {
     const run = () => resolveMigrationUrl({ pooledUrl: POOLED, unpooledUrl })
     expect(run).toThrow(message)

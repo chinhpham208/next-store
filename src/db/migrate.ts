@@ -27,7 +27,8 @@ export const runMigrations = async (target: Connection = connection): Promise<vo
 // Fixed text on purpose: either URL carries a password, and the host alone already identifies the customer DB.
 const UNPOOLED_MISMATCH_MESSAGE =
   'DATABASE_URL_UNPOOLED must point to the same database as DATABASE_URL (same decoded database name, same port ' +
-  '(absent = 5432), same host without the Neon "-pooler" suffix); refusing to migrate.'
+  '(absent = 5432), same host without the Neon "-pooler" suffix, same options parameter or none on both); ' +
+  'refusing to migrate.'
 const UNPOOLED = 'DATABASE_URL_UNPOOLED'
 
 // Neon: `ep-xxx-pooler.region.aws.neon.tech` is PgBouncer in front of `ep-xxx.region.aws.neon.tech`.
@@ -50,7 +51,9 @@ export const resolveMigrationUrl = ({ pooledUrl, unpooledUrl }: MigrationUrls): 
   const sameDatabase = pooled.database === unpooled.database
   const samePort = pooled.port === unpooled.port
   const sameHost = withoutPoolerSuffix(pooled.host) === unpooled.host.toLowerCase()
-  if (!sameDatabase || !samePort || !sameHost) throw new Error(UNPOOLED_MISMATCH_MESSAGE)
+  // `options=endpoint=<id>` routes to a Neon endpoint for clients without SNI, so it is part of the target too.
+  const sameOptions = pooled.params.get('options') === unpooled.params.get('options')
+  if (!sameDatabase || !samePort || !sameHost || !sameOptions) throw new Error(UNPOOLED_MISMATCH_MESSAGE)
   return unpooledUrl
 }
 
@@ -59,12 +62,11 @@ export const resolveMigrationUrl = ({ pooledUrl, unpooledUrl }: MigrationUrls): 
 // createConnection builds the client with the same explicit-options builder as the runtime connection.
 const openMigrationConnection = (): Connection => {
   if (connection.kind !== 'postgres') return connection
-  const url = resolveMigrationUrl({
-    pooledUrl: connection.target.url,
-    unpooledUrl: process.env.DATABASE_URL_UNPOOLED?.trim() ?? '',
-  })
+  const pooledUrl = connection.target.url
+  const url = resolveMigrationUrl({ pooledUrl, unpooledUrl: process.env.DATABASE_URL_UNPOOLED?.trim() ?? '' })
   const target = resolveDatabaseTarget({ DATABASE_URL: url, VERCEL: process.env.VERCEL, VERCEL_ENV: process.env.VERCEL_ENV })
-  return createConnection(target, { max: 1 })
+  // Errors while building the client (sslrootcert, driver) must name the variable the operator has to fix.
+  return createConnection(target, { max: 1, name: url === pooledUrl ? 'DATABASE_URL' : UNPOOLED })
 }
 
 const isDirectRun = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href

@@ -34,8 +34,14 @@ const insecureTlsMessage = (name: string) =>
 const unknownLocalTlsMessage = (name: string) =>
   `${name} is refused: sslmode/ssl on a local host must be absent or one of ` +
   'disable | false | allow | prefer | require | verify-ca | verify-full | true, and sslrootcert must not be empty.'
-const SSLROOTCERT_READ_MESSAGE = 'DATABASE_URL sslrootcert could not be read'
-const CLIENT_CREATE_MESSAGE = 'Could not create the Postgres client from DATABASE_URL'
+const invalidOptionsMessage = (name: string) =>
+  `${name} is refused: the options parameter must be exactly endpoint=<id> (lower-case letters, digits and -); ` +
+  'no other startup option is forwarded.'
+const missingUserMessage = (name: string) =>
+  `${name} is refused: a non-local host needs a user name in the URL; ` +
+  'the client never falls back to PGUSER or the operating-system user.'
+const sslrootcertReadMessage = (name: string) => `${name} sslrootcert could not be read`
+const clientCreateMessage = (name: string) => `Could not create the Postgres client from ${name}`
 
 // postgres-js would let these override the hostname and port of the URL; refuse them outright, any case.
 const FORBIDDEN_QUERY_PARAMS = ['host', 'hostaddr', 'port']
@@ -43,7 +49,7 @@ const FORBIDDEN_QUERY_PARAMS = ['host', 'hostaddr', 'port']
 // Everything else is dropped, not forwarded: postgres-js copies unknown keys into the startup message
 // *after* user and database, so `?database=other` or `?user=x` would silently change the target, and keys such
 // as target_session_attrs / sslcert / sslkey change driver behaviour we have not reviewed.
-//   options          — Neon needs `options=endpoint%3D<id>` for clients without SNI; also `-c setting=…`.
+//   options          — Neon needs `options=endpoint%3D<id>` for clients without SNI.
 //   application_name — a label in pg_stat_activity, no effect on routing or security.
 //   channel_binding  — Neon URLs ship `channel_binding=require` (SCRAM-SHA-256-PLUS); dropping it would downgrade.
 const TLS_QUERY_PARAMS = ['sslmode', 'ssl', 'sslrootcert']
@@ -52,8 +58,8 @@ const SINGLE_QUERY_PARAMS = [...TLS_QUERY_PARAMS, ...STARTUP_QUERY_PARAMS, 'chan
 const CHANNEL_BINDINGS = ['disable', 'prefer', 'require'] as const
 const REMOTE_TLS_MODES = ['require', 'verify-ca', 'verify-full', 'true']
 const LOCAL_PLAINTEXT_MODES = ['disable', 'false']
-// postgres-js 4.1.1 treats verify-ca and true exactly like verify-full (secureOptions → {}: Node verifies chain
-// and hostname), and its `SSL` type only knows the normalised names.
+// postgres-js 4.1.1 treats verify-ca and true exactly like verify-full, and its `SSL` type only knows the
+// normalised names; loadSsl then sends 'verify-full' as an explicit object (see there).
 const LOCAL_TLS_MODES: Record<string, 'allow' | 'prefer' | 'require' | 'verify-full'> = {
   allow: 'allow',
   prefer: 'prefer',
@@ -68,6 +74,9 @@ const RAW_FORBIDDEN_CHARS = /[\u0000- \u007f]/
 // Decoded: postgres-js writes user, database and startup parameters as NUL-terminated strings, so an encoded
 // NUL would inject extra startup parameters; other controls have no legitimate use there either.
 const DECODED_FORBIDDEN_CHARS = /[\u0000-\u001f\u007f]/
+// Neon's SNI workaround is the only reason to accept `options`; anything wider (`-c role=…`, `-c search_path=…`,
+// several endpoints) would change server behaviour after our checks, so the value is pinned to that one shape.
+const NEON_ENDPOINT_OPTION = /^endpoint=[a-z0-9-]+$/
 
 export type ParsedPostgresUrl = {
   /** Exactly what the client connects to; IPv6 literals without brackets. */
@@ -81,6 +90,8 @@ export type ParsedPostgresUrl = {
 
 /** `{ caFile }`: verify the chain against this CA and keep Node's default hostname check. */
 export type SslPolicy = false | 'allow' | 'prefer' | 'require' | 'verify-full' | { caFile: string }
+
+const isLocalHost = (host: string) => LOCAL_HOSTS.includes(host.toLowerCase())
 
 const decodeOrRaw = (value: string): string => {
   try {
@@ -117,8 +128,13 @@ export const parsePostgresUrl = (rawUrl: string, name = 'DATABASE_URL'): ParsedP
   const password = decodeOrRaw(parsed.password)
   const decoded = [username, password, database, ...SINGLE_QUERY_PARAMS.map((key) => params.get(key) ?? '')]
   if (decoded.some((value) => DECODED_FORBIDDEN_CHARS.test(value))) throw invalid()
+  const options = params.get('options')
+  if (options !== null && !NEON_ENDPOINT_OPTION.test(options)) throw new Error(invalidOptionsMessage(name))
+  const host = parsed.hostname.replace(/^\[(.*)\]$/, '$1')
+  // postgres-js turns an empty user into PGUSER / the OS user, so a truncated URL would log in as someone else.
+  if (username === '' && !isLocalHost(host)) throw new Error(missingUserMessage(name))
   return {
-    host: parsed.hostname.replace(/^\[(.*)\]$/, '$1'),
+    host,
     port: parsed.port === '' ? DEFAULT_PORT : Number(parsed.port),
     database,
     username,
@@ -127,7 +143,6 @@ export const parsePostgresUrl = (rawUrl: string, name = 'DATABASE_URL'): ParsedP
   }
 }
 
-const isLocalHost = (url: ParsedPostgresUrl) => LOCAL_HOSTS.includes(url.host.toLowerCase())
 
 // Same precedence as libpq / postgres-js: a non-empty sslmode wins, otherwise ssl; an empty sslmode with no
 // ssl is "stated but empty" (''), which is not the same as absent (undefined).
@@ -140,14 +155,14 @@ const requestedTlsMode = (params: URLSearchParams): string | undefined => {
 }
 
 // The client is always built with an explicit `ssl`, which beats both the URL and PGSSLMODE in postgres-js.
-// Remote host: any accepted mode becomes 'verify-full' (chain + hostname). Neon serves publicly trusted
+// Remote host: any accepted mode becomes 'verify-full' (chain + hostname, enforced in loadSsl). Neon serves publicly trusted
 // certificates, so require / verify-ca / true lose nothing; everything else is refused before a socket opens.
 // `sslrootcert=<path>` swaps the trust store but keeps hostname verification (stricter than libpq verify-ca).
 // Local host: absent / disable / false → no TLS; other known modes pass through (verify-ca / true → verify-full).
 export const resolveSsl = (url: ParsedPostgresUrl, name = 'DATABASE_URL'): SslPolicy => {
   const mode = requestedTlsMode(url.params)
   const rootCert = url.params.get('sslrootcert')
-  const local = isLocalHost(url)
+  const local = isLocalHost(url.host)
   const refuse = () => new Error(local ? unknownLocalTlsMessage(name) : insecureTlsMessage(name))
   if (rootCert === '') throw refuse()
   const verified: SslPolicy = rootCert === null || rootCert === 'system' ? 'verify-full' : { caFile: rootCert }
@@ -186,7 +201,8 @@ export const resolveDatabaseTarget = (env: DatabaseEnv): DatabaseTarget => {
 export const describeTarget = (target: DatabaseTarget): string => {
   if (target.kind === 'pglite') return `pglite dir=${target.dataDir}`
   const url = parsePostgresUrl(target.url)
-  return `postgres host=${url.host} port=${url.port} db=${url.database}`
+  // The user tells which role DDL runs as (owner vs app role); the password and query never appear.
+  return `postgres host=${url.host} port=${url.port} db=${url.database} user=${url.username}`
 }
 
 const describeOne = (error: Error): string => {
@@ -202,7 +218,8 @@ export const describeError = (error: unknown): string => {
   return describeOne(error)
 }
 
-type ConnectionOptions = { max?: number }
+/** `name`: the variable the URL came from, used in every error so the operator knows which one to fix. */
+type ConnectionOptions = { max?: number; name?: string }
 type PostgresOptions = postgres.Options<Record<string, never>>
 
 // Rethrow with fixed text and the errno / SQLSTATE code only; no `cause`, because describeError prints it.
@@ -211,13 +228,18 @@ const withFixedMessage = (message: string, error: unknown): Error => {
   return Object.assign(new Error(message), typeof code === 'string' || typeof code === 'number' ? { code } : {})
 }
 
-const loadSsl = (policy: SslPolicy, readFile: (path: string) => Buffer): PostgresOptions['ssl'] => {
+type LoadSslOptions = { policy: SslPolicy; name: string; readFile: (path: string) => Buffer }
+
+// Verified TLS is always an object with `rejectUnauthorized: true`: postgres-js 4.1.1 turns the string
+// 'verify-full' into `{}`, and Node then applies the process default, which NODE_TLS_REJECT_UNAUTHORIZED=0
+// silently switches off. No checkServerIdentity override: Node's default verifies the hostname.
+const loadSsl = ({ policy, name, readFile }: LoadSslOptions): PostgresOptions['ssl'] => {
+  if (policy === 'verify-full') return { rejectUnauthorized: true }
   if (typeof policy !== 'object') return policy
   try {
-    // No checkServerIdentity override: Node's default verifies the hostname against the certificate.
     return { ca: readFile(policy.caFile), rejectUnauthorized: true }
   } catch (error) {
-    throw withFixedMessage(SSLROOTCERT_READ_MESSAGE, error)
+    throw withFixedMessage(sslrootcertReadMessage(name), error)
   }
 }
 
@@ -225,11 +247,11 @@ const loadSsl = (policy: SslPolicy, readFile: (path: string) => Buffer): Postgre
 // and host / port / database / user / ssl from PG* env variables cannot override what we checked.
 export const buildPostgresOptions = (
   url: string,
-  { max = 5 }: ConnectionOptions = {},
+  { max = 5, name = 'DATABASE_URL' }: ConnectionOptions = {},
   readFile: (path: string) => Buffer = readFileSync,
 ): PostgresOptions => {
-  const parsed = parsePostgresUrl(url)
-  const ssl = loadSsl(resolveSsl(parsed), readFile)
+  const parsed = parsePostgresUrl(url, name)
+  const ssl = loadSsl({ policy: resolveSsl(parsed, name), name, readFile })
   const connection = Object.fromEntries(
     STARTUP_QUERY_PARAMS.flatMap((key) => {
       const value = parsed.params.get(key)
@@ -254,16 +276,16 @@ export const buildPostgresOptions = (
   }
 }
 
-export const createConnection = (target: DatabaseTarget, { max = 5 }: ConnectionOptions = {}) => {
+export const createConnection = (target: DatabaseTarget, { max = 5, name = 'DATABASE_URL' }: ConnectionOptions = {}) => {
   const logger = process.env.DB_LOG === '1'
   if (target.kind === 'postgres') {
     // Our own refusals already carry fixed text; only the driver's constructor errors need wrapping.
-    const options = buildPostgresOptions(target.url, { max })
+    const options = buildPostgresOptions(target.url, { max, name })
     let client: postgres.Sql
     try {
       client = postgres(options)
     } catch (error) {
-      throw withFixedMessage(CLIENT_CREATE_MESSAGE, error)
+      throw withFixedMessage(clientCreateMessage(name), error)
     }
     return { kind: 'postgres', target, db: drizzlePostgres({ client, schema, logger }) } as const
   }
