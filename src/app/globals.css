@@ -76,7 +76,8 @@
   --radius-md: 8px;
   --radius-lg: 16px;
 
-  --container-page: 72rem;
+  /* `max-w-*` reads --max-width-* first; a --container-page token would only produce `max-w-page`. */
+  --max-width-container-page: 72rem;
 
   --animate-cursor-blink: cursor-blink 1.06s steps(1, end) infinite;
 
