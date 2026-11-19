@@ -52,7 +52,7 @@ Brand gốc: bộ nhận diện **Gin Pham — Smile G** (Ink #0C0F12, Deep Cyan
 | `--text-*` (cỡ / dòng) | xs 12/16 · sm 14/20 · base 16/24 · lg 18/28 · xl 20/28 · 2xl 24/32 · 3xl 32/40 · 4xl 40/48 · 5xl 48/56 · 8xl 96/104 (từ 3xl trở lên: tracking −0.02em) |
 | `--radius-sm` / `--radius-md` / `--radius-lg` | 4 / 8 / 16 px (khối con trỏ không bao giờ bo góc) |
 | `--shadow-*` | không dùng |
-| `--container-page` | 72rem |
+| `--max-width-container-page` | 72rem |
 | `--spacing` | 4px (Tailwind mặc định) |
 
 Hai giá trị cần thành class riêng trong `globals.css` (không dùng giá trị tuỳ ý): `.cursor-block` (khối vuông `0.5em`, `bg-accent`) và `.hero-title` (`max-width: 11em`).
@@ -72,7 +72,7 @@ Chữ thấp nhất 4,68:1 (link trên surface, theme tối). Sáng: foreground 
 - **ProductCard:**
   - Ảnh: `aspect-square overflow-hidden rounded-md bg-surface-muted outline outline-1 -outline-offset-1 outline-border`, `next/image` 800×800, `alt` = tên sản phẩm. Hết hàng **không** làm mờ ảnh.
   - Hàng meta: danh mục `text-xs uppercase tracking-label text-muted-foreground` + Badge `sold-out` khi hết hàng.
-  - Tên: `h3`, `text-base md:text-xl font-semibold text-pretty`. Hiển thị `--` trong tên bằng gạch nối không ngắt dòng (U+2011) để "git push --force" không bị tách dòng trên mobile.
+  - Tên: `h3`, `text-base md:text-xl font-semibold text-pretty`. Từ chứa `--` (ví dụ "git push --force") bọc trong `<span class="whitespace-nowrap">` để không bị tách dòng trên mobile; giữ nguyên nội dung chữ để h3 bằng với `alt` ảnh (Lexend không có glyph U+2011).
   - Giá: `mt-auto pt-1 md:pt-2`; hết hàng → `text-muted-foreground`.
 - **Lưới:** `ul` `aria-label="Sản phẩm nổi bật"`, `grid grid-cols-2 gap-x-4 gap-y-10 md:grid-cols-3 md:gap-x-8 md:gap-y-16`.
 - **Header:** `border-b border-border h-16` (không nền riêng), chứa Container; chỉ có link logo chữ: `min-h-11 text-2xl/7 font-bold tracking-tight` + `.cursor-block` tĩnh.
