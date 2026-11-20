@@ -6,3 +6,14 @@ export type ProductSummary = {
   categoryName: string
   inStock: boolean
 }
+
+export type ProductDetail = {
+  slug: string
+  name: string
+  description: string
+  price: number
+  image: string
+  categorySlug: string
+  categoryName: string
+  stock: number
+}
