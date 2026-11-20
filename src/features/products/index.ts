@@ -1,7 +1,13 @@
-export { getAllProductSlugs, getFeaturedProducts, getProductBySlug } from '@/features/products/queries'
+export {
+  getAllProductSlugs,
+  getCategories,
+  getFeaturedProducts,
+  getProductBySlug,
+  listProducts,
+} from '@/features/products/queries'
 export { isKnownProductSlug } from '@/features/products/slug-guard'
 export { ProductGrid, type ProductGridProps } from '@/features/products/components/product-grid'
-export type { ProductDetail, ProductSummary } from '@/features/products/types'
+export type { CategoryOption, ProductDetail, ProductListing, ProductSummary } from '@/features/products/types'
 export {
   buildProductsHref,
   DEFAULT_PRODUCT_QUERY,
