@@ -38,6 +38,10 @@ jobs:
        !contains(github.event.deployment.environment, 'production'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
+      statuses: read # TẠM (NS-42): chỉ cho bước "wait for Vercel"
+
     steps:
       - name: deployment info
         env:
@@ -97,18 +101,29 @@ jobs:
 
       - run: npm ci
 
+      # TẠM (NS-42): URL nhánh chỉ trỏ vào deployment của head SHA khi Vercel báo xong; smoke qua sớm hơn nghĩa là
+      # đang kiểm bản deploy trước (lần chạy đầu của PR #23 gặp đúng như vậy). Chờ status `Vercel` của head SHA.
+      - name: wait for Vercel (TẠM)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 20); do
+            state=$(gh api "repos/$REPO/commits/$HEAD_SHA/status" --jq '[.statuses[] | select(.context == "Vercel")][0].state // "none"')
+            echo "Vercel status của $HEAD_SHA: $state ($i/20)"
+            case $state in success) exit 0 ;; failure|error) exit 1 ;; esac
+            sleep 15
+          done
+          echo "::error::Vercel chưa xong sau 5 phút"; exit 1
+
       - name: smoke
         env:
           BASE_URL: ${{ steps.url.outputs.base_url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: |
-          # TẠM (NS-42): với pull_request, preview có thể chưa xong; chờ tối đa 5 phút.
-          if [ "$EVENT_NAME" = pull_request ]; then
-            for i in $(seq 1 10); do npm run smoke && exit 0; echo "smoke: thử lại $i/10 sau 30 giây"; sleep 30; done
-            exit 1
-          fi
-          npm run smoke
+        run: npm run smoke
 
       - name: install Playwright Chromium
         run: npx playwright install --with-deps chromium
