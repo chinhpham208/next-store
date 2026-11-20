@@ -1,11 +1,33 @@
 import 'server-only'
-import { asc, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, ilike, sql, type SQL } from 'drizzle-orm'
 import { cacheLife, cacheTag } from 'next/cache'
+import { connection } from 'next/server'
 import { categories, db, products } from '@/db'
-import { isProductSlug } from '@/features/products/schema'
-import type { ProductDetail, ProductSummary } from '@/features/products/types'
+import { isProductSlug, PAGE_SIZE, parseProductQuery, type ProductQuery, type ProductSort } from '@/features/products/schema'
+import type { CategoryOption, ProductDetail, ProductListing, ProductSummary } from '@/features/products/types'
 
 const FEATURED_LIMIT = 8
+
+// Listing cards only; the detail page selects its own fields (description, stock, categorySlug).
+// Select only summary fields: the value returned from a 'use cache' function must be serializable.
+const SUMMARY_FIELDS = {
+  slug: products.slug,
+  name: products.name,
+  price: products.price,
+  image: products.image,
+  categoryName: categories.name,
+  // Expose only in/out of stock; the exact count is not part of the summary contract.
+  inStock: sql`${products.stock} > 0`.mapWith(Boolean),
+}
+
+// Exhaustive by type: adding a sort to PRODUCT_SORTS fails typecheck until it has an ORDER BY here.
+// id is the last key everywhere: seed rows share updated_at and some prices, and without a unique tie-breaker
+// Postgres may return ties in any order, so a product could appear on two pages or on none.
+const ORDER_BY: Record<ProductSort, readonly SQL[]> = {
+  newest: [desc(products.updatedAt), asc(products.id)],
+  'price-asc': [asc(products.price), asc(products.id)],
+  'price-desc': [desc(products.price), asc(products.id)],
+}
 
 export const getFeaturedProducts = async (limit: number = FEATURED_LIMIT): Promise<ProductSummary[]> => {
   'use cache'
@@ -15,17 +37,8 @@ export const getFeaturedProducts = async (limit: number = FEATURED_LIMIT): Promi
   cacheTag('products')
   cacheLife('hours')
 
-  // Select only summary fields: the value returned from a 'use cache' function must be serializable.
   return db
-    .select({
-      slug: products.slug,
-      name: products.name,
-      price: products.price,
-      image: products.image,
-      categoryName: categories.name,
-      // Expose only in/out of stock; the exact count is not part of the summary contract.
-      inStock: sql`${products.stock} > 0`.mapWith(Boolean),
-    })
+    .select(SUMMARY_FIELDS)
     .from(products)
     .innerJoin(categories, eq(products.categoryId, categories.id))
     .where(eq(products.featured, true))
@@ -70,4 +83,163 @@ export const getProductBySlug = async (slug: string): Promise<ProductDetail | nu
 export const getAllProductSlugs = async (): Promise<string[]> => {
   const rows = await db.select({ slug: products.slug }).from(products).orderBy(asc(products.id))
   return rows.map((row) => row.slug)
+}
+
+type CategoryRow = CategoryOption & { id: number }
+
+// id lets the listing filter on products.category_id (indexed) instead of joining categories to count.
+const getCategoryRows = async (): Promise<CategoryRow[]> => {
+  'use cache'
+  cacheTag('products')
+  cacheLife('hours')
+
+  return db
+    .select({ id: categories.id, slug: categories.slug, name: categories.name })
+    .from(categories)
+    .orderBy(asc(categories.id))
+}
+
+export const getCategories = async (): Promise<CategoryOption[]> =>
+  (await getCategoryRows()).map(({ slug, name }) => ({ slug, name }))
+
+// Escapes every LIKE metacharacter in one pass, so an escape added for one character is never re-escaped.
+// Backslash is Postgres's LIKE escape character unless a query names another with ESCAPE; none here does.
+export const escapeLikePattern = (value: string) => value.replace(/[\\%_]/g, '\\$&')
+
+// category_id is NOT NULL with a foreign key, so filtering it equals joining categories and comparing slugs.
+const inCategory = (categoryId: number | null) =>
+  categoryId === null ? undefined : eq(products.categoryId, categoryId)
+
+const nameContains = (text: string) => ilike(products.name, `%${escapeLikePattern(text)}%`)
+
+// No join: every product has exactly one category (see inCategory), so the count is the same without it.
+const countWhere = async (where: SQL | undefined) => {
+  const [row] = await db.select({ total: count() }).from(products).where(where)
+  return row?.total ?? 0
+}
+
+type PageSelection = { where: SQL | undefined; sort: ProductSort; page: number }
+
+const selectPage = ({ where, sort, page }: PageSelection): Promise<ProductSummary[]> =>
+  db
+    .select(SUMMARY_FIELDS)
+    .from(products)
+    .innerJoin(categories, eq(products.categoryId, categories.id))
+    .where(where)
+    .orderBy(...ORDER_BY[sort])
+    .limit(PAGE_SIZE)
+    .offset((page - 1) * PAGE_SIZE)
+
+// Arguments of a 'use cache' function are its cache key (ADR-0008). Only callers below may reach these two, and
+// only with a category id confirmed by getCategoryRows and a page already clamped, so the number of entries stays
+// at categories x sorts x real pages.
+const countCatalog = async (categoryId: number | null): Promise<number> => {
+  'use cache'
+  cacheTag('products')
+  cacheLife('hours')
+
+  return countWhere(inCategory(categoryId))
+}
+
+type CatalogPageKey = { categoryId: number | null; sort: ProductSort; page: number }
+
+const getCatalogPage = async ({ categoryId, sort, page }: CatalogPageKey): Promise<ProductSummary[]> => {
+  'use cache'
+  cacheTag('products')
+  cacheLife('hours')
+
+  return selectPage({ where: inCategory(categoryId), sort, page })
+}
+
+const toPageCount = (total: number) => Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+const clampPage = (requested: number, pageCount: number) => Math.min(Math.max(requested, 1), pageCount)
+
+/**
+ * The page of a ProductQuery is a number (parseProductQuery already turned the URL string into one); a string
+ * such as the raw `searchParams.page` is not accepted and reads as page 1. Only an own data property counts,
+ * and anything that throws while being read (a getter, a hostile or revoked Proxy) also reads as page 1.
+ */
+const readPage = (raw: unknown): number => {
+  try {
+    if (typeof raw !== 'object' || raw === null) return 1
+    const descriptor = Object.getOwnPropertyDescriptor(raw, 'page')
+    const page: unknown = descriptor && 'value' in descriptor ? descriptor.value : undefined
+    return typeof page === 'number' && Number.isSafeInteger(page) && page >= 1 ? page : 1
+  } catch {
+    return 1
+  }
+}
+
+const resolveCategory = async (slug: string | null) => {
+  if (slug === null) return null
+  const known = await getCategoryRows()
+  return known.find((row) => row.slug === slug) ?? null
+}
+
+type ListingPage = { items: ProductSummary[]; total: number; pageCount: number; page: number }
+
+const emptyPage = (): ListingPage => ({ items: [], total: 0, pageCount: 1, page: 1 })
+
+type ListingInput = { categoryId: number | null; sort: ProductSort; page: number }
+
+const listCatalog = async ({ categoryId, sort, page: requested }: ListingInput): Promise<ListingPage> => {
+  const total = await countCatalog(categoryId)
+  if (total === 0) return emptyPage()
+  const pageCount = toPageCount(total)
+  const page = clampPage(requested, pageCount)
+  const items = await getCatalogPage({ categoryId, sort, page })
+  return { items, total, pageCount, page }
+}
+
+const SQLSTATE = /^[0-9A-Z]{5}$/
+
+// Drizzle puts the driver error in `cause`; the SQLSTATE is read from there first, then from the error itself.
+const sqlStateOf = (error: unknown): string | undefined => {
+  for (const candidate of [error instanceof Error ? error.cause : undefined, error]) {
+    const code = candidate instanceof Error && 'code' in candidate ? candidate.code : undefined
+    if (typeof code === 'string' && SQLSTATE.test(code)) return code
+  }
+  return undefined
+}
+
+// Drizzle wraps driver errors as "Failed query: … params: …" with `params` and `cause`, and Next prints the whole
+// object, so the search text would land in the server log. A new Error carries a fixed message and the SQLSTATE
+// only: no cause, no params, no original message. Same idea as withFixedMessage in src/db/client.ts.
+const searchFailed = (error: unknown): Error => {
+  const code = sqlStateOf(error)
+  if (code === undefined) return new Error('product search query failed')
+  return Object.assign(new Error(`product search query failed (SQLSTATE ${code})`), { code })
+}
+
+// User text never becomes a cache key or a tag, and never reaches a log through a query error (ADR-0008).
+const searchCatalog = async ({ categoryId, sort, page: requested, text }: ListingInput & { text: string }) => {
+  const where = and(inCategory(categoryId), nameContains(text))
+  try {
+    const total = await countWhere(where)
+    // An empty result is the cheapest request to repeat; stop at one query instead of two.
+    if (total === 0) return emptyPage()
+    const pageCount = toPageCount(total)
+    const page = clampPage(requested, pageCount)
+    const items = await selectPage({ where, sort, page })
+    return { items, total, pageCount, page }
+  } catch (error) {
+    throw searchFailed(error)
+  }
+}
+
+export const listProducts = async (query: ProductQuery): Promise<ProductListing> => {
+  // Re-parse instead of trusting the type: the parser never throws and maps an unknown sort, a non-string q or
+  // category, or a q with control characters to defaults. The page is a number here: readPage handles it.
+  const { category: requested, sort, q } = parseProductQuery(query)
+  const requestedPage = readPage(query)
+
+  // Without this, an uncached query during prerender logs blocking-prerender-current-time on every request (K7).
+  if (q !== '') await connection()
+
+  const category = await resolveCategory(requested)
+  const input = { categoryId: category?.id ?? null, sort, page: requestedPage }
+  const { items, total, pageCount, page } =
+    q === '' ? await listCatalog(input) : await searchCatalog({ ...input, text: q })
+  return { items, total, pageCount, query: { category: category?.slug ?? null, sort, q, page } }
 }
