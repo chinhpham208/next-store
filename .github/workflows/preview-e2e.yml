@@ -7,6 +7,10 @@ name: Preview E2E
 # workflow_dispatch: manual run against a URL from the allowlist below, tests checked out from the dispatched ref.
 on:
   deployment_status:
+  # TẠM (NS-42, plan M2 Task 5 Step 3): Vercel chưa phát deployment_status cho repo này, nên PR này tự chứng minh
+  # secret, bước kiểm URL, smoke và E2E qua pull_request với URL nhánh cố định. Gỡ trước khi merge.
+  pull_request:
+    branches: [develop]
   workflow_dispatch:
     inputs:
       base_url:
@@ -20,7 +24,7 @@ permissions:
 concurrency:
   # Vercel posts several statuses per deployment (pending, success); only success runs the job. Not cancelling
   # keeps a late status from killing a run that is already testing.
-  group: preview-e2e-${{ github.event.deployment.id || inputs.base_url }}
+  group: preview-e2e-${{ github.event.deployment.id || inputs.base_url || github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -29,6 +33,7 @@ jobs:
     # of scope for this workflow (M2 Task 5).
     if: >-
       github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'pull_request' && github.head_ref == 'NS-42-preview-e2e') ||
       (github.event.deployment_status.state == 'success' &&
        !contains(github.event.deployment.environment, 'production'))
     runs-on: ubuntu-latest
@@ -66,6 +71,8 @@ jobs:
           if [ "$EVENT_NAME" = deployment_status ]; then
             [ "$DEPLOY_CREATOR" = 'vercel[bot]' ] || fail "deployment không do vercel[bot] tạo; không chạy."
             url=$DEPLOY_URL
+          elif [ "$EVENT_NAME" = pull_request ]; then
+            url=https://next-store-git-ns-42-preview-e2e-chinhpham208s-projects.vercel.app # TẠM (NS-42)
           else
             url=$INPUT_URL
           fi
@@ -80,7 +87,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.deployment.sha || github.sha }}
+          ref: ${{ github.event.deployment.sha || github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -94,7 +101,14 @@ jobs:
         env:
           BASE_URL: ${{ steps.url.outputs.base_url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
-        run: npm run smoke
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          # TẠM (NS-42): với pull_request, preview có thể chưa xong; chờ tối đa 5 phút.
+          if [ "$EVENT_NAME" = pull_request ]; then
+            for i in $(seq 1 10); do npm run smoke && exit 0; echo "smoke: thử lại $i/10 sau 30 giây"; sleep 30; done
+            exit 1
+          fi
+          npm run smoke
 
       - name: install Playwright Chromium
         run: npx playwright install --with-deps chromium
