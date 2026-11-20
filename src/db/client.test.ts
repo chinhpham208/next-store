@@ -578,6 +578,9 @@ describe('Neon integration URLs (Vercel Marketplace, ap-southeast-1)', () => {
     })
   })
   it.each(NEON_SHAPES)('connects with verified TLS and channel binding honoured for %s', async (_label, url, binding) => {
+    // postgres-js reads PGCHANNELBINDING when the URL has no channel_binding; the 'prefer' default must not depend on
+    // the shell that runs the tests.
+    vi.stubEnv('PGCHANNELBINDING', '')
     vi.stubEnv('PGSSLMODE', 'disable')
     vi.stubEnv('NODE_TLS_REJECT_UNAUTHORIZED', '0')
     const { passed, effective } = await connect(url)
@@ -595,6 +598,11 @@ describe('Neon integration URLs (Vercel Marketplace, ap-southeast-1)', () => {
     expect(effective.ssl).toEqual(VERIFIED)
     // postgres-js defaults to 'prefer' (SCRAM-SHA-256-PLUS when offered); `require` must reach the driver as is.
     expect(effective.channel_binding).toBe(binding ?? 'prefer')
+  })
+  it('lets an explicit channel_binding in the URL win over PGCHANNELBINDING', async () => {
+    vi.stubEnv('PGCHANNELBINDING', 'disable')
+    const { passed } = await connect(`${NEON_POOLED}?sslmode=require&channel_binding=require`)
+    expect(passed?.[0]).toHaveProperty('channel_binding', 'require')
   })
   it('still rejects a duplicated sslmode on a Neon URL', () => {
     const url = `${NEON_POOLED}?sslmode=require&channel_binding=require&sslmode=disable`

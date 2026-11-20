@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# Kiểm hành vi an toàn của scripts/smoke.sh (NS-35, audit PR #6 mục L1). Không cần bản build, không ra mạng.
+#
+#   bash scripts/smoke.test.sh
+#
+# Một server HTTP dùng một lần (node) trên 127.0.0.1 ghi lại header nhận được; một `curl` giả đứng trước PATH
+# ghi lại tham số của mọi lần gọi rồi chuyển cho curl thật, để biết smoke.sh có gửi request nào hay không.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+
+SECRET=abcdefghijklmnop0123456789ABCDEF
+PORT=3199
+BUSY_PORT=3198
+DENY_PORT=3197
+
+TMP=$(mktemp -d)
+PIDS=()
+cleanup() {
+  local pid
+  for pid in "${PIDS[@]+"${PIDS[@]}"}"; do kill "$pid" 2>/dev/null || true; done
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
+
+fail() { echo "FAIL $1: $2" >&2; [ -f "$TMP/out" ] && sed 's/^/  | /' "$TMP/out" >&2; exit 1; }
+
+REAL_CURL=$(command -v curl)
+mkdir -p "$TMP/bin"
+cat > "$TMP/bin/curl" <<EOF
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$TMP/curl-calls"
+exec "$REAL_CURL" "\$@"
+EOF
+chmod +x "$TMP/bin/curl"
+
+# start_server <port> <header-file> [status]: answers / with the default SMOKE_TEXT (or with <status>, e.g. 401 like
+# Vercel Deployment Protection), everything else with 404.
+start_server() {
+  local port=$1 headers=$2 status=${3:-200} ready="$TMP/ready-$1"
+  node -e '
+    const [port, headers, ready, status] = process.argv.slice(1)
+    const fs = require("node:fs")
+    require("node:http").createServer((req, res) => {
+      fs.appendFileSync(headers, JSON.stringify(req.headers) + "\n")
+      if (req.url === "/") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<h1>Áo thun 404 Not Found</h1>") }
+      else { res.writeHead(404); res.end("not found") }
+    }).listen(Number(port), "127.0.0.1", () => fs.writeFileSync(ready, ""))
+  ' "$port" "$headers" "$ready" "$status" &
+  PIDS+=($!)
+  local i
+  for i in $(seq 1 50); do [ -f "$ready" ] && return 0; sleep 0.1; done
+  echo "server thử không khởi động được trên cổng $port" >&2; exit 1
+}
+
+# run <env…> -- <command…>: runs with the shim first on PATH, output in $TMP/out, exit code in $CODE.
+run() {
+  local envs=()
+  while [ "$1" != -- ]; do envs+=("$1"); shift; done
+  shift
+  rm -f "$TMP/curl-calls"
+  : > "$TMP/curl-calls"
+  set +e
+  env -u BASE_URL -u VERCEL_AUTOMATION_BYPASS_SECRET -u SMOKE_PORT PATH="$TMP/bin:$PATH" "${envs[@]}" "$@" > "$TMP/out" 2>&1
+  CODE=$?
+  set -e
+}
+
+start_server "$PORT" "$TMP/headers"
+
+# http-no-header: a plain-http target never receives the bypass secret; curl is pinned to http.
+: > "$TMP/headers"
+run BASE_URL="http://127.0.0.1:$PORT" VERCEL_AUTOMATION_BYPASS_SECRET="$SECRET" -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail http-no-header "smoke.sh thoát $CODE, cần 0"
+[ -s "$TMP/headers" ] || fail http-no-header "server thử không nhận request nào"
+! grep -qi 'x-vercel-protection-bypass' "$TMP/headers" || fail http-no-header "header bypass bị gửi qua http"
+! grep -qF "$SECRET" "$TMP/headers" "$TMP/out" || fail http-no-header "secret lộ ra"
+grep -q -- "-g --proto =http --proto-redir =http" "$TMP/curl-calls" || fail http-no-header "curl thiếu -g / --proto =http"
+grep -q -- "--url http://127.0.0.1:$PORT/" "$TMP/curl-calls" || fail http-no-header "URL không đi qua --url"
+echo "ok http-no-header"
+
+# http-remote-refused: plain http is only allowed to localhost; refused before any request.
+for url in http://example.com "http://127.0.0.1.example.com:$PORT" "https://user:pw@example.com" "https://example.com/path" "ftp://127.0.0.1"; do
+  : > "$TMP/headers"
+  run BASE_URL="$url" -- bash scripts/smoke.sh
+  [ "$CODE" = 1 ] || fail http-remote-refused "$url: thoát $CODE, cần 1"
+  [ ! -s "$TMP/curl-calls" ] || fail http-remote-refused "$url: curl đã được gọi"
+  [ ! -s "$TMP/headers" ] || fail http-remote-refused "$url: server thử nhận request"
+  ! grep -qF 'pw@' "$TMP/out" || fail http-remote-refused "$url: thông báo lặp lại BASE_URL"
+done
+echo "ok http-remote-refused"
+
+# bad-secret: a secret outside [A-Za-z0-9_-]{16,128} is refused without being echoed.
+for secret in 'a"b' 'short' "$SECRET\"; url = \"http://evil"; do
+  run BASE_URL=https://127.0.0.1:1 VERCEL_AUTOMATION_BYPASS_SECRET="$secret" -- bash scripts/smoke.sh
+  [ "$CODE" = 1 ] || fail bad-secret "thoát $CODE, cần 1"
+  ! grep -qF -- "$secret" "$TMP/out" || fail bad-secret "thông báo lặp lại secret"
+  [ ! -s "$TMP/curl-calls" ] || fail bad-secret "curl đã được gọi"
+done
+echo "ok bad-secret"
+
+# bad-port: SMOKE_PORT must be 1–65535, digits only.
+for port in abc 0 65536 '3100 ' '-1' '1;id'; do
+  run SMOKE_PORT="$port" -- bash scripts/smoke.sh
+  [ "$CODE" = 1 ] || fail bad-port "SMOKE_PORT=$port: thoát $CODE, cần 1"
+  grep -q 'SMOKE_PORT' "$TMP/out" || fail bad-port "SMOKE_PORT=$port: thông báo không nêu SMOKE_PORT"
+  [ ! -s "$TMP/curl-calls" ] || fail bad-port "SMOKE_PORT=$port: curl đã được gọi"
+done
+echo "ok bad-port"
+
+# busy-port: a server already on SMOKE_PORT (e.g. a stale `next start`) is refused, never tested.
+start_server "$BUSY_PORT" "$TMP/busy-headers"
+: > "$TMP/busy-headers"
+run SMOKE_PORT="$BUSY_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail busy-port "thoát $CODE, cần 1"
+grep -qF "cổng $BUSY_PORT đang bận" "$TMP/out" || fail busy-port "thiếu \"cổng $BUSY_PORT đang bận\""
+[ ! -s "$TMP/busy-headers" ] || fail busy-port "smoke đã kiểm server đang giữ cổng"
+echo "ok busy-port"
+
+# xtrace-no-secret: `bash -x` must not print the secret (connection to port 1 fails, so exit 1).
+run BASE_URL=https://127.0.0.1:1 VERCEL_AUTOMATION_BYPASS_SECRET="$SECRET" -- bash -x scripts/smoke.sh
+[ "$CODE" = 1 ] || fail xtrace-no-secret "thoát $CODE, cần 1"
+grep -q '^+' "$TMP/out" || fail xtrace-no-secret "không thấy output của xtrace"
+grep -q -- "--proto =https --proto-redir =https" "$TMP/curl-calls" || fail xtrace-no-secret "curl thiếu --proto =https"
+! grep -qF "$SECRET" "$TMP/out" "$TMP/curl-calls" || fail xtrace-no-secret "secret lộ ra trong xtrace hoặc tham số curl"
+echo "ok xtrace-no-secret"
+
+# The 401 branch reads whether a secret was given; under `bash -x` it must not print the secret either.
+start_server "$DENY_PORT" "$TMP/deny-headers" 401
+run BASE_URL="http://127.0.0.1:$DENY_PORT" VERCEL_AUTOMATION_BYPASS_SECRET="$SECRET" -- bash -x scripts/smoke.sh
+[ "$CODE" = 1 ] || fail xtrace-no-secret "401: thoát $CODE, cần 1"
+grep -qF 'Deployment Protection chặn' "$TMP/out" || fail xtrace-no-secret "401: thiếu thông báo Deployment Protection"
+! grep -qF "$SECRET" "$TMP/out" "$TMP/curl-calls" || fail xtrace-no-secret "401: secret lộ ra trong xtrace"
+echo "ok xtrace-no-secret-401"
