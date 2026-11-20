@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Smoke test: trang chủ trả 200 và có SMOKE_TEXT; một đường dẫn không tồn tại trả 404 với trang tiếng Việt.
+# Smoke test: trang chủ trả 200 và có SMOKE_TEXT; một đường dẫn không tồn tại trả 404 với trang tiếng Việt;
+# một trang chi tiết sản phẩm trả 200 và có tên sản phẩm.
 #
 #   npm run smoke                                   # chạy `next start` từ bản build hiện có (.next/), kiểm rồi tắt
 #   BASE_URL=https://<deploy>.vercel.app npm run smoke   # kiểm một URL đã deploy
@@ -136,5 +137,13 @@ status=$(fetch "$BASE/khong-ton-tai" "$TMP/404.html") || fail "không kết nố
 grep -qF 'Không tìm thấy trang' "$TMP/404.html" || fail "HTML 404 không có \"Không tìm thấy trang\""
 if grep -qF 'This page could not be found' "$TMP/404.html"; then fail "HTML 404 còn trang mặc định tiếng Anh của Next.js"; fi
 echo "smoke: GET /khong-ton-tai → 404, trang tiếng Việt"
+
+# US-04: a prerendered detail page reads its product (the h1 is the name), not just the shell and skeleton.
+DETAIL_PATH=/products/ao-404-not-found
+DETAIL_TEXT='Áo thun 404 Not Found'
+status=$(fetch "$BASE$DETAIL_PATH" "$TMP/detail.html") || fail "không kết nối được $BASE$DETAIL_PATH"
+[ "$status" = 200 ] || fail "GET $DETAIL_PATH trả $status, cần 200"
+grep -qF -- "$DETAIL_TEXT" "$TMP/detail.html" || fail "HTML $DETAIL_PATH không có \"$DETAIL_TEXT\""
+echo "smoke: GET $DETAIL_PATH → 200, có \"$DETAIL_TEXT\""
 
 echo "smoke: qua"
