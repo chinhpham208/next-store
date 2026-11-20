@@ -10,7 +10,13 @@ import * as schema from '@/db/schema'
 
 export type Db = PgDatabase<PgQueryResultHKT, typeof schema>
 
-type DatabaseEnv = { DATABASE_URL?: string; VERCEL?: string; VERCEL_ENV?: string; PGLITE_DATA_DIR?: string }
+type DatabaseEnv = {
+  DATABASE_URL?: string
+  VERCEL?: string
+  VERCEL_ENV?: string
+  PGLITE_DATA_DIR?: string
+  NEON_PRODUCTION_ENDPOINT?: string
+}
 
 export type DatabaseTarget = { kind: 'postgres'; url: string } | { kind: 'pglite'; dataDir: string }
 
@@ -176,6 +182,65 @@ export const resolveSsl = (url: ParsedPostgresUrl, name = 'DATABASE_URL'): SslPo
   return rootCert === null ? localMode : verified
 }
 
+const POOLER_SUFFIX = '-pooler'
+const NEON_ENDPOINT_ID = /^ep-[a-z0-9]+(?:-[a-z0-9]+)*$/
+const NON_PRODUCTION_VERCEL_ENVS = ['preview', 'development']
+
+// Fixed text: the endpoint id, host and URL never appear, so a refusal in a public build log reveals nothing.
+const ENDPOINT_MALFORMED_MESSAGE =
+  'Từ chối kết nối: NEON_PRODUCTION_ENDPOINT không hợp lệ — phải là endpoint id của Neon branch production ' +
+  '(dạng ep-…, chữ thường, không có hậu tố -pooler, không có tên miền).'
+const ENDPOINT_MISSING_MESSAGE =
+  'Từ chối kết nối: NEON_PRODUCTION_ENDPOINT chưa được đặt cho môi trường preview / development trên Vercel; ' +
+  'không có nó thì không phân biệt được database của bản này với database production.'
+const ENDPOINT_IS_PRODUCTION_MESSAGE =
+  'Từ chối kết nối: database của bản preview / development trỏ tới endpoint production ' +
+  '(trùng NEON_PRODUCTION_ENDPOINT); kiểm tra Neon branch mà tích hợp Neon gán cho nhánh git này.'
+const ENDPOINT_NOT_PRODUCTION_MESSAGE =
+  'Từ chối kết nối: database của production không nằm trên endpoint khai báo trong NEON_PRODUCTION_ENDPOINT; ' +
+  'sửa giá trị biến hoặc DATABASE_URL trên Vercel.'
+
+const withoutPooler = (label: string): string =>
+  label.endsWith(POOLER_SUFFIX) ? label.slice(0, -POOLER_SUFFIX.length) : label
+
+// Neon hostnames are `ep-<id>[-pooler].<region>.aws.neon.tech`; anything else has no endpoint in its host.
+const hostEndpointId = (url: ParsedPostgresUrl): string | undefined => {
+  const label = withoutPooler((url.host.split('.')[0] ?? '').toLowerCase())
+  return label.startsWith('ep-') ? label : undefined
+}
+
+/** Every Neon endpoint the connection could reach: the host label and `options=endpoint=<id>` (SNI fallback). */
+export const neonEndpointIds = (url: ParsedPostgresUrl): string[] => {
+  const fromHost = hostEndpointId(url)
+  const option = url.params.get('options')
+  const fromOptions = option?.startsWith('endpoint=') ? withoutPooler(option.slice('endpoint='.length).toLowerCase()) : undefined
+  return [...new Set([fromHost, fromOptions].filter((id) => id !== undefined))]
+}
+
+type EndpointGuardInput = { url: ParsedPostgresUrl; vercelEnv: string; productionEndpoint: string | undefined }
+
+// Why a missing variable is fatal on preview / development but not on production: preview builds run
+// migrate and seed, so silently losing the guard there is exactly the accident we prevent (fail closed).
+// Production must keep deploying while the variable is being rolled out; once it is set, a wrong value
+// stops production right away, which also verifies what the owner typed.
+export const assertEndpointAllowed = ({ url, vercelEnv, productionEndpoint }: EndpointGuardInput): void => {
+  const production = productionEndpoint?.trim() ?? ''
+  if (production !== '' && (!NEON_ENDPOINT_ID.test(production) || production.endsWith(POOLER_SUFFIX))) {
+    throw new Error(ENDPOINT_MALFORMED_MESSAGE)
+  }
+  const ids = neonEndpointIds(url)
+  if (NON_PRODUCTION_VERCEL_ENVS.includes(vercelEnv)) {
+    if (production === '') throw new Error(ENDPOINT_MISSING_MESSAGE)
+    if (ids.includes(production)) throw new Error(ENDPOINT_IS_PRODUCTION_MESSAGE)
+    return
+  }
+  if (production === '') return
+  // The host must be the production endpoint, and an `options` endpoint (if any) must not route elsewhere.
+  if (hostEndpointId(url) !== production || ids.some((id) => id !== production)) {
+    throw new Error(ENDPOINT_NOT_PRODUCTION_MESSAGE)
+  }
+}
+
 export const resolveDatabaseTarget = (env: DatabaseEnv): DatabaseTarget => {
   // `.env.example` ships `DATABASE_URL=`; an empty or whitespace value must mean "unset", not "connect to ''".
   const url = env.DATABASE_URL?.trim() ?? ''
@@ -191,7 +256,13 @@ export const resolveDatabaseTarget = (env: DatabaseEnv): DatabaseTarget => {
   }
   if (url !== '') {
     // Fail at resolve time so `db:migrate` / `prebuild` stop before any connection attempt.
-    resolveSsl(parsePostgresUrl(url))
+    const parsed = parsePostgresUrl(url)
+    resolveSsl(parsed)
+    // One choke point for runtime, db:migrate and db:seed. Off Vercel (local, CI, VPS) there is no preview
+    // concept to protect, so the check would only add configuration.
+    if (onVercel) {
+      assertEndpointAllowed({ url: parsed, vercelEnv: env.VERCEL_ENV ?? '', productionEndpoint: env.NEON_PRODUCTION_ENDPOINT })
+    }
     return { kind: 'postgres', url }
   }
   return { kind: 'pglite', dataDir: env.PGLITE_DATA_DIR || DEFAULT_PGLITE_DATA_DIR }
@@ -308,6 +379,7 @@ export const connection: Connection = (globalThis.nextStoreDbConnection ??= crea
     VERCEL: process.env.VERCEL,
     VERCEL_ENV: process.env.VERCEL_ENV,
     PGLITE_DATA_DIR: process.env.PGLITE_DATA_DIR,
+    NEON_PRODUCTION_ENDPOINT: process.env.NEON_PRODUCTION_ENDPOINT,
   }),
 ))
 
