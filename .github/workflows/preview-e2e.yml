@@ -7,10 +7,6 @@ name: Preview E2E
 # workflow_dispatch: manual run against a URL from the allowlist below, tests checked out from the dispatched ref.
 on:
   deployment_status:
-  # TẠM (NS-42, plan M2 Task 5 Step 3): Vercel chưa phát deployment_status cho repo này, nên PR này tự chứng minh
-  # secret, bước kiểm URL, smoke và E2E qua pull_request với URL nhánh cố định. Gỡ trước khi merge.
-  pull_request:
-    branches: [develop]
   workflow_dispatch:
     inputs:
       base_url:
@@ -33,15 +29,10 @@ jobs:
     # of scope for this workflow (M2 Task 5).
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && github.head_ref == 'NS-42-preview-e2e') ||
       (github.event.deployment_status.state == 'success' &&
        !contains(github.event.deployment.environment, 'production'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: read
-      statuses: read # TẠM (NS-42): chỉ cho bước "wait for Vercel"
-
     steps:
       - name: deployment info
         env:
@@ -75,8 +66,6 @@ jobs:
           if [ "$EVENT_NAME" = deployment_status ]; then
             [ "$DEPLOY_CREATOR" = 'vercel[bot]' ] || fail "deployment không do vercel[bot] tạo; không chạy."
             url=$DEPLOY_URL
-          elif [ "$EVENT_NAME" = pull_request ]; then
-            url=https://next-store-git-ns-42-preview-e2e-chinhpham208s-projects.vercel.app # TẠM (NS-42)
           else
             url=$INPUT_URL
           fi
@@ -91,7 +80,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.deployment.sha || github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.event.deployment.sha || github.sha }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -100,24 +89,6 @@ jobs:
           cache: npm
 
       - run: npm ci
-
-      # TẠM (NS-42): URL nhánh chỉ trỏ vào deployment của head SHA khi Vercel báo xong; smoke qua sớm hơn nghĩa là
-      # đang kiểm bản deploy trước (lần chạy đầu của PR #23 gặp đúng như vậy). Chờ status `Vercel` của head SHA.
-      - name: wait for Vercel (TẠM)
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          for i in $(seq 1 20); do
-            state=$(gh api "repos/$REPO/commits/$HEAD_SHA/status" --jq '[.statuses[] | select(.context == "Vercel")][0].state // "none"')
-            echo "Vercel status của $HEAD_SHA: $state ($i/20)"
-            case $state in success) exit 0 ;; failure|error) exit 1 ;; esac
-            sleep 15
-          done
-          echo "::error::Vercel chưa xong sau 5 phút"; exit 1
 
       - name: smoke
         env:
