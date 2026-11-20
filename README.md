@@ -75,6 +75,22 @@ URL preview của từng deploy có thể bị Vercel Deployment Protection ch�
 
 E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMATION_BYPASS_SECRET`.
 
+### Tự chạy sau mỗi deploy: check `e2e-preview`
+
+Workflow `Preview E2E` (`.github/workflows/preview-e2e.yml`) chạy smoke + E2E mỗi khi Vercel báo một deployment **không phải Production** thành công (preview của PR, Dev). Kết quả là check `e2e-preview` trên commit đã deploy:
+
+```bash
+gh api repos/chinhpham208/next-store/commits/<sha>/check-runs \
+  --jq '.check_runs[] | select(.name == "e2e-preview") | {status, conclusion, html_url}'
+```
+
+Mỗi deployment có thể sinh vài check `e2e-preview` ở trạng thái `skipped` (Vercel gửi cả trạng thái `pending`); chỉ lần chạy có `conclusion` khác `skipped` là kết quả thật.
+
+- Chạy từ sự kiện `deployment_status`: GitHub đọc workflow từ chính commit được deploy, nên PR sửa workflow này được kiểm bằng bản của chính nó.
+- Chỉ kiểm URL do Vercel gửi (deployment tạo bởi `vercel[bot]`), và URL phải là `https://next-store-…-chinhpham208s-projects.vercel.app` hoặc `https://next-store-dev-ginpham.vercel.app`; khác thì job dừng trước khi dùng secret. Production không chạy ở đây.
+- E2E chạy với `--trace off`: trace của Playwright ghi cả header bypass, và report được upload khi lỗi.
+- Chạy tay (gỡ lỗi, hoặc khi không có sự kiện): `gh api -X POST repos/chinhpham208/next-store/actions/workflows/preview-e2e.yml/dispatches -f ref=<nhánh> -f 'inputs[base_url]=<URL trong danh sách trên>'`, hoặc nút "Run workflow" trong tab Actions. Test lấy từ `ref`, nên chọn đúng nhánh của deployment.
+
 ## Seed production
 
 - `db:seed` với Postgres chỉ tự chạy khi `VERCEL_ENV=preview`. Mọi trường hợp khác (production, biến thiếu hoặc sai chính tả, VPS) bị coi là production và bị từ chối trước mọi câu lệnh DB.
