@@ -53,7 +53,7 @@ Nhánh, merge method, tag, hotfix và back-merge: [`conventions.md`](./conventio
 
 ## 4. Quy tắc an toàn
 
-- **Một người viết tại một thời điểm.** Chỉ một agent được ghi vào `/home/claude/next-store`; Reviewer, QA (khi chỉ đọc), Auditor chạy song song được.
+- **Mỗi người viết một worktree.** `/home/claude/next-store` là của Orchestrator. Mỗi ticket chạy song song có worktree riêng `/home/claude/wt/NS-xx` (`git worktree add -b <nhánh> /home/claude/wt/NS-xx origin/develop`, rồi `npm ci`), do Orchestrator tạo và xoá sau khi merge. Reviewer, Auditor, QA (khi chỉ đọc) dùng worktree tạm `/tmp/<vai>-<số PR>` và tự xoá. Không ai `git checkout` trong worktree của người khác (audit PR #15 từng chạy nhầm code vì workspace chung bị đổi nhánh giữa chừng). `scripts/verify.sh` dùng cổng 3100: nếu bận thì chờ hoặc chạy từng bước với `SMOKE_PORT` khác.
 - **Giới hạn vòng lặp.** Implementer sửa tối đa 2 vòng theo review; vẫn hỏng → gọi `deep-reasoner` một lần để chẩn đoán → vẫn hỏng → dừng, hỏi chủ dự án.
 - **Leo thang ngay** (không tự quyết) khi: lệch ADR, thêm thư viện ngoài plan, lùi phiên bản, vấn đề bảo mật, cần tài khoản / chi phí, xoá dữ liệu production.
 - **Bằng chứng thật.** Mọi khẳng định "đã chạy / đã qua" phải kèm output thật từ `scripts/verify.sh` hoặc CI; không viết lại bằng trí nhớ.
@@ -62,7 +62,8 @@ Nhánh, merge method, tag, hotfix và back-merge: [`conventions.md`](./conventio
 
 ## 5. Môi trường làm việc của agent
 
-- Agent làm việc trong workspace cloud `/home/claude/next-store`, dùng chung cho mọi agent; **một người viết tại một thời điểm** (xem §4).
+- Agent làm việc trong workspace cloud: Orchestrator ở `/home/claude/next-store`, mỗi ticket một worktree `/home/claude/wt/NS-xx` (xem §4).
+- Seed production: `npm run db:seed:sql` sinh SQL, chạy trong Neon SQL Editor trên nhánh `main` (README, mục Seed production); `db:seed` bị từ chối trên production.
 - Source of truth là GitHub `chinhpham208/next-store` (riêng tư). Máy Mac của chủ dự án kéo code từ GitHub vào một bản clone riêng; chủ dự án không chạy `npm` trong workspace.
 - Shell trên máy ảo Linux; mỗi lệnh tối đa 180 giây → lệnh dài (`npm ci`, `next build`, Playwright) chạy qua `scripts/verify.sh` (chạy nền + đọc log).
 - `yt` (YouTrack CLI) và `gh` đã đăng nhập sẵn trong workspace.
