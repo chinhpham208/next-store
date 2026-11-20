@@ -84,13 +84,23 @@ gh api repos/chinhpham208/next-store/commits/<sha>/check-runs \
   --jq '.check_runs[] | select(.name == "e2e-preview") | {status, conclusion, html_url}'
 ```
 
-Mỗi deployment có thể sinh vài check `e2e-preview` ở trạng thái `skipped` (Vercel gửi cả trạng thái `pending`); chỉ lần chạy có `conclusion` khác `skipped` là kết quả thật.
+Đọc kết quả:
+
+- **Qua** khi có ít nhất một check `e2e-preview` với `conclusion == "success"` trên đúng SHA. Các lần `skipped` (trạng thái deployment khác `success`) không tính.
+- **Không có check `e2e-preview` nào = chưa qua**, không phải "không áp dụng": có thể Vercel chưa deploy xong, sự kiện không tới, hoặc bước kiểm URL đã chặn.
+- **Không** đặt `e2e-preview` làm required check: check này chỉ xuất hiện sau khi Vercel deploy thành công (không có khi deploy lỗi hay khi sự kiện bị tắt), nên required check sẽ treo PR. Orchestrator tự kiểm theo hai quy tắc trên trước khi merge.
 
 - Chạy từ sự kiện `deployment_status`: GitHub đọc workflow từ chính commit được deploy, nên PR sửa workflow này được kiểm bằng bản của chính nó.
 - Cần bật Vercel → Project → Settings → Git → **deployment_status Events** (bật ngày 2026-11-20, PR #23). Tắt thì Vercel chỉ gửi commit status `Vercel`, không có sự kiện nào và check `e2e-preview` không xuất hiện.
-- Chỉ kiểm URL do Vercel gửi (deployment tạo bởi `vercel[bot]`), và URL phải là `https://next-store-…-chinhpham208s-projects.vercel.app` hoặc `https://next-store-dev-ginpham.vercel.app`; khác thì job dừng trước khi dùng secret. Production không chạy ở đây.
-- E2E chạy với `--trace off`: trace của Playwright ghi cả header bypass, và report được upload khi lỗi.
+- Chỉ kiểm URL do Vercel gửi (cả deployment lẫn deployment status đều do `vercel[bot]` tạo), và URL phải là `https://next-store-…-chinhpham208s-projects.vercel.app` hoặc `https://next-store-dev-ginpham.vercel.app`; khác thì job dừng trước khi dùng secret. Production không chạy ở đây.
+- E2E chạy với `--trace off`: trace của Playwright ghi cả header bypass, và report được upload khi bước e2e lỗi.
 - Chạy tay (gỡ lỗi, hoặc khi không có sự kiện): `gh api -X POST repos/chinhpham208/next-store/actions/workflows/preview-e2e.yml/dispatches -f ref=<nhánh> -f 'inputs[base_url]=<URL trong danh sách trên>'`, hoặc nút "Run workflow" trong tab Actions. Test lấy từ `ref`, nên chọn đúng nhánh của deployment.
+
+**Rủi ro đã chấp nhận (audit PR #23):**
+
+- Với `deployment_status`, GitHub đọc workflow từ **chính commit được deploy**, và job có quyền đọc `VERCEL_AUTOMATION_BYPASS_SECRET`. Ai push được một nhánh (hoặc có PR từ fork mà Vercel deploy) đều có thể sửa workflow trong nhánh đó để đọc secret. Chấp nhận được khi repo riêng tư và chỉ có một chủ dự án; Vercel "Git Fork Protection" phải giữ bật.
+- **Xem lại khi thêm collaborator hoặc repo chuyển public.** Cách sửa: Vercel gửi `repository_dispatch` (sự kiện này chỉ chạy workflow trên nhánh mặc định), nên mã dùng secret luôn là bản đã review trên `develop`.
+- Chạy tay có thể trỏ vào URL production dạng hash (không phân biệt được bằng URL); E2E hiện chỉ đọc, và chỉ người có quyền ghi mới dispatch được.
 
 ## Seed production
 

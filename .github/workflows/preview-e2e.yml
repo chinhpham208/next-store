@@ -17,12 +17,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  # Vercel posts several statuses per deployment (pending, success); only success runs the job. Not cancelling
-  # keeps a late status from killing a run that is already testing.
-  group: preview-e2e-${{ github.event.deployment.id || inputs.base_url || github.ref }}
-  cancel-in-progress: false
-
 jobs:
   e2e-preview:
     # contains() is case-insensitive: excludes "Production" and "Production – next-store". Production E2E is out
@@ -33,6 +27,11 @@ jobs:
        !contains(github.event.deployment.environment, 'production'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # At job level, so the skipped runs for non-success statuses never enter the group. Not cancelling keeps a late
+    # status from killing a run that is already testing.
+    concurrency:
+      group: preview-e2e-${{ github.event.deployment.id || inputs.base_url || github.ref }}
+      cancel-in-progress: false
     steps:
       - name: deployment info
         env:
@@ -41,6 +40,7 @@ jobs:
           DEPLOY_URL: ${{ github.event.deployment_status.environment_url }}
           DEPLOY_STATE: ${{ github.event.deployment_status.state }}
           DEPLOY_CREATOR: ${{ github.event.deployment.creator.login }}
+          STATUS_CREATOR: ${{ github.event.deployment_status.creator.login }}
           DEPLOY_REF: ${{ github.event.deployment.ref }}
           DEPLOY_SHA: ${{ github.event.deployment.sha }}
           INPUT_URL: ${{ inputs.base_url }}
@@ -48,8 +48,8 @@ jobs:
         run: |
           token=$(openssl rand -hex 16)
           echo "::stop-commands::$token"
-          printf 'event=%s\nenvironment=%s\nenvironment_url=%s\nstate=%s\ncreator=%s\nref=%s\nsha=%s\ninput_url=%s\n' \
-            "$EVENT_NAME" "$DEPLOY_ENV" "$DEPLOY_URL" "$DEPLOY_STATE" "$DEPLOY_CREATOR" "$DEPLOY_REF" "$DEPLOY_SHA" "$INPUT_URL"
+          printf 'event=%s\nenvironment=%s\nenvironment_url=%s\nstate=%s\ncreator=%s\nstatus_creator=%s\nref=%s\nsha=%s\ninput_url=%s\n' \
+            "$EVENT_NAME" "$DEPLOY_ENV" "$DEPLOY_URL" "$DEPLOY_STATE" "$DEPLOY_CREATOR" "$STATUS_CREATOR" "$DEPLOY_REF" "$DEPLOY_SHA" "$INPUT_URL"
           echo "::$token::"
 
       # Runs before anything touches the secret: the bypass header only ever goes to this project's deployments.
@@ -59,12 +59,15 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           DEPLOY_URL: ${{ github.event.deployment_status.environment_url }}
           DEPLOY_CREATOR: ${{ github.event.deployment.creator.login }}
+          STATUS_CREATOR: ${{ github.event.deployment_status.creator.login }}
           INPUT_URL: ${{ inputs.base_url }}
         run: |
           set -euo pipefail
           fail() { echo "::error::$*"; exit 1; }
           if [ "$EVENT_NAME" = deployment_status ]; then
+            # Both: anyone with write access can add a status (and its environment_url) to Vercel's deployment.
             [ "$DEPLOY_CREATOR" = 'vercel[bot]' ] || fail "deployment không do vercel[bot] tạo; không chạy."
+            [ "$STATUS_CREATOR" = 'vercel[bot]' ] || fail "deployment status không do vercel[bot] tạo; không chạy."
             url=$DEPLOY_URL
           else
             url=$INPUT_URL
@@ -100,6 +103,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: e2e
+        id: e2e
         env:
           BASE_URL: ${{ steps.url.outputs.base_url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
@@ -107,7 +111,8 @@ jobs:
         run: npm run e2e -- --trace off
 
       - name: upload Playwright report
-        if: failure()
+        # Only a failed e2e has a report; a failed URL check or smoke has nothing to upload.
+        if: failure() && steps.e2e.outcome == 'failure'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report-preview
