@@ -1,6 +1,6 @@
 import { asc, eq, sql } from 'drizzle-orm'
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { categories, db, products } from '@/db'
+import { categories, db, products, type Product } from '@/db'
 import { connection } from '@/db/client'
 import { runMigrations } from '@/db/migrate'
 import { seed } from '@/db/seed'
@@ -20,10 +20,16 @@ const applyStatements = async (statements: string[]) => {
 
 const resetTables = () => db.execute(sql`truncate table products, categories restart identity`)
 
-// Everything except updated_at (time of insert); ids included, since both paths insert in the same order.
+const omit = (row: Product, keys: readonly (keyof Product)[]) =>
+  Object.fromEntries(Object.entries(row).filter(([key]) => !keys.some((omitted) => omitted === key)))
+
+// updated_at is the time of insert, so it can never match between two runs.
+const withoutUpdatedAt = (row: Product) => omit(row, ['updatedAt'])
+
+// Every column except updated_at; ids included, since both paths insert in the same order.
 const snapshot = async () => ({
   categories: await db.select().from(categories).orderBy(asc(categories.id)),
-  products: (await db.select().from(products).orderBy(asc(products.id))).map(({ updatedAt: _at, ...row }) => row),
+  products: (await db.select().from(products).orderBy(asc(products.id))).map(withoutUpdatedAt),
 })
 
 beforeAll(async () => {
@@ -56,6 +62,26 @@ describe('quoteSqlLiteral', () => {
       expect(() => quoteSqlLiteral(value)).toThrow()
     },
   )
+  it.each([
+    ['NUL', '\u0000', 'U+0000'],
+    ['tab', '\t', 'U+0009'],
+    ['line feed', '\n', 'U+000A'],
+    ['carriage return', '\r', 'U+000D'],
+    ['escape', '\u001B', 'U+001B'],
+    ['DEL', '\u007F', 'U+007F'],
+    ['C1 NEL', '\u0085', 'U+0085'],
+    ['line separator', '\u2028', 'U+2028'],
+    ['paragraph separator', '\u2029', 'U+2029'],
+    ['left-to-right embedding', '\u202A', 'U+202A'],
+    ['right-to-left override', '\u202E', 'U+202E'],
+    ['left-to-right isolate', '\u2066', 'U+2066'],
+    ['pop directional isolate', '\u2069', 'U+2069'],
+  ])('refuses the control character %s and names its code point', (_label, character, code) => {
+    expect(() => quoteSqlLiteral(`a${character}b`)).toThrow(new RegExp(`ký tự điều khiển ${code.replace('+', '\\+')}$`))
+  })
+  it('allows combining marks, ZWJ emoji and right-to-left letters', () => {
+    expect(() => quoteSqlLiteral('Tie\u0302\u0301ng 🧑\u200D💻 עברית')).not.toThrow()
+  })
   it('refuses a lone UTF-16 surrogate, which would not survive UTF-8 encoding', () => {
     expect(() => quoteSqlLiteral('a\uD800b')).toThrow()
   })
@@ -68,10 +94,21 @@ describe('buildSeedSql', () => {
   })
   it('skips existing slugs in both statements', () => {
     const [categoryInsert, productInsert] = buildSeedStatements()
-    expect(categoryInsert).toMatch(/^insert into categories \(slug, name\) values[\s\S]+on conflict \(slug\) do nothing$/)
+    expect(categoryInsert).toMatch(/^insert into public\.categories \(slug, name\) values[\s\S]+on conflict \(slug\) do nothing$/)
     expect(productInsert).toMatch(
-      /^insert into products \(slug, name, description, price, image, category_id, stock, featured\)\nselect [\s\S]+ from \(values[\s\S]+\) as v\([^)]+\)\njoin categories c on c\.slug = v\.category_slug\norder by v\.ord\non conflict \(slug\) do nothing$/,
+      /^insert into public\.products \(slug, name, description, price, image, category_id, stock, featured\)\nselect [\s\S]+ from \(values[\s\S]+\) as v\([^)]+\)\njoin public\.categories c on c\.slug = v\.category_slug\norder by v\.ord\non conflict \(slug\) do nothing$/,
     )
+  })
+  it('names every table with its schema, so a changed search_path cannot redirect the inserts', () => {
+    const tables = buildSeedSql().match(/\b(?:into|join)\s+\S+/g)
+    expect(tables).toEqual(['into public.categories', 'into public.products', 'join public.categories'])
+  })
+  it('refuses a control character anywhere in the seed data', () => {
+    const input: SeedSqlInput = {
+      categories: CATEGORY_SEEDS,
+      products: [{ ...PRODUCT_SEEDS[0]!, description: 'dòng 1\ndòng 2' }],
+    }
+    expect(() => buildSeedStatements(input)).toThrow(/U\+000A/)
   })
   it('is deterministic', () => {
     expect(buildSeedSql()).toBe(buildSeedSql())
@@ -135,6 +172,21 @@ describe('applied to a migrated PGlite', () => {
     expect(await db.$count(products)).toBe(24)
     expect(await snapshot()).toEqual(before)
   })
+  it('fills a missing stock / featured with the same defaults seed() gets from the columns', async () => {
+    const { categorySlug, name, description, price } = PRODUCT_SEEDS[0]!
+    const bare = { categorySlug, name, description, price }
+    await execScript(buildSeedSql({ categories: CATEGORY_SEEDS, products: [{ ...bare, slug: 'qua-sql' }] }))
+    // seed() inserts through Drizzle with the fields omitted, so Postgres column defaults apply.
+    const [category] = await db.select({ id: categories.id }).from(categories).where(eq(categories.slug, categorySlug))
+    await db
+      .insert(products)
+      .values({ name, description, price, slug: 'qua-drizzle', categoryId: category!.id, image: `/images/${categorySlug}.svg` })
+
+    const rows = await db.select().from(products).orderBy(asc(products.id))
+    const [viaSql, viaDrizzle] = rows.map((row) => omit(row, ['id', 'slug', 'updatedAt']))
+    expect(viaSql).toMatchObject({ stock: 0, featured: false })
+    expect(viaSql).toEqual(viaDrizzle)
+  })
   it('adds only the missing rows to a partially seeded database', async () => {
     await execScript(buildSeedSql())
     await db.delete(products).where(eq(products.slug, 'sticker-git'))
@@ -154,7 +206,6 @@ describe('escaping', () => {
     "\\'); drop table products; --",
     "'); drop table products; --",
     '$$ $tag$ "double" `back`',
-    'dòng 1\ndòng 2\r\n\ttab',
     'Tiếng Việt tổ hợp: Tie\u0302\u0301ng, emoji 🧑‍💻, CJK 漢字, RTL עברית',
   ]
   const hostileInput: SeedSqlInput = {
