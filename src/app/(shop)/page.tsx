@@ -1,3 +1,5 @@
+import Link from "next/link";
+import { buttonVariants } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
 import { CursorBlock } from "@/components/ui/cursor-block";
 import { getFeaturedProducts, ProductGrid } from "@/features/products";
@@ -35,6 +37,11 @@ export default async function HomePage() {
               {FEATURED_LABEL}
             </h2>
             <ProductGrid products={products} label={FEATURED_LABEL} />
+            <p>
+              <Link href="/products" className={buttonVariants({ variant: "secondary", className: "w-full md:w-auto" })}>
+                Xem tất cả sản phẩm
+              </Link>
+            </p>
           </div>
         </Container>
       </section>

@@ -27,6 +27,14 @@ test('US-01: mỗi sản phẩm có ảnh, tên, giá dạng 199.000 ₫ và tê
   }
 })
 
+test('US-01: header và trang chủ có lối vào danh sách sản phẩm', async ({ page }) => {
+  await expect(page.getByRole('navigation', { name: 'Chính' }).getByRole('link', { name: 'Sản phẩm' })).toHaveAttribute(
+    'href',
+    '/products',
+  )
+  await expect(page.getByRole('main').getByRole('link', { name: 'Xem tất cả sản phẩm' })).toHaveAttribute('href', '/products')
+})
+
 test('US-01: trang chủ không có lỗi a11y serious / critical', async ({ page }) => {
   await expectNoSeriousA11yViolations(page)
 })
