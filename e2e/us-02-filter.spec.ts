@@ -11,12 +11,13 @@ import {
   VIEWPORT_INDEPENDENT,
 } from './catalog'
 
-// Seed (requirements.md §4, src/db/seed-data.ts): 4 categories × 6 products, 12 per page. The seed inserts every
-// product in one transaction, so all rows share updated_at and the default sort ("Mới nhất": updated_at desc,
-// id asc) is the order of PRODUCT_SEEDS. Holds on PGlite, Neon preview / Dev branches and the SQL seed of
-// Production until an admin edits a product (M5).
-const NEWEST_ORDER = PRODUCT_SEEDS.map((product) => product.name)
-const GIT_PRODUCTS = NEWEST_ORDER.filter((name) => /git/i.test(name))
+// Seed (requirements.md §4, src/db/seed-data.ts): 4 categories × 6 products, 12 per page. Expected values are read
+// from the seed. Order is only taken from prices: every row shares updated_at, so "Mới nhất" falls back to the id,
+// and ids follow the seed order on PGlite but not on the Neon branches (measured on the PR #29 preview).
+const GIT_PRODUCTS = PRODUCT_SEEDS.map((product) => product.name).filter((name) => /git/i.test(name))
+// Price-asc order of all 24. The only tie (two stickers at 30.000 ₫) sits at the top of page 1, so positions 12–23
+// are fully determined by price.
+const BY_PRICE_ASC = [...PRODUCT_SEEDS].sort((a, b) => a.price - b.price)
 // Every t-shirt has its own price, so price-asc has no ties to break.
 const AO_THUN_PRICES_ASC = PRODUCT_SEEDS.filter((product) => product.categorySlug === 'ao-thun')
   .map((product) => product.price)
@@ -40,13 +41,24 @@ test('US-02: hơn 12 kết quả thì chia trang, ?page=2 hiện 12 sản phẩm
   await expect(resultCount(page)).toHaveText('24 sản phẩm')
   await expect(productItems(page)).toHaveCount(12)
   const first = await productNames(page)
-  expect(first).toEqual(NEWEST_ORDER.slice(0, 12))
 
   await page.goto('/products?page=2')
   await expect(productItems(page)).toHaveCount(12)
   await expect(paginationNav(page).getByRole('link', { name: '2', exact: true })).toHaveAttribute('aria-current', 'page')
-  // The next 12, in order: page 2 continues exactly where page 1 stopped.
-  expect(await productNames(page)).toEqual(NEWEST_ORDER.slice(12, 24))
+  const second = await productNames(page)
+  expect(new Set([...first, ...second]).size).toBe(24)
+})
+
+test('US-02: ?page=2 là đúng 12 sản phẩm tiếp theo theo thứ tự đang sắp xếp', async ({ page }) => {
+  await page.goto('/products?sort=price-asc')
+  await expect(productItems(page)).toHaveCount(12)
+  expect(await productPrices(page)).toEqual(BY_PRICE_ASC.slice(0, 12).map((product) => product.price))
+
+  await page.goto('/products?sort=price-asc&page=2')
+  await expect(productItems(page)).toHaveCount(12)
+  // Page 2 starts exactly where page 1 stopped: same order, nothing skipped or repeated.
+  expect(await productNames(page)).toEqual(BY_PRICE_ASC.slice(12, 24).map((product) => product.name))
+  expect(await productPrices(page)).toEqual(BY_PRICE_ASC.slice(12, 24).map((product) => product.price))
 })
 
 test('US-02: ở trang đầu và trang cuối, nút bước không khả dụng không phải là link', async ({ page }) => {
@@ -83,7 +95,7 @@ test.describe('tìm kiếm', () => {
     for (const q of ['git', 'GIT', 'Git']) {
       await page.goto(`/products?q=${q}`)
       await expect(resultCount(page)).toHaveText('3 sản phẩm')
-      expect(await productNames(page)).toEqual(GIT_PRODUCTS)
+      expect((await productNames(page)).sort()).toEqual([...GIT_PRODUCTS].sort())
     }
   })
 
