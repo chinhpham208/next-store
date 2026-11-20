@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Smoke test: trang chủ trả 200 và có SMOKE_TEXT; một đường dẫn không tồn tại trả 404.
+# Smoke test: trang chủ trả 200 và có SMOKE_TEXT; một đường dẫn không tồn tại trả 404 với trang tiếng Việt.
 #
 #   npm run smoke                                   # chạy `next start` từ bản build hiện có (.next/), kiểm rồi tắt
 #   BASE_URL=https://<deploy>.vercel.app npm run smoke   # kiểm một URL đã deploy
@@ -132,6 +132,9 @@ echo "smoke: GET / → 200, có \"$SMOKE_TEXT\""
 
 status=$(fetch "$BASE/khong-ton-tai" "$TMP/404.html") || fail "không kết nối được $BASE/khong-ton-tai"
 [ "$status" = 404 ] || fail "GET /khong-ton-tai trả $status, cần 404"
-echo "smoke: GET /khong-ton-tai → 404"
+# NS-38: the 404 must be the app's Vietnamese page, not Next.js's built-in English fallback.
+grep -qF 'Không tìm thấy trang' "$TMP/404.html" || fail "HTML 404 không có \"Không tìm thấy trang\""
+if grep -qF 'This page could not be found' "$TMP/404.html"; then fail "HTML 404 còn trang mặc định tiếng Anh của Next.js"; fi
+echo "smoke: GET /khong-ton-tai → 404, trang tiếng Việt"
 
 echo "smoke: qua"
