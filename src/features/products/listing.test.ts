@@ -1,13 +1,14 @@
 import { readFileSync } from 'node:fs'
+import { inspect } from 'node:util'
 import { fileURLToPath } from 'node:url'
-import { inArray } from 'drizzle-orm'
+import { inArray, sql } from 'drizzle-orm'
 import { cacheLife, cacheTag } from 'next/cache'
 import { connection } from 'next/server'
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { categories, db, products } from '@/db'
 import { runMigrations } from '@/db/migrate'
 import { seed } from '@/db/seed'
-import { PRODUCT_SORTS, type ProductListing, type ProductQuery } from '@/features/products'
+import { PRODUCT_SORTS, type ProductListing, type ProductQuery, type ProductSort } from '@/features/products'
 import { escapeLikePattern, getCategories, listProducts } from '@/features/products/queries'
 
 // cacheTag() throws outside a cacheComponents build and Vitest ignores 'use cache': these tests cover the
@@ -19,14 +20,19 @@ const ALL: ProductQuery = { category: null, sort: 'newest', q: '', page: 1 }
 const slugs = (listing: ProductListing) => listing.items.map((item) => item.slug)
 // listProducts must stay safe when a caller skips parseProductQuery; Reflect.apply bypasses the static type
 // without an `as` cast.
-const listUnparsed = (raw: unknown): Promise<ProductListing> =>
-  Reflect.apply(listProducts, undefined, [raw])
+const listUnparsed = (raw: unknown): Promise<ProductListing> => Reflect.apply(listProducts, undefined, [raw])
+const rejectionOf = (promise: Promise<unknown>): Promise<unknown> =>
+  promise.then(
+    () => null,
+    (reason: unknown) => reason,
+  )
 
 beforeAll(async () => {
   await runMigrations()
   await seed()
 })
 beforeEach(() => vi.clearAllMocks())
+afterEach(() => vi.restoreAllMocks())
 
 it('getCategories returns the 4 categories in seed order', async () => {
   expect(await getCategories()).toEqual([
@@ -48,11 +54,53 @@ it('US-02: page 2 returns the next 12', async () => {
   expect(listing.items).toHaveLength(12)
   expect(slugs(listing)[0]).toBe('sticker-hello-world')
 })
-it.each(PRODUCT_SORTS)('pages 1 and 2 together contain all 24 products exactly once (sort=%s)', async (sort) => {
-  const all = [...slugs(await listProducts({ ...ALL, sort })), ...slugs(await listProducts({ ...ALL, sort, page: 2 }))]
-  expect(all).toHaveLength(24)
-  expect(new Set(all).size).toBe(24)
+
+describe('ordering (checked against an order computed outside the query)', () => {
+  type Row = { id: number; slug: string; price: number; updatedAt: Date }
+  // Primary key first, then id ascending: the order ADR-0008 promises for each sort.
+  const PRIMARY: Record<ProductSort, (a: Row, b: Row) => number> = {
+    newest: (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
+    'price-asc': (a, b) => a.price - b.price,
+    'price-desc': (a, b) => b.price - a.price,
+  }
+  let rows: Row[] = []
+
+  beforeAll(async () => {
+    rows = await db
+      .select({ id: products.id, slug: products.slug, price: products.price, updatedAt: products.updatedAt })
+      .from(products)
+  })
+
+  const expectSortedPages = async (sort: ProductSort) => {
+    const expected = [...rows].sort((a, b) => PRIMARY[sort](a, b) || a.id - b.id).map((row) => row.slug)
+    const actual = [...slugs(await listProducts({ ...ALL, sort })), ...slugs(await listProducts({ ...ALL, sort, page: 2 }))]
+    expect(actual).toEqual(expected)
+  }
+
+  it('has ties to break for every sort, so the tie-breaker is actually exercised', () => {
+    expect(rows).toHaveLength(24)
+    expect(new Set(rows.map((row) => row.updatedAt.getTime())).size).toBeLessThan(24)
+    expect(new Set(rows.map((row) => row.price)).size).toBeLessThan(24)
+  })
+
+  // Postgres returns ties in an order that depends on the physical order of rows, and which order exposes a
+  // missing `id` key differs per sort (measured on PGlite: price-asc only with rows in insertion order). So every
+  // sort is checked against both physical orders.
+  describe('rows stored in insertion (id) order', () => {
+    it.each(PRODUCT_SORTS)('pages 1 and 2 follow the primary key then id, each product once (sort=%s)', expectSortedPages)
+  })
+  describe('rows stored in reverse id order', () => {
+    beforeAll(async () => {
+      // A no-op UPDATE writes a new row version at the end of the heap; rewriting from the highest id down
+      // reverses the physical order. Raw SQL so Drizzle's $onUpdate does not touch updated_at.
+      for (const { id } of [...rows].sort((a, b) => b.id - a.id)) {
+        await db.execute(sql`update products set stock = stock where id = ${id}`)
+      }
+    })
+    it.each(PRODUCT_SORTS)('pages 1 and 2 follow the primary key then id, each product once (sort=%s)', expectSortedPages)
+  })
 })
+
 it('US-02: category=ao-thun returns only the 6 t-shirts', async () => {
   const listing = await listProducts({ ...ALL, category: 'ao-thun' })
   expect(listing.total).toBe(6)
@@ -97,6 +145,11 @@ it('returns an empty first page when nothing matches', async () => {
   expect(await listProducts({ ...ALL, q: 'khong-co-gi' })).toMatchObject({ items: [], total: 0, pageCount: 1 })
   expect((await listProducts({ ...ALL, q: 'khong-co-gi', page: 5 })).query.page).toBe(1)
 })
+it('stops after the count when a search matches nothing', async () => {
+  const select = vi.spyOn(db, 'select')
+  await listProducts({ ...ALL, q: 'khong-co-gi' })
+  expect(select).toHaveBeenCalledOnce()
+})
 it('clamps the page before it reaches the cached query', async () => {
   const listing = await listProducts({ ...ALL, page: 9999 })
   expect(listing.query.page).toBe(2)
@@ -113,10 +166,13 @@ it('treats an unknown category as no filter', async () => {
   expect(listing.query.category).toBeNull()
   expect(listing.total).toBe(24)
 })
-it('tags the cached listing with products and an hours lifetime', async () => {
+it('tags both cached listing queries with products and an hours lifetime', async () => {
   await listProducts(ALL)
-  expect(cacheTag).toHaveBeenCalledWith('products')
-  expect(cacheLife).toHaveBeenCalledWith('hours')
+  // category null: exactly countCatalog and getCatalogPage run, so each must tag and set its lifetime once.
+  expect(cacheTag).toHaveBeenCalledTimes(2)
+  expect(cacheLife).toHaveBeenCalledTimes(2)
+  expect(vi.mocked(cacheTag).mock.calls).toEqual([['products'], ['products']])
+  expect(vi.mocked(cacheLife).mock.calls).toEqual([['hours'], ['hours']])
   expect(connection).not.toHaveBeenCalled()
 })
 it('awaits connection() before an uncached search', async () => {
@@ -124,23 +180,81 @@ it('awaits connection() before an uncached search', async () => {
   expect(connection).toHaveBeenCalledOnce()
 })
 it('never tags a cache entry with the search text', async () => {
-  await listProducts({ ...ALL, q: 'git' })
-  const tags = vi.mocked(cacheTag).mock.calls.flat()
-  expect(tags.every((tag) => tag === 'products')).toBe(true)
+  // Only the category lookup is cached on the search path.
+  await listProducts({ ...ALL, q: 'git', category: 'sach' })
+  expect(vi.mocked(cacheTag).mock.calls).toEqual([['products']])
+})
+
+describe('search errors never carry the search text (audit M1)', () => {
+  const SECRET_Q = 'NGUYEN-VAN-A-0909123456'
+
+  it('rethrows a real query error with a fixed message and only the SQLSTATE', async () => {
+    // A real failure from Postgres (undefined_column), which Drizzle wraps with the query, params and cause.
+    await db.execute(sql`alter table products rename column name to name_renamed`)
+    try {
+      const error = await rejectionOf(listProducts({ ...ALL, q: SECRET_Q }))
+      expect(error).toBeInstanceOf(Error)
+      expect(error).toMatchObject({ message: 'product search query failed (SQLSTATE 42703)', code: '42703' })
+      expect(error).not.toHaveProperty('cause')
+      expect(error).not.toHaveProperty('params')
+      expect(error).not.toHaveProperty('query')
+      // What Next prints: the inspected object with its own properties and cause chain.
+      const printed = inspect(error, { depth: 10, showHidden: true })
+      expect(printed).not.toContain(SECRET_Q)
+      expect(printed).not.toContain('Failed query')
+    } finally {
+      await db.execute(sql`alter table products rename column name_renamed to name`)
+    }
+  })
+  it('drops a code that is not a SQLSTATE', async () => {
+    vi.spyOn(db, 'select').mockImplementation(() => {
+      throw Object.assign(new Error(`boom ${SECRET_Q}`), { code: SECRET_Q })
+    })
+    const error = await rejectionOf(listProducts({ ...ALL, q: SECRET_Q }))
+    expect(error).toBeInstanceOf(Error)
+    expect(error).toMatchObject({ message: 'product search query failed' })
+    expect(error).not.toHaveProperty('code')
+    expect(inspect(error, { depth: 10, showHidden: true })).not.toContain(SECRET_Q)
+  })
 })
 
 describe('unparsed input (callers that skip parseProductQuery)', () => {
-  it.each([1.5, 0, -3, Number.NaN, Number.POSITIVE_INFINITY, '2', null, 2 ** 60])('treats page=%j as a page in range', async (page) => {
+  it.each([1.5, 0, -3, Number.NaN, Number.POSITIVE_INFINITY, null, 2 ** 60])('treats page=%j as a page in range', async (page) => {
     const listing = await listUnparsed({ ...ALL, page })
     expect([1, 2]).toContain(listing.query.page)
     expect(listing.items).toHaveLength(12)
   })
-  it.each(['xyz', 'price; drop table products', '', 42, null, undefined])('falls back to newest for sort=%j', async (sort) => {
-    const listing = await listUnparsed({ ...ALL, sort })
-    expect(listing.query.sort).toBe('newest')
-    expect(slugs(listing)[0]).toBe('ao-git-push-force')
+  it('reads a string page as page 1 (page must be a number, as parseProductQuery returns it)', async () => {
+    expect((await listUnparsed({ ...ALL, page: '2' })).query.page).toBe(1)
   })
-  it.each([42, ['ao-thun'], { slug: 'ao-thun' }, 'AO-THUN'])('drops category=%j', async (category) => {
+  it('ignores an inherited page', async () => {
+    expect((await listUnparsed(Object.create({ ...ALL, page: 2 }))).query.page).toBe(1)
+  })
+  it('never throws for a page getter, a throwing Proxy or a revoked Proxy', async () => {
+    const getter = Object.defineProperty({ ...ALL }, 'page', {
+      get: () => {
+        throw new Error('getter')
+      },
+    })
+    const trap = () => {
+      throw new Error('trap')
+    }
+    const hostile = new Proxy({ ...ALL, page: 2 }, { getOwnPropertyDescriptor: trap, has: trap, get: trap })
+    const { proxy: revoked, revoke } = Proxy.revocable({ ...ALL, page: 2 }, {})
+    revoke()
+    for (const raw of [getter, hostile, revoked]) {
+      expect((await listUnparsed(raw)).query).toEqual(ALL)
+    }
+  })
+  it.each(['xyz', 'price; drop table products', '', 42, null, undefined, '__proto__', 'constructor'])(
+    'falls back to newest for sort=%j',
+    async (sort) => {
+      const listing = await listUnparsed({ ...ALL, sort })
+      expect(listing.query.sort).toBe('newest')
+      expect(slugs(listing)[0]).toBe('ao-git-push-force')
+    },
+  )
+  it.each([42, ['ao-thun'], { slug: 'ao-thun' }, 'AO-THUN', '__proto__'])('drops category=%j', async (category) => {
     expect((await listUnparsed({ ...ALL, category })).query.category).toBeNull()
   })
   it.each([42, ['git'], null, undefined])('treats q=%j as no search', async (q) => {
@@ -207,17 +321,31 @@ describe('LIKE metacharacters match literally on PGlite', () => {
 describe('cache key rules (structural: Vitest does not run the directive)', () => {
   const source = readFileSync(fileURLToPath(new URL('./queries.ts', import.meta.url)), 'utf8')
   // Each top-level const up to the next one; a comment block above a const stays with that const.
-  const cachedBodies = source
-    .split(/\n(?=(?:\/\/[^\n]*\n)*(?:export )?const )/)
-    .filter((chunk) => /^\s*'use cache'/m.test(chunk))
+  const chunks = source.split(/\n(?=(?:\/\/[^\n]*\n|\/\*\*[\s\S]*?\*\/\n)*(?:export )?const )/)
+  const cached = new Map(
+    chunks
+      .filter((chunk) => /^\s*'use cache'/m.test(chunk))
+      .map((chunk) => [/(?:export )?const (\w+) =/.exec(chunk)?.[1] ?? '?', chunk]),
+  )
+  const PRODUCTS_TAGGED = ['getFeaturedProducts', 'getCategoryRows', 'countCatalog', 'getCatalogPage']
 
-  it('has cached functions to check', () => {
-    expect(cachedBodies.length).toBeGreaterThanOrEqual(3)
+  it('has exactly the expected cached functions', () => {
+    expect([...cached.keys()].sort()).toEqual([...PRODUCTS_TAGGED, 'getCachedProductBySlug'].sort())
+  })
+  it.each(PRODUCTS_TAGGED)('%s tags products and sets an hours lifetime', (name) => {
+    const body = cached.get(name) ?? ''
+    expect(body).toContain("cacheTag('products')")
+    expect(body).toContain("cacheLife('hours')")
+  })
+  it('the detail query tags product:<slug> and sets an hours lifetime', () => {
+    const body = cached.get('getCachedProductBySlug') ?? ''
+    expect(body).toContain('cacheTag(`product:${slug}`)')
+    expect(body).toContain("cacheLife('hours')")
   })
   it('never passes q or an unknown category to the cached query', () => {
-    for (const body of cachedBodies) {
+    for (const body of cached.values()) {
       expect(body).not.toMatch(/ilike|escapeLikePattern|\bq\b|\.q\b/i)
-      expect(body).not.toMatch(/\bquery\b/)
+      expect(body).not.toMatch(/\bquery\b|\btext\b/)
     }
   })
   it('never builds SQL from raw strings', () => {
