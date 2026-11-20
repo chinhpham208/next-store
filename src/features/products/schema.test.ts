@@ -140,6 +140,10 @@ describe('parseProductQuery', () => {
     expect(parseProductQuery({ q: '  Git  ' }).q).toBe('Git')
     expect(parseProductQuery({ q: 'a'.repeat(61) }).q).toBe('a'.repeat(60))
     expect(parseProductQuery({ q: 'a'.repeat(10_000) }).q).toBe('a'.repeat(60))
+    expect(parseProductQuery({ q: `  ${'a'.repeat(70)}` }).q).toBe('a'.repeat(60))
+  })
+  it('trims leading whitespace before cutting q', () => {
+    expect(parseProductQuery({ q: `${' '.repeat(200)}git` }).q).toBe('git')
   })
   it('trims whitespace left at the cut so the value round-trips', () => {
     expect(parseProductQuery({ q: `${'a'.repeat(59)} b` }).q).toBe('a'.repeat(59))
@@ -196,10 +200,65 @@ describe('parseProductQuery', () => {
       const raw: unknown = Object.create({ page: '5', sort: 'price-asc', category: 'coc', q: 'git' })
       expect(parseProductQuery(raw)).toEqual(DEFAULT_PRODUCT_QUERY)
     })
+    it('ignores a polluted Object.prototype', () => {
+      Reflect.set(Object.prototype, 'page', '5')
+      Reflect.set(Object.prototype, 'sort', 'price-asc')
+      try {
+        expect(parseProductQuery({})).toEqual(DEFAULT_PRODUCT_QUERY)
+        expect(parseProductQuery({ q: 'git' })).toEqual({ ...DEFAULT_PRODUCT_QUERY, q: 'git' })
+      } finally {
+        Reflect.deleteProperty(Object.prototype, 'page')
+        Reflect.deleteProperty(Object.prototype, 'sort')
+      }
+    })
     it('accepts a null-prototype object', () => {
       const raw: unknown = Object.assign(Object.create(null), { page: '2', sort: 'price-desc' })
       expect(parseProductQuery(raw)).toEqual({ ...DEFAULT_PRODUCT_QUERY, page: 2, sort: 'price-desc' })
     })
+  })
+
+  describe('with the searchParams Proxy of Next.js', () => {
+    // Mirrors createVaryingSearchParams (next/dist/server/app-render/vary-params.js): a read only counts
+    // towards the cache key when it goes through the get, has or ownKeys trap.
+    const track = (target: Record<string, string | string[]>) => {
+      const gets = new Map<string, number>()
+      const tracked = new Set<string>()
+      const proxy = new Proxy(target, {
+        get: (object, prop, receiver) => {
+          if (typeof prop === 'string') {
+            gets.set(prop, (gets.get(prop) ?? 0) + 1)
+            tracked.add(prop)
+          }
+          return Reflect.get(object, prop, receiver)
+        },
+        has: (object, prop) => {
+          if (typeof prop === 'string') tracked.add(prop)
+          return Reflect.has(object, prop)
+        },
+        ownKeys: (object) => {
+          tracked.add('*')
+          return Reflect.ownKeys(object)
+        },
+      })
+      return { proxy, gets, tracked }
+    }
+
+    it('reads each present parameter through the get trap exactly once', () => {
+      const { proxy, gets } = track({ category: 'coc', sort: 'price-asc', q: 'git', page: '2' })
+      expect(parseProductQuery(proxy)).toEqual({ category: 'coc', sort: 'price-asc', q: 'git', page: 2 })
+      expect(Object.fromEntries(gets)).toEqual({ category: 1, sort: 1, q: 1, page: 1 })
+    })
+    it('registers every key through a trap, even when the query is empty', () => {
+      const { proxy, tracked } = track({})
+      expect(parseProductQuery(proxy)).toEqual(DEFAULT_PRODUCT_QUERY)
+      expect([...tracked].sort()).toEqual(['category', 'page', 'q', 'sort'])
+    })
+  })
+
+  it('returns defaults for a revoked Proxy', () => {
+    const { proxy, revoke } = Proxy.revocable({ page: '2' }, {})
+    revoke()
+    expect(parseProductQuery(proxy)).toEqual(DEFAULT_PRODUCT_QUERY)
   })
 
   it('never throws on hostile objects', () => {
@@ -257,6 +316,19 @@ describe('buildProductsHref', () => {
     expect(buildProductsHref({})).toBe('/products')
     expect(buildProductsHref(DEFAULT_PRODUCT_QUERY)).toBe('/products')
     expect(buildProductsHref({ category: undefined, q: undefined, sort: undefined, page: undefined })).toBe('/products')
+  })
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 10000, Number.MAX_SAFE_INTEGER + 2])(
+    'omits page %s, which parseProductQuery would not accept',
+    (page) => {
+      expect(buildProductsHref({ page, category: 'coc' })).toBe('/products?category=coc')
+    },
+  )
+  it('keeps page 9999', () => {
+    expect(buildProductsHref({ page: 9999 })).toBe('/products?page=9999')
+  })
+  it('omits an unknown sort', () => {
+    const query: Partial<ProductQuery> = JSON.parse('{"sort": "xyz", "page": 2}')
+    expect(buildProductsHref(query)).toBe('/products?page=2')
   })
   it('writes parameters in a fixed order', () => {
     expect(buildProductsHref({ page: 2, sort: 'price-asc', category: 'ao-thun' })).toBe(
