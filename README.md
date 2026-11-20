@@ -35,6 +35,7 @@ Biến môi trường: sao chép `.env.example` thành `.env.local` (mô tả t�
 | `npm run db:generate` | Sinh migration SQL vào `drizzle/` từ `src/db/schema.ts` |
 | `npm run db:migrate` | Chạy migration (dùng `DATABASE_URL_UNPOOLED` nếu có, cùng database với `DATABASE_URL`) |
 | `npm run db:seed` | Seed dữ liệu mẫu (idempotent; quy tắc production bên dưới) |
+| `npm run -s db:seed:sql` | In SQL seed production ra stdout, không kết nối database (xem "Seed production") |
 | `npm run db:setup` | `db:migrate` rồi `db:seed` |
 
 Kiểm tra đầy đủ như CI, chịu được giới hạn thời gian của shell: `bash scripts/verify.sh quick` hoặc `bash scripts/verify.sh full`.
@@ -78,19 +79,18 @@ E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMA
 
 - `db:seed` với Postgres chỉ tự chạy khi `VERCEL_ENV=preview`. Mọi trường hợp khác (production, biến thiếu hoặc sai chính tả, VPS) bị coi là production và bị từ chối trước mọi câu lệnh DB.
 - `build:vercel` không gọi seed khi `VERCEL_ENV=production`.
-- Production chỉ được seed **một lần**, do chủ dự án chạy thủ công từ bản clone riêng:
+- `db:seed` bị từ chối trên production. Đường **duy nhất** được hỗ trợ để seed production là chạy SQL sinh từ `src/db/seed-data.ts` trong Neon SQL Editor, branch `main`; không ai cầm mật khẩu hay `DATABASE_URL` production trên máy.
 
 ```bash
-# Subshell: biến production chỉ sống trong ( … ), không rò sang lệnh sau trong cùng terminal.
-(
-  set -e
-  trap 'rm -f .env.production.local' EXIT
-  vercel link && vercel env pull --environment=production .env.production.local
-  set -a; . ./.env.production.local; set +a
-  if VERCEL_ENV=production npm run db:seed; then echo "LỖI: seed production không bị chặn"; exit 1; fi   # phải bị từ chối
-  VERCEL_ENV=production npm run db:seed -- --allow-production   # mã thoát 0
-)
-echo "${DATABASE_URL:-rỗng}"   # in "rỗng"
+SEED_SQL="$(mktemp -t seed-sql.XXXXXX)"
+npm run -s db:seed:sql > "$SEED_SQL"   # chỉ sinh văn bản, không kết nối database nào
+npm test src/db/seed-sql.test.ts       # áp SQL vào PGlite đã migrate: cùng dòng với seed(), idempotent, escape an toàn
+less "$SEED_SQL"                       # đọc lướt trước khi dán: begin; → 2 câu insert … on conflict (slug) do nothing → commit;
 ```
 
-Sau lần đó, dữ liệu production do admin quản lý (từ M5).
+1. Mở Neon Console → SQL Editor, chọn **branch `main`**, dán toàn bộ nội dung file `$SEED_SQL`, chạy.
+2. Nếu lỗi, sửa nguyên nhân rồi chạy lại: câu lệnh idempotent.
+3. Kiểm: `select (select count(*) from public.categories) as categories, (select count(*) from public.products) as products;` phải ra 4 danh mục, 24 sản phẩm.
+4. Xoá file: `rm -f "$SEED_SQL"`.
+
+Câu lệnh dùng `on conflict (slug) do nothing`: chỉ thêm dòng còn thiếu theo slug, không bao giờ ghi đè dòng đã có. Dù vậy, **không** chạy lại trên production sau khi admin đã sửa dữ liệu (từ M5), trừ khi chủ dự án yêu cầu: sản phẩm admin đã xoá sẽ bị thêm lại.
