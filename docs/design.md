@@ -127,7 +127,7 @@ Luồng này không phụ thuộc provider cụ thể; xem ADR-0004.
 
 ### Admin
 - Đăng nhập bằng `ADMIN_PASSWORD` → cookie phiên ký HMAC (Web Crypto) bằng `SESSION_SECRET`.
-- `proxy.ts` chặn `/admin/*` (trừ `/admin/login`) nếu cookie không hợp lệ; mọi Server Action của admin kiểm tra lại phiên (không dựa riêng vào proxy).
+- `proxy.ts` chặn `/admin/*` (trừ `/admin/login`) nếu cookie không hợp lệ (M5); mọi Server Action của admin kiểm tra lại phiên (không dựa riêng vào proxy). Cùng file này, từ M2, đã trả 404 cho `/products/<slug>` không tồn tại ([ADR-0009](./adr/0009-product-404-in-proxy.md)); M5 mở rộng `matcher`.
 - Trang admin có `robots: noindex`.
 - Sửa sản phẩm → Server Action cập nhật DB, gọi `updateTag`.
 
@@ -144,6 +144,7 @@ Lưu ý trên Vercel: cache của `"use cache"` nằm trong bộ nhớ từng in
 | Danh mục, danh sách sản phẩm | Danh mục; danh sách không có từ khoá: `"use cache"`, `cacheLife('hours')`, `cacheTag('products')`, khoá gồm danh mục / sắp xếp / trang đã chuẩn hoá. Tìm theo `q`: không cache ([ADR-0008](./adr/0008-listing-cache-keys.md)) |
 | Chi tiết sản phẩm (gồm tồn kho) | `"use cache"`, `cacheTag('product:<slug>')`; làm mới bằng `updateTag` khi admin sửa (Server Action), `revalidateTag` khi webhook trừ kho (Route Handler); `generateStaticParams` để prerender |
 | Số lượng trong giỏ, nút thêm vào giỏ | Đọc cookie → động, bọc `<Suspense>`; vỏ trang vẫn tĩnh |
+| Kiểm slug sản phẩm trong `proxy.ts` | Không cache được (`cacheTag` lỗi ngoài `"use cache"`); truy vấn theo khoá unique, nhớ slug có thật trong bộ nhớ instance, slug lạ truy vấn mỗi lần; quá 400 ms hoặc lỗi → cho đi tiếp ([ADR-0009](./adr/0009-product-404-in-proxy.md)) |
 | Blog | Tĩnh |
 | Trang admin, giỏ hàng, checkout | Động hoàn toàn |
 
@@ -162,6 +163,7 @@ Lưu ý trên Vercel: cache của `"use cache"` nằm trong bộ nhớ từng in
 
 - Bước build trên Vercel: `npm run build:vercel` = migrate → seed (bỏ qua khi `VERCEL_ENV=production`) → `next build`. Production được seed trước lần build đầu tiên có trang đọc DB.
 - Seed **không bao giờ** chạy trên production sau lần khởi tạo. Script seed dùng danh sách cho phép: PGlite luôn được seed; Postgres chỉ được seed khi `VERCEL_ENV=preview` hoặc có cờ `--allow-production` — mọi trường hợp khác (không đặt, sai chính tả, VPS) bị coi là production và bị từ chối trước mọi câu lệnh DB.
+- Region: function của Vercel (trang động, Server Action, `proxy.ts`) chạy ở `sin1` (Singapore) theo `vercel.json` `regions`, cạnh Neon `aws-ap-southeast-1`; mặc định của Vercel là `iad1` làm mỗi truy vấn đi qua Thái Bình Dương và proxy fail-open ([ADR-0009](./adr/0009-product-404-in-proxy.md)). Đổi region của Neon thì đổi cả `vercel.json`.
 - Secret chỉ nằm trong biến môi trường của Vercel và GitHub Secrets.
 - Trên Vercel, bản preview / Dev từ chối kết nối khi `NEON_PRODUCTION_ENDPOINT` thiếu hoặc trùng endpoint của `DATABASE_URL`; production từ chối khi biến có mặt mà không khớp. Biến là endpoint id (không bí mật) của Neon branch production, không ghi cứng trong repo; kiểm ở `resolveDatabaseTarget`, chung cho runtime, `db:migrate` (cả URL unpooled) và `db:seed`.
 - Kết nối tới DB không phải local luôn dùng TLS `verify-full`: server phải trình chứng chỉ do CA công khai cấp, khớp đúng hostname trong `DATABASE_URL` (Neon đáp ứng). Host là địa chỉ IP hoặc chứng chỉ tự ký (VPS) cần thêm `sslrootcert=<đường dẫn CA>` — hostname vẫn được kiểm.

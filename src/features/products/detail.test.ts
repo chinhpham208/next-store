@@ -108,6 +108,35 @@ describe('isKnownProductSlug', () => {
     await expect(isKnownProductSlug('sticker-vit-cao-su')).rejects.toThrow('db down')
     expect(await isKnownProductSlug('sticker-vit-cao-su')).toBe(true)
   })
+  it('answers a malformed slug without the database even when the database is down', async () => {
+    const select = vi.spyOn(db, 'select').mockImplementation(() => {
+      throw new Error('db down')
+    })
+    expect(await isKnownProductSlug('Sai_Dang')).toBe(false)
+    expect(await isKnownProductSlug('khong%2Dton%2Dtai')).toBe(false)
+    expect(select).not.toHaveBeenCalled()
+  })
+  it('shares one query between concurrent lookups of the same slug', async () => {
+    const select = vi.spyOn(db, 'select')
+    const results = await Promise.all([
+      isKnownProductSlug('khong-ton-tai'),
+      isKnownProductSlug('khong-ton-tai'),
+      isKnownProductSlug('khong-ton-tai'),
+    ])
+    expect(results).toEqual([false, false, false])
+    expect(select).toHaveBeenCalledTimes(1)
+    // Settled lookups are not kept: the next request for an unknown slug asks the database again.
+    await isKnownProductSlug('khong-ton-tai')
+    expect(select).toHaveBeenCalledTimes(2)
+  })
+  it('shares a failed lookup with concurrent callers, then forgets it', async () => {
+    vi.spyOn(db, 'select').mockImplementationOnce(() => {
+      throw new Error('db down')
+    })
+    const results = await Promise.allSettled([isKnownProductSlug('sticker-git'), isKnownProductSlug('sticker-git')])
+    expect(results.map((result) => result.status)).toEqual(['rejected', 'rejected'])
+    expect(await isKnownProductSlug('sticker-git')).toBe(true)
+  })
   it('never touches the cache, so the proxy can call it (K6)', async () => {
     await isKnownProductSlug('coc-merge-conflict')
     expect(cacheTag).not.toHaveBeenCalled()

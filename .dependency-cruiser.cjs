@@ -25,9 +25,37 @@ module.exports = {
     {
       name: 'feature-public-api-only',
       severity: 'error',
-      comment: 'Outside a feature, import it only via @/features/<name> (index.ts).',
-      from: { pathNot: '^src/features/' },
+      comment:
+        'Outside a feature, import it only via @/features/<name> (index.ts). Exception: src/proxy.ts (and its test) ' +
+        'use the narrow entry @/features/<name>/proxy-api, see proxy-narrow-entry.',
+      from: { pathNot: '^src/(features/|proxy(\\.test)?\\.ts$)' },
       to: { path: '^src/features/[^/]+/(?!index\\.ts$)' },
+    },
+    {
+      name: 'proxy-api-only-from-proxy',
+      severity: 'error',
+      comment: 'proxy-api.ts is the entry for src/proxy.ts only; everything else uses index.ts.',
+      from: { pathNot: '^src/(features/([^/]+)/|proxy(\\.test)?\\.ts$)' },
+      to: { path: '^src/features/[^/]+/proxy-api\\.ts$' },
+    },
+    {
+      name: 'proxy-entry-only',
+      severity: 'error',
+      comment: 'src/proxy.ts may only reach a feature through its proxy-api.ts, never index.ts or another file.',
+      from: { path: '^src/proxy\\.ts$' },
+      to: { path: '^src/features/[^/]+/(?!proxy-api\\.ts$)' },
+    },
+    {
+      name: 'proxy-narrow-entry',
+      severity: 'error',
+      comment:
+        'The proxy runs before every /products/<slug> request and is bundled on its own (audit PR #26 L1): it must ' +
+        'not pull in components, zod or tailwind-merge. Checked transitively.',
+      from: { path: '^src/proxy\\.ts$' },
+      to: {
+        path: '^(src/(components|app)/|src/features/[^/]+/(index|components/|schema|queries|metadata)|node_modules/(zod|tailwind-merge|clsx|react|react-dom)/)',
+        reachable: true,
+      },
     },
     {
       name: 'feature-public-api-only-cross',
