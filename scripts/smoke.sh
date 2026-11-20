@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Smoke test: trang chủ trả 200 và có SMOKE_TEXT; một đường dẫn không tồn tại trả 404 với trang tiếng Việt;
-# một trang chi tiết sản phẩm trả 200 và có tên sản phẩm.
+# một trang chi tiết sản phẩm trả 200 và có tên sản phẩm; /products trả 200 và có lưới sản phẩm, kể cả với
+# tham số không hợp lệ.
 #
 #   npm run smoke                                   # chạy `next start` từ bản build hiện có (.next/), kiểm rồi tắt
 #   BASE_URL=https://<deploy>.vercel.app npm run smoke   # kiểm một URL đã deploy
@@ -145,5 +146,16 @@ status=$(fetch "$BASE$DETAIL_PATH" "$TMP/detail.html") || fail "không kết n�
 [ "$status" = 200 ] || fail "GET $DETAIL_PATH trả $status, cần 200"
 grep -qF -- "$DETAIL_TEXT" "$TMP/detail.html" || fail "HTML $DETAIL_PATH không có \"$DETAIL_TEXT\""
 echo "smoke: GET $DETAIL_PATH → 200, có \"$DETAIL_TEXT\""
+
+# US-02 / US-03: the listing reads the catalogue (the labelled grid is inside the Suspense boundary, so it is
+# only in the HTML when the data was read), and invalid parameters fall back to defaults instead of an error.
+LISTING_TEXT='aria-label="Danh sách sản phẩm"'
+for LISTING_PATH in /products '/products?page=abc&sort=xyz'; do
+  status=$(fetch "$BASE$LISTING_PATH" "$TMP/listing.html") || fail "không kết nối được $BASE$LISTING_PATH"
+  [ "$status" = 200 ] || fail "GET $LISTING_PATH trả $status, cần 200"
+  grep -qF -- "$LISTING_TEXT" "$TMP/listing.html" || fail "HTML $LISTING_PATH không có lưới \"Danh sách sản phẩm\""
+  if grep -qF -- 'Đã có lỗi xảy ra' "$TMP/listing.html"; then fail "HTML $LISTING_PATH là trang lỗi"; fi
+  echo "smoke: GET $LISTING_PATH → 200, có lưới sản phẩm"
+done
 
 echo "smoke: qua"

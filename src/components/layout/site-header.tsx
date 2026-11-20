@@ -3,7 +3,8 @@ import { Container } from "@/components/ui/container";
 import { CursorBlock } from "@/components/ui/cursor-block";
 
 // Server Component shared by (shop)/layout.tsx and app/not-found.tsx (which sits outside the (shop) group).
-// No aria-current on "Sản phẩm" yet: the header cannot know the path without a Client Component.
+// No aria-current on "Sản phẩm": the header cannot know the path without a Client Component, and M2 allows
+// "use client" only in error.tsx. Dropped by the Orchestrator on NS-50 (design-system §2, Header).
 export const SiteHeader = () => (
   <header className="h-16 border-b border-border">
     <Container className="flex h-full items-center justify-between gap-4">

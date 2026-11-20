@@ -19,6 +19,8 @@
 | `actions.ts` | Server Actions (`"use server"`) |
 | `schema.ts` | Zod schema cho dữ liệu đầu vào |
 | `types.ts` | Kiểu dùng chung trong feature |
+| `metadata.ts` | Dựng `Metadata` của trang từ dữ liệu feature (`generateMetadata` của `page.tsx` gọi vào) |
+| `slug-guard.ts` | Kiểm slug tồn tại, không cache, cho `src/proxy.ts` trước khi render |
 | `components/` | Component của miền |
 | `*.test.ts` | Test, đặt cạnh file được test |
 

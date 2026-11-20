@@ -9,6 +9,13 @@ export { getProductMetadata } from '@/features/products/metadata'
 export { isKnownProductSlug } from '@/features/products/slug-guard'
 export { ProductGrid, type ProductGridProps } from '@/features/products/components/product-grid'
 export {
+  ProductCatalog,
+  ProductCatalogSkeleton,
+  ProductCatalogView,
+  type ProductCatalogProps,
+  type ProductCatalogViewProps,
+} from '@/features/products/components/product-catalog'
+export {
   ProductDetailSection,
   ProductDetailSkeleton,
   ProductDetailView,

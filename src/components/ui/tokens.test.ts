@@ -8,7 +8,9 @@ import { beforeAll, describe, expect, it } from 'vitest'
 // against the classes the primitives actually use is the only check that catches it.
 
 const APP_DIR = join(process.cwd(), 'src/app')
-const COMPONENT_DIRS = ['src/components/ui', 'src/components/layout'].map((dir) => join(process.cwd(), dir))
+const COMPONENT_DIRS = ['src/components/ui', 'src/components/layout', 'src/features/products/components'].map(
+  (dir) => join(process.cwd(), dir),
+)
 
 const stringLiterals = (code: string): string[] => [...code.matchAll(/'([^']*)'|"([^"]*)"/g)].map((m) => m[1] ?? m[2] ?? '')
 
@@ -68,6 +70,17 @@ describe('globals.css tokens', () => {
       expect.arrayContaining(['disabled:bg-surface-muted', 'placeholder:text-muted-foreground', 'underline-offset-8']),
     )
     expect(UI_CLASSES).not.toContain('button')
+  })
+
+  it('finds the class strings of the M2 product listing', () => {
+    expect(UI_CLASSES).toEqual(
+      expect.arrayContaining([
+        'aria-[current=true]:before:size-2',
+        'aria-[current=page]:bg-foreground',
+        'underline-offset-6',
+        'border-dashed',
+      ]),
+    )
   })
 
   it.each(UI_CLASSES)('emits a rule for %s', (candidate) => {
