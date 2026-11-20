@@ -53,6 +53,15 @@ Tóm tắt [`docs/design.md`](./docs/design.md) §7.
 
 Trên Vercel, `DATABASE_URL` (pooled) và `DATABASE_URL_UNPOOLED` do tích hợp Neon đặt; thiếu `DATABASE_URL` thì build dừng thay vì lặng lẽ dùng PGlite. Kết nối tới host không phải local luôn dùng TLS đã kiểm chứng chỉ (`verify-full`).
 
+Biến môi trường của database trên Vercel:
+
+| Biến | Ai đặt | Production | Preview / Dev | Local, CI |
+|---|---|---|---|---|
+| `DATABASE_URL`, `DATABASE_URL_UNPOOLED` | tích hợp Neon | Neon nhánh chính | Neon branch của nhánh git | trống (PGlite) |
+| `NEON_PRODUCTION_ENDPOINT` | chủ dự án (Vercel → Environment Variables, cả ba environment, không bí mật) | không bắt buộc; có thì phải khớp endpoint của `DATABASE_URL` | **bắt buộc**; phải khác endpoint của `DATABASE_URL` | bỏ trống, không kiểm |
+
+Chặn preview chạm database production (NS-36): giá trị là endpoint id của Neon branch production (`ep-…`, không có `-pooler`, không có tên miền). Khi `VERCEL` có giá trị, mọi kết nối (runtime, `db:migrate` với cả URL unpooled, `db:seed`) đều bị kiểm trước khi mở socket: preview / Dev từ chối nếu biến thiếu hoặc nếu host (bỏ `-pooler`, không phân biệt hoa thường) hay tham số `options=endpoint=` trùng endpoint production; production từ chối nếu biến có mặt mà host không phải endpoint đó. Thông báo lỗi chỉ nêu tên biến, không in URL, host hay mật khẩu.
+
 ## Smoke test và E2E trên URL thật
 
 ```bash
