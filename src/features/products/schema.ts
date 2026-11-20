@@ -1,4 +1,7 @@
 import { z } from 'zod'
+import { SLUG_PATTERN } from '@/features/products/slug'
+
+export { isProductSlug } from '@/features/products/slug'
 
 export const PRODUCT_SORTS = ['newest', 'price-asc', 'price-desc'] as const
 export type ProductSort = (typeof PRODUCT_SORTS)[number]
@@ -21,9 +24,7 @@ export const DEFAULT_PRODUCT_QUERY: Readonly<ProductQuery> = Object.freeze({
   page: 1,
 })
 
-const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/
 const MAX_CATEGORY_LENGTH = 40
-const MAX_SLUG_LENGTH = 80
 // Four digits keeps the page a small integer; anything past the last page is clamped by the listing query.
 const PAGE_PATTERN = /^[1-9]\d{0,3}$/
 const MAX_PAGE = 9999
@@ -85,9 +86,6 @@ export const parseProductQuery = (raw: unknown): ProductQuery => {
   }
 }
 
-// unknown, not string: RegExp.test coerces its argument (['ao-x'] → 'ao-x'), and the proxy must never throw on input.
-export const isProductSlug = (value: unknown): value is string =>
-  typeof value === 'string' && value.length <= MAX_SLUG_LENGTH && SLUG_PATTERN.test(value)
 
 const isNonDefaultSort = (sort: ProductSort | undefined): sort is ProductSort =>
   sort !== undefined && sort !== DEFAULT_PRODUCT_QUERY.sort && PRODUCT_SORTS.includes(sort)

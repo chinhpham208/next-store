@@ -11,8 +11,6 @@
 #   SMOKE_TEXT                       chuỗi phải có trong HTML trang chủ (mặc định: tên một sản phẩm nổi bật trong
 #                                    src/db/seed-data.ts, chứng minh trang đọc được dữ liệu, không chỉ render khung)
 #   SMOKE_PORT                       cổng cho `next start` khi không có BASE_URL (mặc định: 3100); cổng phải trống
-#   SMOKE_WARMUP_TRIES               số slug lạ thử tối đa (mỗi lần cách 1 giây) chờ lookup DB của proxy sẵn sàng
-#                                    (mặc định: 10)
 #   VERCEL_AUTOMATION_BYPASS_SECRET  có thì gửi header x-vercel-protection-bypass (vượt Deployment Protection),
 #                                    chỉ khi BASE_URL là https://
 set -euo pipefail
@@ -20,7 +18,8 @@ cd "$(dirname "$0")/.."
 
 SMOKE_TEXT=${SMOKE_TEXT:-Áo thun 404 Not Found}
 SMOKE_PORT=${SMOKE_PORT:-3100}
-SMOKE_WARMUP_TRIES=${SMOKE_WARMUP_TRIES:-10}
+# At most this many fresh unknown slugs may fail open before the first 404 (audit PR #26 L3; ADR-0009).
+MAX_WARMUP_FAIL_OPEN=2
 SERVER_PID=
 SERVER_GROUP=
 # Whether the bypass header is sent. Only this flag is read outside xtrace_off, so `bash -x` never prints BYPASS.
@@ -93,7 +92,6 @@ start_server() {
 validate_input() {
   local https_re='^https://[A-Za-z0-9.-]+(:[0-9]{1,5})?/?$'
   local http_re='^http://(localhost|127\.0\.0\.1)(:[0-9]{1,5})?/?$'
-  [[ $SMOKE_WARMUP_TRIES =~ ^[1-9][0-9]?$ ]] || fail "SMOKE_WARMUP_TRIES không hợp lệ: cần số nguyên 1–99."
   [[ $SMOKE_PORT =~ ^[0-9]{1,5}$ ]] && [ "$((10#$SMOKE_PORT))" -ge 1 ] && [ "$((10#$SMOKE_PORT))" -le 65535 ] ||
     fail "SMOKE_PORT không hợp lệ: cần số nguyên 1–65535."
   SCHEME=http
@@ -190,8 +188,9 @@ expect_product_404() { # expect_product_404 <path> <label> [header]
 RUN_ID="$(date +%s)-$RANDOM"
 # A cold database connection (Neon waking up, new function instance) can outlast the proxy's 400 ms bound; the
 # proxy then fails open and that slug answers 200 (ADR-0009). Measured on the first preview of NS-49: the first two
-# lookups failed open, later ones 404'd. So first wait until a fresh slug — each one a first hit — gets its 404,
-# say how many failed open, and only then require every case below to 404 on the first hit.
+# lookups failed open, later ones 404'd (that preview ran in iad1, far from Neon; sin1 since). So first send fresh
+# slugs — each one a first hit — until one gets its 404: more than MAX_WARMUP_FAIL_OPEN fail-opens fail smoke, any
+# fail-open is a CI warning; then every case below must 404 on the first hit.
 # x-vercel-id is <edge POP>::[<function region>::]<request id>. The edge POP is the one nearest the client (iad1 from
 # GitHub's US runners); a function region only appears when a function rendered the response, which a proxy rewrite to
 # the prerendered not-found page does not. Logged as a hint for ADR-0009, not asserted. Third-party text: reduced to
@@ -204,17 +203,19 @@ print_vercel_region() { # print_vercel_region <response-headers-file>
 }
 warm_up_product_lookup() {
   local i status
-  for i in $(seq 1 "$SMOKE_WARMUP_TRIES"); do
+  for i in $(seq 1 "$((MAX_WARMUP_FAIL_OPEN + 1))"); do
     status=$(fetch "$BASE/products/smoke-warmup-$RUN_ID-$i" "$TMP/warmup" '' "$TMP/warmup.headers") ||
       fail "không kết nối được $BASE/products/smoke-warmup-…"
     print_vercel_region "$TMP/warmup.headers"
     if [ "$status" = 404 ]; then
       echo "smoke: proxy kiểm slug được từ request thứ $i ($((i - 1)) slug lạ fail-open trước đó)"
+      # A workflow command on purpose: a fail-open within the limit is visible on the run summary, not only in the log.
+      if [ "$i" -gt 1 ]; then echo "::warning::smoke: $((i - 1)) slug lạ fail-open (trả 200) trước khi proxy trả 404"; fi
       return 0
     fi
     sleep 1
   done
-  fail "proxy chưa trả 404 cho slug lạ sau $SMOKE_WARMUP_TRIES request (lookup DB lỗi hoặc quá 400 ms; xem log function)"
+  fail "proxy chưa trả 404 cho slug lạ sau $((MAX_WARMUP_FAIL_OPEN + 1)) request: hơn $MAX_WARMUP_FAIL_OPEN slug fail-open (lookup DB lỗi hoặc quá 400 ms; xem log function)"
 }
 warm_up_product_lookup
 expect_product_404 /products/khong-ton-tai 'slug cố định của US-05'
@@ -223,12 +224,37 @@ expect_product_404 "/products/khong-ton-tai-rsc-$RUN_ID" 'request RSC' 'rsc: 1'
 expect_product_404 "/products/khong-ton-tai-suffix-$RUN_ID.rsc" 'hậu tố .rsc'
 expect_product_404 "/products/khong%2Dton%2Dtai%2D$RUN_ID" '%2D'
 expect_product_404 "/products/KHONG-TON-TAI-$RUN_ID" 'chữ hoa'
+# Segment prefetch (audit PR #26 M1): Next.js fetches <page>.segments/<segment>.segment.rsc; Vercel hands the proxy
+# that path as is.
+expect_product_404 "/products/khong-ton-tai-seg-$RUN_ID.segments/_tree.segment.rsc" 'segment prefetch dạng đường dẫn' 'rsc: 1'
+expect_product_404 "/products/khong-ton-tai-seg2-$RUN_ID.segments/_tree.segment.rsc" 'segment prefetch dạng đường dẫn, không header'
 [ -z "$PRODUCT_404_FAILED" ] || fail "slug sản phẩm không tồn tại không trả 404 ngay lần đầu (xem các dòng LỖI ở trên)"
 
 # The proxy must not turn a known product's client navigation (RSC request) into a 404. `?_rsc` is the cache-busting
 # parameter Next.js redirects an RSC request to (307) when it is missing; empty matches a request with no router headers.
-status=$(fetch "$BASE$DETAIL_PATH?_rsc" "$TMP/detail.rsc" 'rsc: 1') || fail "không kết nối được $BASE$DETAIL_PATH?_rsc"
-[ "$status" = 200 ] || fail "GET $DETAIL_PATH?_rsc (request RSC) trả $status, cần 200"
-echo "smoke: GET $DETAIL_PATH?_rsc (request RSC) → 200"
+# The transport forms of a known product's URL must reach the page too: `.rsc` and the segment prefetch path
+# (audit PR #26 M1: before the fix the proxy answered the latter with 404, breaking the page's own prefetch).
+expect_known_product_200() { # expect_known_product_200 <path> <label> [header]
+  local path=$1 label=$2 header=${3:-} status
+  status=$(fetch "$BASE$path" "$TMP/known-transport" "$header") || fail "không kết nối được $BASE$path"
+  [ "$status" = 200 ] || fail "GET $path ($label) trả $status, cần 200"
+  echo "smoke: GET $path ($label) → 200"
+}
+expect_known_product_200 "$DETAIL_PATH?_rsc" 'request RSC' 'rsc: 1'
+expect_known_product_200 "$DETAIL_PATH.rsc" 'hậu tố .rsc'
+# `next start` never serves the path form of a segment prefetch (Next.js 16.4.6 enables that normalizer only in
+# minimal mode, i.e. on Vercel: server/base-server.js), so it answers 404 even for `/`. Locally the check is that the
+# proxy let the request through (no rewrite header); on a deployment the response itself must be 200.
+SEGMENT_PATH="$DETAIL_PATH.segments/_tree.segment.rsc"
+if [ "$SCHEME" = https ]; then
+  expect_known_product_200 "$SEGMENT_PATH" 'segment prefetch dạng đường dẫn' 'rsc: 1'
+else
+  status=$(fetch "$BASE$SEGMENT_PATH" "$TMP/known-segment" 'rsc: 1' "$TMP/known-segment.headers") ||
+    fail "không kết nối được $BASE$SEGMENT_PATH"
+  if tr -d '\r' < "$TMP/known-segment.headers" | grep -qi '^x-middleware-rewrite:'; then
+    fail "GET $SEGMENT_PATH (segment prefetch dạng đường dẫn) bị proxy rewrite sang not-found, cần cho đi tiếp"
+  fi
+  echo "smoke: GET $SEGMENT_PATH (segment prefetch dạng đường dẫn) → $status, proxy cho đi tiếp (next start không phục vụ dạng này)"
+fi
 
 echo "smoke: qua"

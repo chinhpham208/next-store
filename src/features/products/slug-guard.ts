@@ -1,7 +1,7 @@
 import 'server-only'
 import { eq } from 'drizzle-orm'
 import { db, products } from '@/db'
-import { isProductSlug } from '@/features/products/schema'
+import { isProductSlug } from '@/features/products/slug'
 
 // Slugs already seen to exist in this process. Only positive results are remembered: real slugs are a finite set,
 // so the Set stays bounded by the catalogue. Remembering misses would let anyone fill memory with random slugs, and

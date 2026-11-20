@@ -1,13 +1,13 @@
 import { unstable_doesMiddlewareMatch } from 'next/experimental/testing/server'
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { isKnownProductSlug } from '@/features/products'
+import { isKnownProductSlug } from '@/features/products/proxy-api'
 import { config, proxy } from './proxy'
 
 // Only the database lookup is replaced; isProductSlug stays real, so the malformed-slug tests prove the proxy
 // itself refuses them before any lookup.
-vi.mock('@/features/products', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/features/products')>()),
+vi.mock('@/features/products/proxy-api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/features/products/proxy-api')>()),
   isKnownProductSlug: vi.fn(),
 }))
 
@@ -62,6 +62,49 @@ describe('proxy', () => {
     expect(log).not.toHaveBeenCalled()
   })
 
+  // Next.js 16.4.6 transport forms (build/analysis/get-page-static-info.js; shapes from .next/server/app/products/):
+  // Vercel hands the proxy the full path (audit M1), `next start` strips only the final `.rsc` (measured).
+  const TRANSPORT_SUFFIXES = [
+    '.rsc',
+    '.segments/_tree.segment.rsc',
+    '.segments/_tree.segment',
+    '.segments/!KHNob3Ap/products/$d$slug/__PAGE__.segment',
+    '.segments/_full.segment.rsc',
+    '.segments/!KHNob3Ap.segment.rsc',
+    '.segments/!KHNob3Ap/products/$d$slug/__PAGE__.segment.rsc',
+  ]
+
+  it.each(TRANSPORT_SUFFIXES)('passes a known slug in the %s transport form through', async (suffix) => {
+    known.mockResolvedValue(true)
+    const response = await call(`/products/ao-git-push-force${suffix}`)
+    expect(known).toHaveBeenCalledWith('ao-git-push-force')
+    expect(isPassThrough(response)).toBe(true)
+  })
+
+  it.each(TRANSPORT_SUFFIXES)('rewrites an unknown slug in the %s transport form to not-found', async (suffix) => {
+    known.mockResolvedValue(false)
+    const response = await call(`/products/khong-ton-tai${suffix}`)
+    expect(known).toHaveBeenCalledWith('khong-ton-tai')
+    expect(response.headers.get('x-middleware-rewrite')).toBe(NOT_FOUND)
+  })
+
+  it.each([
+    '/products/Sai_Dang.segments/_tree.segment.rsc',
+    '/products/KHONG-TON-TAI.rsc',
+    '/products/khong%2Dton%2Dtai.segments/_full.segment.rsc',
+    '/products/ao-git-push-force.rsc.rsc',
+    '/products/ao-git-push-force.segments/_tree',
+    '/products/ao-git-push-force.segments/_tree.rsc',
+    '/products/ao-git-push-force.segment.rsc',
+    '/products/ao-git-push-force.segments/.segment.rsc',
+    '/products/ao-git-push-force.json',
+  ])('rewrites the malformed transport path %s to not-found without a lookup', async (path) => {
+    known.mockRejectedValue(new Error('db down'))
+    const response = await call(path)
+    expect(response.headers.get('x-middleware-rewrite')).toBe(NOT_FOUND)
+    expect(known).not.toHaveBeenCalled()
+  })
+
   it('lets the request through when the lookup throws, logging one fixed line without the error', async () => {
     const cause = new Error('select "id" from "products" where "slug" = $1 — host ep-x.neon.tech')
     known.mockRejectedValue(new Error('connect ECONNREFUSED postgres://u:secret@h/db', { cause }))
@@ -114,6 +157,8 @@ describe('config.matcher', () => {
     '/products/ao-git-push-force',
     '/products/khong-ton-tai',
     '/products/khong-ton-tai.rsc',
+    '/products/ao-git-push-force.segments/_tree.segment.rsc',
+    '/products/ao-git-push-force.segments/!KHNob3Ap/products/$d$slug/__PAGE__.segment.rsc',
     '/products/KHONG-TON-TAI',
     '/products/khong%2Dton%2Dtai',
   ])('runs the proxy for %s', (url) => {

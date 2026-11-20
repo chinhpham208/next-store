@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { isKnownProductSlug, isProductSlug } from '@/features/products'
+import { isKnownProductSlug, isProductSlug } from '@/features/products/proxy-api'
 
 // Under Cache Components a page's notFound() runs after the 200 shell is sent (K3), so an unknown product slug is
 // answered here, before render (ADR-0009). Rewriting to a path no route matches makes Next.js render
@@ -16,6 +16,13 @@ const LOOKUP_FAILED_MESSAGE = 'proxy: product slug lookup failed; letting the re
 const LOOKUP_TIMED_OUT_MESSAGE = 'proxy: product slug lookup timed out; letting the request through'
 
 const TIMED_OUT = Symbol('timed out')
+
+// The matcher also runs the proxy for the App Router transport forms of a page URL (Next.js 16.4.6,
+// build/analysis/get-page-static-info.js): `<path>.rsc` and `<path>.segments/<segment path>.segment.rsc`. Measured
+// pathnames reaching the proxy: `next start` strips only the final `.rsc` (so `….segments/_tree.segment`), Vercel
+// strips nothing (audit PR #26 M1). Both forms are removed here; without that a known product's segment prefetch
+// got a 404. Anything else after the slug fails the pattern → 404.
+const PRODUCT_PATH = /^\/products\/([^/]+?)(?:\.segments\/.+\.segment)?(?:\.rsc)?$/
 
 const lookupWithin = async (slug: string) => {
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -35,7 +42,7 @@ const notFound = (request: NextRequest) => NextResponse.rewrite(new URL(NOT_FOUN
 export const proxy = async (request: NextRequest): Promise<NextResponse> => {
   // Not decoded: product URLs are canonical lower-case slugs, so `%2D`, upper case or anything else outside the
   // slug pattern is a 404 decided here without a query, which keeps working when the database is down.
-  const slug = request.nextUrl.pathname.split('/').at(-1)
+  const slug = PRODUCT_PATH.exec(request.nextUrl.pathname)?.[1]
   if (!isProductSlug(slug)) return notFound(request)
 
   try {
