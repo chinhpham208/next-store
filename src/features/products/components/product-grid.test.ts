@@ -42,6 +42,16 @@ it('renders exactly one image per product', () => {
 it('links each product name to its detail page', () => {
   expect(render([product])).toMatch(/<h3[^>]*><a[^>]*href="\/products\/so-tay-rebase"[^>]*>Sổ tay rebase<\/a><\/h3>/)
 })
+it('makes the whole card clickable: the link overlay fills the relative card', () => {
+  const html = render([product])
+  const card = /<li><div class="([^"]*)"/.exec(html)?.[1]?.split(' ') ?? []
+  expect(card).toContain('relative')
+  const link = /<a class="([^"]*)"[^>]*href="\/products\/so-tay-rebase"/.exec(html)?.[1]?.split(' ') ?? []
+  expect(link).toEqual(expect.arrayContaining(['after:absolute', 'after:inset-0']))
+  // A positioned element between the card and the link would become the overlay's box instead of the card.
+  const between = html.slice(html.indexOf('<li>'), html.indexOf('<a '))
+  expect(between.match(/class="[^"]*\b(relative|absolute|fixed|sticky)\b/g)).toHaveLength(1)
+})
 it('keeps the image outside the link and lets a long name break inside the card', () => {
   const html = render([product])
   expect(html).not.toMatch(/<a[^>]*>(?:(?!<\/a>)[\s\S])*<img /)

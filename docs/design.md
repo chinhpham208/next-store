@@ -175,7 +175,7 @@ Mỗi mốc: thiết kế màn hình (nếu có giao diện mới) → plan (`do
 | Mốc | Nội dung | User stories |
 |---|---|---|
 | **M1 Nền tảng & đường ống** | Design system + màn hình trang chủ; khởi tạo dự án, cấu trúc, dependency-cruiser, Cache Components; schema + seed; layout, trang chủ; GitHub + CI; Playwright; Vercel + Neon, deploy production đầu tiên | US-01 |
-| **M2 Danh mục sản phẩm** | Lọc / sắp xếp / tìm / phân trang qua URL, trang chi tiết, loading / error / not-found | US-02 → US-05 |
+| **M2 Danh mục sản phẩm** | Lọc / sắp xếp / tìm / phân trang qua URL, trang chi tiết, skeleton trong `<Suspense>`, trang lỗi, trang 404 | US-02 → US-05 |
 | **M3 Blog & SEO** | Blog MDX, metadata, OG image, sitemap, robots | US-10, US-11 |
 | **M4 Giỏ hàng** | Cookie giỏ hàng, Server Actions, `useOptimistic`, kiểm tra tồn kho | US-06 → US-08 |
 | **M5 Admin** | Đăng nhập admin, `proxy.ts`, sửa sản phẩm + `updateTag`, header bảo mật | US-12, US-13 |

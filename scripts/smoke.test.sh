@@ -35,7 +35,7 @@ EOF
 chmod +x "$TMP/bin/curl"
 
 # start_server <port> <header-file> [status] [404-body]: answers / and the smoke's product page with the default
-# SMOKE_TEXT (or with <status>, e.g. 401 like Vercel Deployment Protection), everything else with 404 and <404-body>
+# SMOKE_TEXT, the smoke's listing paths with the labelled grid (or with <status>, e.g. 401 like Vercel Deployment Protection), everything else with 404 and <404-body>
 # (default: the app's Vietnamese page).
 start_server() {
   local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} ready="$TMP/ready-$1"
@@ -45,6 +45,7 @@ start_server() {
     require("node:http").createServer((req, res) => {
       fs.appendFileSync(headers, JSON.stringify(req.headers) + "\n")
       if (req.url === "/" || req.url === "/products/ao-404-not-found") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<h1>Áo thun 404 Not Found</h1>") }
+      else if (req.url === "/products" || req.url === "/products?page=abc&sort=xyz") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<ul aria-label=\"Danh sách sản phẩm\"></ul>") }
       else { res.writeHead(404, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
     }).listen(Number(port), "127.0.0.1", () => fs.writeFileSync(ready, ""))
   ' "$port" "$headers" "$ready" "$status" "$body" &
