@@ -85,7 +85,9 @@ export const parseProductQuery = (raw: unknown): ProductQuery => {
   }
 }
 
-export const isProductSlug = (value: string) => value.length <= MAX_SLUG_LENGTH && SLUG_PATTERN.test(value)
+// unknown, not string: RegExp.test coerces its argument (['ao-x'] → 'ao-x'), and the proxy must never throw on input.
+export const isProductSlug = (value: unknown): value is string =>
+  typeof value === 'string' && value.length <= MAX_SLUG_LENGTH && SLUG_PATTERN.test(value)
 
 const isNonDefaultSort = (sort: ProductSort | undefined): sort is ProductSort =>
   sort !== undefined && sort !== DEFAULT_PRODUCT_QUERY.sort && PRODUCT_SORTS.includes(sort)

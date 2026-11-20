@@ -24,6 +24,7 @@
 | [0006](./adr/0006-branch-strategy.md) | Nhánh `develop` → `production`, `main` đóng băng | Đã chấp nhận; thay thế một phần bởi 0007 |
 | [0007](./adr/0007-dev-neon-branch.md) | Dev dùng Neon branch do tích hợp tự tạo cho nhánh `develop` | Đã chấp nhận; thay thế một phần 0006 |
 | [0008](./adr/0008-listing-cache-keys.md) | Danh sách sản phẩm cache theo khoá đã chuẩn hoá; tìm theo `q` không cache | Đã chấp nhận; bổ sung 0003 |
+| [0009](./adr/0009-product-404-in-proxy.md) | `proxy.ts` trả 404 thật cho slug sản phẩm không tồn tại; fail-open khi DB lỗi hoặc chậm | Đã chấp nhận |
 
 ## Quản lý công việc
 

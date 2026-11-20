@@ -12,7 +12,7 @@ flowchart TB
   payment["Cổng thanh toán<br/>Fake (test) / cổng VN khi mở bán"]
 
   subgraph next["Next.js 16 server"]
-    proxy["proxy.ts<br/>chặn /admin khi chưa đăng nhập"]
+    proxy["proxy.ts<br/>404 cho /products/:slug không tồn tại (M2)<br/>chặn /admin khi chưa đăng nhập (M5)"]
     subgraph app["src/app — chỉ routing"]
       pages["Pages<br/>Server Components"]
       actions["Server Actions<br/>giỏ hàng, sửa sản phẩm"]
@@ -28,6 +28,7 @@ flowchart TB
   browser --> proxy --> pages & actions
   payment --> route
   pages & actions & route --> features --> db
+  proxy -->|kiểm slug| features
   db --> pglite
   db -.->|có DATABASE_URL| postgres
 ```

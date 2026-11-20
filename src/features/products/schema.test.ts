@@ -309,6 +309,10 @@ describe('isProductSlug', () => {
   ])('rejects %j', (slug) => {
     expect(isProductSlug(slug)).toBe(false)
   })
+  // Audit PR #20 L5: a caller handing over an untyped value must get false, not a TypeError from .length / test().
+  it.each([undefined, null, 42, ['ao-git-push-force'], { length: 3 }, Symbol('a')])('rejects the non-string %s', (value) => {
+    expect(isProductSlug(value)).toBe(false)
+  })
 })
 
 describe('buildProductsHref', () => {
