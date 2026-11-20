@@ -31,7 +31,7 @@ Việc DevOps (CI, cấu hình Vercel / Neon, script) là ticket bình thường
 5. QA chạy E2E + thử tay trên Dev / preview theo tiêu chí chấp nhận; lỗi → ticket Bug
 6. Auditor soát toàn mốc (M4–M6)
 7. Orchestrator mở release PR develop → production, gửi demo: link Dev, link release PR, danh sách ticket, kết quả QA
-     ──► [CỔNG 3] chủ dự án nghiệm thu, duyệt release PR
+     ──► [CỔNG 3] chủ dự án nghiệm thu; chủ dự án duyệt bằng lời trong chat là đủ (repo riêng tư, không có branch protection)
 8. Orchestrator merge release PR bằng merge commit, gắn tag v0.<mốc>.<n> (`n` tiếp theo trong mốc; xem conventions §8), smoke trên Production     ticket → Done
 ```
 
@@ -66,6 +66,7 @@ Nhánh, merge method, tag, hotfix và back-merge: [`conventions.md`](./conventio
 - Source of truth là GitHub `chinhpham208/next-store` (riêng tư). Máy Mac của chủ dự án kéo code từ GitHub vào một bản clone riêng; chủ dự án không chạy `npm` trong workspace.
 - Shell trên máy ảo Linux; mỗi lệnh tối đa 180 giây → lệnh dài (`npm ci`, `next build`, Playwright) chạy qua `scripts/verify.sh` (chạy nền + đọc log).
 - `yt` (YouTrack CLI) và `gh` đã đăng nhập sẵn trong workspace.
+- Preview và Dev được kiểm tự động (E2E, smoke) bằng workflow CI chạy sau mỗi deploy, thêm ở M2. Workflow cần GitHub secret `VERCEL_AUTOMATION_BYPASS_SECRET`; chủ dự án đã tạo secret này ngày 2026-11-20 (có trong Vercel và GitHub Actions).
 - Secret nằm ngoài repo: `/home/claude/secrets/` (workspace); `~/Projects/.youtrack-token`, `~/Projects/.github-token` (trên Mac).
 
 ### GitHub trong workspace
