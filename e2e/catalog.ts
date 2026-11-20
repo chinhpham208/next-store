@@ -13,7 +13,10 @@ export const productNames = async (page: Page): Promise<string[]> =>
 export const productPrices = async (page: Page): Promise<number[]> =>
   (await productList(page).getByText(/₫$/).allInnerTexts()).map((text) => Number(text.replace(/\D/g, '')))
 
-export const resultCount = (page: Page): Locator => page.getByRole('status')
+// The count is the status line of the results bar ("N sản phẩm"), looked up inside <main> and by its own text so
+// another live region (the cart badge of M4, a toast) never matches.
+export const resultCount = (page: Page): Locator =>
+  page.getByRole('main').getByRole('status').filter({ hasText: /^\d+ sản phẩm$/ })
 
 export const categoryNav = (page: Page): Locator => page.getByRole('navigation', { name: 'Danh mục' })
 
@@ -22,3 +25,7 @@ export const sortNav = (page: Page): Locator => page.getByRole('navigation', { n
 export const paginationNav = (page: Page): Locator => page.getByRole('navigation', { name: 'Phân trang' })
 
 export const searchBox = (page: Page): Locator => page.getByRole('searchbox', { name: 'Tìm sản phẩm' })
+
+// Reason for `test.skip(({ isMobile }) => isMobile, VIEWPORT_INDEPENDENT)`: tests that only check data, URLs or
+// status codes give the same answer at 390 px, so the mobile project skips them to keep the run short.
+export const VIEWPORT_INDEPENDENT = 'Không phụ thuộc khổ màn hình: chỉ chạy ở desktop'

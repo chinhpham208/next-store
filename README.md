@@ -75,6 +75,8 @@ URL preview của từng deploy có thể bị Vercel Deployment Protection ch�
 
 E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMATION_BYPASS_SECRET`.
 
+Không có `BASE_URL`, `npm run e2e` tự chạy hai `next start` từ cùng bản build: cổng 3100 và cổng 3101 với `DATABASE_URL` trỏ vào cổng đóng (trang lỗi của US-05; nhóm test này bỏ qua khi có `BASE_URL`). `E2E_PORT=<n>` dời cặp cổng sang `n` và `n+1`.
+
 ### Tự chạy sau mỗi deploy: check `e2e-preview`
 
 Workflow `Preview E2E` (`.github/workflows/preview-e2e.yml`) chạy smoke + E2E mỗi khi Vercel báo một deployment **không phải Production** thành công (preview của PR, Dev). Kết quả là check `e2e-preview` trên commit đã deploy:

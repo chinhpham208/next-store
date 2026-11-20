@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { PRODUCT_SEEDS } from '@/db/seed-data'
 import {
   categoryNav,
   paginationNav,
@@ -9,10 +10,20 @@ import {
   resultCount,
   searchBox,
   sortNav,
+  VIEWPORT_INDEPENDENT,
 } from './catalog'
 
+// Seed assumptions (src/db/seed-data.ts, read from there rather than copied): "Sách" has 6 products with six
+// different prices (so price-desc has no ties); "Cốc" has exactly one name containing "merge" (Cốc Merge
+// Conflict); "Sticker" has 6 products and 6 names containing "sticker"; 24 products in all, 12 per page.
 const SHARED = '/products?category=sach&sort=price-desc'
-const SHARED_PRICES = [450000, 420000, 390000, 350000, 250000, 180000]
+const SHARED_PRICES = PRODUCT_SEEDS.filter((product) => product.categorySlug === 'sach')
+  .map((product) => product.price)
+  .sort((a, b) => b - a)
+
+const STICKER_PRICES_ASC = PRODUCT_SEEDS.filter((product) => product.categorySlug === 'sticker')
+  .map((product) => product.price)
+  .sort((a, b) => a - b)
 
 const categoryLink = (page: Page, name: string) => categoryNav(page).getByRole('link', { name, exact: true })
 const sortLink = (page: Page, name: string) => sortNav(page).getByRole('link', { name, exact: true })
@@ -166,7 +177,8 @@ test('US-03: nút back / forward trả lại bộ lọc tương ứng với URL'
   await expect(resultCount(page)).toHaveText('6 sản phẩm')
   await sortLink(page, 'Giá tăng dần').click()
   await expect(page).toHaveURL(/\/products\?category=sticker&sort=price-asc$/)
-  const sorted = await productPrices(page)
+  // Ascending, and not the newest order it replaced (the seed's sticker prices are not in ascending order).
+  await expect.poll(() => productPrices(page)).toEqual(STICKER_PRICES_ASC)
 
   await page.goBack()
   await expect(page).toHaveURL(/\/products\?category=sticker$/)
@@ -178,50 +190,55 @@ test('US-03: nút back / forward trả lại bộ lọc tương ứng với URL'
   await page.goForward()
   await page.goForward()
   await expect(page).toHaveURL(/\/products\?category=sticker&sort=price-asc$/)
-  await expect.poll(() => productPrices(page)).toEqual(sorted)
+  await expect.poll(() => productPrices(page)).toEqual(STICKER_PRICES_ASC)
 })
 
-// Each bad URL must render exactly what its "same as" URL renders: the bad part dropped, the rest kept.
-// page=9999 is well-formed but past the end, so it is clamped to the last page rather than reset.
-for (const [bad, sameAs] of [
-  ['page=abc&sort=xyz', '/products'],
-  ['page=0', '/products'],
-  ['page=-1', '/products'],
-  ['page=1.5', '/products'],
-  ['page=9999', '/products?page=2'],
-  ['sort=price-asc&sort=price-desc', '/products'],
-  ['category=%00', '/products'],
-  ['category=khong-co', '/products'],
-  ['category=../../etc', '/products'],
-  ['q=%00', '/products'],
-  // Malformed percent-encoding is not decoded: the raw text is searched literally, which matches nothing.
-  ['q=%E0%A4%A', '/products?q=%25E0%25A4%25A'],
-  ['category=ao-thun&page=abc&sort=xyz', '/products?category=ao-thun'],
-] as const) {
-  test(`US-03: tham số không hợp lệ (${bad}) dùng mặc định, không lỗi`, async ({ page }) => {
-    await page.goto(sameAs)
-    await expect(resultCount(page)).toHaveText(/^\d+ sản phẩm$/)
-    const expected = await productNames(page)
-    const expectedCount = await resultCount(page).innerText()
+// Bad parameters are about what the server parses, not about layout: they run once (review of PR #28).
+test.describe('tham số không hợp lệ', () => {
+  test.skip(({ isMobile }) => isMobile, VIEWPORT_INDEPENDENT)
 
-    const response = await page.goto(`/products?${bad}`)
-    expect(response?.status()).toBe(200)
-    await expect(resultCount(page)).toHaveText(expectedCount)
-    expect(await productNames(page)).toEqual(expected)
-    await expect(page.getByRole('heading', { level: 1, name: 'Đã có lỗi xảy ra' })).toHaveCount(0)
+  // Each bad URL must render exactly what its "same as" URL renders: the bad part dropped, the rest kept.
+  // page=9999 is well-formed but past the end, so it is clamped to the last page rather than reset.
+  for (const [bad, sameAs] of [
+    ['page=abc&sort=xyz', '/products'],
+    ['page=0', '/products'],
+    ['page=-1', '/products'],
+    ['page=1.5', '/products'],
+    ['page=9999', '/products?page=2'],
+    ['sort=price-asc&sort=price-desc', '/products'],
+    ['category=%00', '/products'],
+    ['category=khong-co', '/products'],
+    ['category=../../etc', '/products'],
+    ['q=%00', '/products'],
+    // Malformed percent-encoding is not decoded: the raw text is searched literally, which matches nothing.
+    ['q=%E0%A4%A', '/products?q=%25E0%25A4%25A'],
+    ['category=ao-thun&page=abc&sort=xyz', '/products?category=ao-thun'],
+  ] as const) {
+    test(`US-03: tham số không hợp lệ (${bad}) dùng mặc định, không lỗi`, async ({ page }) => {
+      await page.goto(sameAs)
+      await expect(resultCount(page)).toHaveText(/^\d+ sản phẩm$/)
+      const expected = await productNames(page)
+      const expectedCount = await resultCount(page).innerText()
+
+      const response = await page.goto(`/products?${bad}`)
+      expect(response?.status()).toBe(200)
+      await expect(resultCount(page)).toHaveText(expectedCount)
+      expect(await productNames(page)).toEqual(expected)
+      await expect(page.getByRole('heading', { level: 1, name: 'Đã có lỗi xảy ra' })).toHaveCount(0)
+    })
+  }
+
+  test('US-03: ?page=abc&sort=xyz đánh dấu đúng giá trị mặc định trên giao diện', async ({ page }) => {
+    await page.goto('/products?page=abc&sort=xyz')
+    await expect(sortLink(page, 'Mới nhất')).toHaveAttribute('aria-current', 'true')
+    await expect(categoryLink(page, 'Tất cả')).toHaveAttribute('aria-current', 'true')
+    await expect(pageLink(page, '1')).toHaveAttribute('aria-current', 'page')
   })
-}
 
-test('US-03: ?page=abc&sort=xyz đánh dấu đúng giá trị mặc định trên giao diện', async ({ page }) => {
-  await page.goto('/products?page=abc&sort=xyz')
-  await expect(sortLink(page, 'Mới nhất')).toHaveAttribute('aria-current', 'true')
-  await expect(categoryLink(page, 'Tất cả')).toHaveAttribute('aria-current', 'true')
-  await expect(pageLink(page, '1')).toHaveAttribute('aria-current', 'page')
-})
-
-test('US-03: từ khoá dài hơn 60 ký tự bị cắt, không lỗi', async ({ page }) => {
-  const response = await page.goto(`/products?q=${'git'.repeat(100)}`)
-  expect(response?.status()).toBe(200)
-  await expect(resultCount(page)).toHaveText('0 sản phẩm')
-  await expect(searchBox(page)).toHaveValue('git'.repeat(20))
+  test('US-03: từ khoá dài hơn 60 ký tự bị cắt, không lỗi', async ({ page }) => {
+    const response = await page.goto(`/products?q=${'git'.repeat(100)}`)
+    expect(response?.status()).toBe(200)
+    await expect(resultCount(page)).toHaveText('0 sản phẩm')
+    await expect(searchBox(page)).toHaveValue('git'.repeat(20))
+  })
 })
