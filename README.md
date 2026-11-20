@@ -81,11 +81,16 @@ E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMA
 - Production chỉ được seed **một lần**, do chủ dự án chạy thủ công từ bản clone riêng:
 
 ```bash
-vercel link && vercel env pull --environment=production .env.production.local
-set -a; . ./.env.production.local; set +a
-VERCEL_ENV=production npm run db:seed                         # bị từ chối, mã thoát 1
-VERCEL_ENV=production npm run db:seed -- --allow-production   # mã thoát 0
-rm .env.production.local
+# Subshell: biến production chỉ sống trong ( … ), không rò sang lệnh sau trong cùng terminal.
+(
+  set -e
+  trap 'rm -f .env.production.local' EXIT
+  vercel link && vercel env pull --environment=production .env.production.local
+  set -a; . ./.env.production.local; set +a
+  if VERCEL_ENV=production npm run db:seed; then echo "LỖI: seed production không bị chặn"; exit 1; fi   # phải bị từ chối
+  VERCEL_ENV=production npm run db:seed -- --allow-production   # mã thoát 0
+)
+echo "${DATABASE_URL:-rỗng}"   # in "rỗng"
 ```
 
 Sau lần đó, dữ liệu production do admin quản lý (từ M5).

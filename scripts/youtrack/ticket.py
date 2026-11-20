@@ -57,15 +57,35 @@ def set_state(issue: str, state: str, comment: str | None) -> None:
     print(f"{issue} → {state}")
 
 
+# Exact lines `yt issues create` (youtrack-cli 0.27.0) prints on success; see test_ticket.py for a full sample.
+SUCCESS_LINE = re.compile(rf"(?:Success: Issue ({PROJECT}-\d+) created successfully|Issue ID: ({PROJECT}-\d+))")
+
+
+def parse_created_issue(output: str, summary: str, description: str) -> str:
+    """Mã issue vừa tạo, chỉ đọc từ dòng thông báo thành công của `yt`.
+
+    `yt` in lại summary (bug có dạng `[NS-1] …`) nên mã đầu tiên trong output không phải mã mới. Chỉ tin một dòng
+    khớp trọn mẫu thông báo và không đến từ summary / description (cả khi chúng chứa xuống dòng). Không xoá chuỗi
+    summary khỏi output: summary ngắn như `s` sẽ xoá luôn chữ trong `Success`, còn rich lại ngắt dòng summary dài
+    nên xoá cũng không chắc hết. Không thấy, hoặc các dòng thông báo không cùng một mã → dừng, không đoán.
+    """
+    ids = set()
+    for line in output.splitlines():
+        line = line.strip()
+        match = SUCCESS_LINE.fullmatch(line)
+        if not match or line in summary or line in description:
+            continue
+        ids.add(match.group(1) or match.group(2))
+    if len(ids) != 1:
+        sys.exit(f"Không đọc được mã issue vừa tạo (thấy {sorted(ids) or 'không có'}) từ:\n{output}")
+    return ids.pop()
+
+
 def create_issue(summary: str, issue_type: str, description: str, priority: str | None = None) -> str:
     args = ["issues", "create", PROJECT, summary, "--type", issue_type, "--description", description]
     if priority:
         args += ["--priority", priority]
-    output = yt(*args)
-    match = re.search(rf"\b({PROJECT}-\d+)\b", output)
-    if not match:
-        sys.exit(f"Không đọc được mã issue từ:\n{output}")
-    return match.group(1)
+    return parse_created_issue(yt(*args), summary, description)
 
 
 def cmd_tasks(milestone: str) -> None:

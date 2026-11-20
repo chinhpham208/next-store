@@ -19,6 +19,9 @@ export default defineConfig({
       VERCEL: '',
       VERCEL_ENV: '',
       NEON_PRODUCTION_ENDPOINT: '',
+      // postgres-js falls back to these libpq variables, so a developer's shell could change what the tests see.
+      PGCHANNELBINDING: '',
+      PGSSLMODE: '',
       PGLITE_DATA_DIR: 'memory://',
     },
   },
