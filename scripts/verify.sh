@@ -14,6 +14,8 @@ STATE_DIR=.verify
 mkdir -p "$STATE_DIR"
 WAIT=${VERIFY_WAIT:-160}
 SMOKE_PORT=3100
+# E2E also starts a second server with a dead database on the next port (playwright.config.ts, M2 Task 15).
+BROKEN_DB_PORT=3101
 
 has_script() { node -e "process.exit(require('./package.json').scripts?.['$1'] ? 0 : 1)" 2>/dev/null; }
 
@@ -23,7 +25,7 @@ run_step() {
   if "$@"; then echo "::pass $name"; else echo "::fail $name"; return 1; fi
 }
 
-free_port() { (command -v fuser >/dev/null && fuser -k "$SMOKE_PORT/tcp" >/dev/null 2>&1) || true; }
+free_port() { (command -v fuser >/dev/null && fuser -k "$SMOKE_PORT/tcp" "$BROKEN_DB_PORT/tcp" >/dev/null 2>&1) || true; }
 
 pipeline() {
   local mode=$1
