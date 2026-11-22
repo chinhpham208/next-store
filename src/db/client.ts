@@ -6,6 +6,7 @@ import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core'
 import { drizzle as drizzlePglite } from 'drizzle-orm/pglite'
 import { drizzle as drizzlePostgres } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
+import { MAX_QUERY_WAIT_MS } from '@/db/limits'
 import * as schema from '@/db/schema'
 
 export type Db = PgDatabase<PgQueryResultHKT, typeof schema>
@@ -444,6 +445,9 @@ export const buildPostgresOptions = (
     max,
     idle_timeout: 20,
     connect_timeout: 10,
+    // A job still waiting for a slot after the longest dbQuery limit has no caller left; running it later would only
+    // repeat work nobody reads (or a write nobody knows about), so postgres-js drops it with QUEUE_TIMEOUT (NS-73).
+    queue_timeout: MAX_QUERY_WAIT_MS / 1000,
   }
 }
 
@@ -505,7 +509,40 @@ export type Connection = ReturnType<typeof createConnection>
 
 declare global {
   // Survives dev hot reload so PGlite (single process, single handle) is never opened twice.
-  var nextStoreDbConnection: Connection | undefined
+  var nextStoreDbRuntime: RuntimeConnection | undefined
+}
+
+/** The client runtime queries use, replaced when the network has swallowed its connections (ADR-0013). */
+export type RuntimeConnection = {
+  /** The connection a new query runs on. */
+  readonly current: Connection
+  /** Replaces `stale` with a new client, unless it was already replaced; PGlite is never replaced. */
+  recycle: (stale: Connection) => void
+}
+
+// postgres-js has no read limit on a connected socket: a connection waiting on an answer that the network swallowed
+// keeps its pool slot for ~15 minutes, and a full pool pipelines new queries onto it. A fresh client opens new
+// sockets at once. The old one stops taking queries and gives those in flight MAX_QUERY_WAIT_MS (nobody waits
+// longer), then destroys its sockets.
+const RETIRE_TIMEOUT_SECONDS = MAX_QUERY_WAIT_MS / 1000
+// Fixed text: no host, no query; enough for the on-call reader to see that the pool was rebuilt.
+const RECYCLED_WARNING = 'database client recycled after a query timeout'
+
+export const createRuntimeConnection = (open: () => Connection): RuntimeConnection => {
+  let current = open()
+  return {
+    get current() {
+      return current
+    },
+    recycle: (stale) => {
+      // Several queries time out together on one dead pool: only the first replaces it.
+      if (stale !== current || stale.kind !== 'postgres') return
+      current = open()
+      console.warn(RECYCLED_WARNING)
+      // Nobody awaits the old client; a failure while it ends must not become an unhandled rejection.
+      stale.db.$client.end({ timeout: RETIRE_TIMEOUT_SECONDS }).catch(() => {})
+    },
+  }
 }
 
 // Runtime, prerender and db:seed: the app role when configured. db:migrate opens its own connection from the URL
@@ -524,11 +561,16 @@ const openRuntimeConnection = (): Connection => {
   return createConnection(target, { credentials: resolveCredentials(target, env) })
 }
 
-export const connection: Connection = (globalThis.nextStoreDbConnection ??= openRuntimeConnection())
+/** dbQuery reads `runtime.current` for every query and recycles it on a timeout. */
+export const runtime: RuntimeConnection = (globalThis.nextStoreDbRuntime ??= createRuntimeConnection(openRuntimeConnection))
+
+// The first connection, for src/db scripts (db:seed) and tests: they never run through dbQuery, so it is never
+// recycled under them, and PGlite is never recycled at all. Runtime code reaches the database through dbQuery only.
+export const connection: Connection = runtime.current
 
 export const db: Db = connection.db
 
-export const closeConnection = async (target: Connection = connection) => {
+export const closeConnection = async (target: Connection = runtime.current) => {
   if (target.kind === 'postgres') return target.db.$client.end()
   return target.db.$client.close()
 }

@@ -12,6 +12,7 @@ import {
   isDbLogOn,
   closeConnection,
   createConnection,
+  createRuntimeConnection,
   type DatabaseTarget,
   describeError,
   describeTarget,
@@ -283,6 +284,7 @@ describe('connection options passed to postgres()', () => {
         max: 5,
         idle_timeout: 20,
         connect_timeout: 10,
+        queue_timeout: 10,
       },
     ])
     expect(effective).toMatchObject({
@@ -546,15 +548,15 @@ describe('production endpoint guard (NS-36)', () => {
     vi.stubEnv('VERCEL_ENV', 'preview')
     vi.stubEnv('NEON_PRODUCTION_ENDPOINT', PROD)
     vi.stubEnv('DATABASE_URL', neon(`${BRANCH}-pooler`))
-    const saved = globalThis.nextStoreDbConnection
-    globalThis.nextStoreDbConnection = undefined
+    const saved = globalThis.nextStoreDbRuntime
+    globalThis.nextStoreDbRuntime = undefined
     try {
       // postgres-js connects lazily: loading the module builds the client without opening a socket.
       const fresh = await import('@/db/client')
       expect(fresh.connection.target).toEqual({ kind: 'postgres', url: neon(`${BRANCH}-pooler`) })
       await fresh.closeConnection()
     } finally {
-      globalThis.nextStoreDbConnection = saved
+      globalThis.nextStoreDbRuntime = saved
     }
   })
   // Audit PR #15 L1: Neon reads the endpoint from the password for clients without SNI, so the connection could
@@ -735,13 +737,13 @@ describe('DB_LOG guard (NS-36 L3)', () => {
     vi.stubEnv('VERCEL_ENV', 'production')
     vi.stubEnv('NEON_PRODUCTION_ENDPOINT', PROD)
     vi.stubEnv('DATABASE_URL', neon(`${PROD}-pooler`))
-    const saved = globalThis.nextStoreDbConnection
-    globalThis.nextStoreDbConnection = undefined
+    const saved = globalThis.nextStoreDbRuntime
+    globalThis.nextStoreDbRuntime = undefined
     try {
       await expect(import('@/db/client')).rejects.toThrow(/DB_LOG/)
       expect(postgresFactory).not.toHaveBeenCalled()
     } finally {
-      globalThis.nextStoreDbConnection = saved
+      globalThis.nextStoreDbRuntime = saved
     }
   })
 })
@@ -886,12 +888,12 @@ describe('app role (NS-60)', () => {
   const loadRuntime = async (env: Record<string, string>) => {
     vi.resetModules()
     for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value)
-    const saved = globalThis.nextStoreDbConnection
-    globalThis.nextStoreDbConnection = undefined
+    const saved = globalThis.nextStoreDbRuntime
+    globalThis.nextStoreDbRuntime = undefined
     try {
       return await import('@/db/client')
     } finally {
-      globalThis.nextStoreDbConnection = saved
+      globalThis.nextStoreDbRuntime = saved
     }
   }
   const PREVIEW = { VERCEL: '1', VERCEL_ENV: 'preview', NEON_PRODUCTION_ENDPOINT: PROD, DATABASE_URL: neon(`${BRANCH}-pooler`) }
@@ -1017,5 +1019,76 @@ describe('describeError', () => {
   })
   it('does not stringify non-Error values', () => {
     expect(describeError({ password: 's3cr3t-pass' })).toBe('unknown error')
+  })
+})
+
+// NS-73 / ADR-0013. The blackhole itself is reproduced in blackhole.test.ts; these pin the replacement rules.
+describe('createRuntimeConnection', () => {
+  const LOCAL = 'postgres://shop@127.0.0.1:9/shop'
+  const opened: ReturnType<typeof createConnection>[] = []
+  const open = vi.fn(() => {
+    const created = createConnection({ kind: 'postgres', url: LOCAL })
+    opened.push(created)
+    return created
+  })
+
+  beforeEach(() => {
+    opened.length = 0
+    open.mockClear()
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+  })
+  afterEach(async () => {
+    vi.restoreAllMocks()
+    await Promise.all(opened.map((created) => closeConnection(created)))
+  })
+
+  it('replaces the client a timed-out query used and lets the old one finish within 10 s', () => {
+    const runtime = createRuntimeConnection(open)
+    const first = runtime.current
+    if (first.kind !== 'postgres') throw new Error('expected a postgres connection')
+    const end = vi.spyOn(first.db.$client, 'end')
+    runtime.recycle(first)
+    expect(runtime.current).not.toBe(first)
+    expect(open).toHaveBeenCalledTimes(2)
+    expect(end).toHaveBeenCalledWith({ timeout: 10 })
+    expect(console.warn).toHaveBeenCalledWith('database client recycled after a query timeout')
+  })
+
+  it('ignores a client that was already replaced', () => {
+    const runtime = createRuntimeConnection(open)
+    const first = runtime.current
+    runtime.recycle(first)
+    const second = runtime.current
+    runtime.recycle(first)
+    expect(runtime.current).toBe(second)
+    expect(open).toHaveBeenCalledTimes(2)
+  })
+
+  it('never replaces PGlite', () => {
+    const openPglite = vi.fn(() => createConnection({ kind: 'pglite', dataDir: 'memory://' }))
+    const runtime = createRuntimeConnection(openPglite)
+    const only = runtime.current
+    expect(only.kind).toBe('pglite')
+    runtime.recycle(only)
+    expect(runtime.current).toBe(only)
+    expect(openPglite).toHaveBeenCalledOnce()
+    return closeConnection(only)
+    // A real PGlite takes seconds to start on a busy machine (NS-72).
+  }, 30_000)
+
+  it('swallows a failure of the retired client while it ends', async () => {
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    try {
+      const runtime = createRuntimeConnection(open)
+      const first = runtime.current
+      if (first.kind !== 'postgres') throw new Error('expected a postgres connection')
+      vi.spyOn(first.db.$client, 'end').mockRejectedValue(new Error('end failed'))
+      runtime.recycle(first)
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(unhandled).not.toHaveBeenCalled()
+    } finally {
+      process.off('unhandledRejection', unhandled)
+    }
   })
 })

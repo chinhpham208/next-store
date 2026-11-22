@@ -58,13 +58,23 @@ module.exports = {
       },
     },
     {
-      name: 'db-internals-stay-in-db',
+      name: 'db-public-api-only',
       severity: 'error',
       comment:
-        'Outside src/db, queries run only through dbQuery of @/db (ADR-0011): the raw client throws Drizzle errors ' +
-        'that carry the SQL, the params and the host, and has no time limit. Tests may use @/db/client to set up data.',
-      from: { path: '^src/(app|features|lib|components)/|^src/proxy\\.ts$', pathNot: '\\.test\\.ts$' },
-      to: { path: '^src/db/(client|migrate|seed)\\.ts$' },
+        'Outside src/db, import the database only via @/db (src/db/index.ts), so queries run through dbQuery ' +
+        '(ADR-0011, ADR-0013): the raw client throws Drizzle errors that carry the SQL, the params and the host, and ' +
+        'has no time limit. Tests may use @/db/client, migrate, seed and seed-data to set up data.',
+      from: { path: '^src/', pathNot: '^src/db/|\\.test\\.ts$' },
+      to: { path: '^src/db/', pathNot: '^src/db/index\\.ts$' },
+    },
+    {
+      name: 'db-drivers-stay-in-db',
+      severity: 'error',
+      comment:
+        'Only src/db talks to a driver (audit PR #38 L2): a client built elsewhere would skip the URL, TLS and role ' +
+        'checks of client.ts and the timeout and recycling of dbQuery. Tests included.',
+      from: { path: '^src/', pathNot: '^src/db/' },
+      to: { path: '^node_modules/(postgres|@electric-sql/pglite|drizzle-orm/(postgres-js|pglite))/' },
     },
     {
       name: 'feature-public-api-only-cross',

@@ -31,7 +31,7 @@
 
 - Mặc định là Server Component. Chỉ thêm `"use client"` khi cần state, effect, event handler hoặc API trình duyệt, và đặt nó ở component **nhỏ nhất** có thể.
 - File chạm vào DB, secret hoặc cookie phải bắt đầu bằng `import 'server-only'`.
-- Ngoài `src/db`, truy vấn chỉ chạy qua `dbQuery` của `@/db`; `name` là hằng `<miền>.<việc>`, không chứa dữ liệu người dùng. `@/db` không export `db` thô; chỉ test được import `@/db/client`. *(dependency-cruiser `db-internals-stay-in-db`)* — [ADR-0011](./adr/0011-db-query-wrapper.md).
+- Ngoài `src/db`, truy vấn chỉ chạy qua `dbQuery` của `@/db`; `name` là hằng `<miền>.<việc>`, không chứa dữ liệu người dùng. Ngoài `src/db` chỉ import `@/db` (`src/db/index.ts`); `@/db` không export `db` thô; chỉ test được import `@/db/client`, `migrate`, `seed`, `seed-data`. *(dependency-cruiser `db-public-api-only`)* Chỉ `src/db` import driver (`postgres`, `@electric-sql/pglite`, `drizzle-orm/postgres-js`, `drizzle-orm/pglite`), kể cả test. *(dependency-cruiser `db-drivers-stay-in-db`)* — [ADR-0011](./adr/0011-db-query-wrapper.md), [ADR-0013](./adr/0013-db-client-recycle.md).
 - Không fetch phía client (React Query, SWR, `useEffect` + `fetch`) cho dữ liệu lấy được ở server.
 - Ghi dữ liệu bằng Server Actions; Route Handler chỉ dùng cho request từ bên ngoài (webhook).
 - Mọi dữ liệu từ form, URL, cookie, webhook đều validate bằng Zod trước khi dùng.

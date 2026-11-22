@@ -26,8 +26,9 @@
 | [0008](./adr/0008-listing-cache-keys.md) | Danh sách sản phẩm cache theo khoá đã chuẩn hoá; tìm theo `q` không cache | Đã chấp nhận; bổ sung 0003; bổ sung bởi 0011 |
 | [0009](./adr/0009-product-404-in-proxy.md) | `proxy.ts` trả 404 thật cho slug sản phẩm không tồn tại; fail-open khi DB lỗi hoặc chậm | Đã chấp nhận |
 | [0010](./adr/0010-app-role-and-preview-data.md) | Runtime dùng role `next_store_app`; preview có database Neon riêng (B1, chờ xác nhận tại chỗ) | Đã chấp nhận (2026-11-22); bổ sung 0007 |
-| [0011](./adr/0011-db-query-wrapper.md) | Truy vấn runtime chỉ qua `dbQuery` của `@/db`: lỗi cố định, có giới hạn thời gian; `db` thô không export | Đã chấp nhận (2026-11-22); bổ sung 0008 |
+| [0011](./adr/0011-db-query-wrapper.md) | Truy vấn runtime chỉ qua `dbQuery` của `@/db`: lỗi cố định, có giới hạn thời gian; `db` thô không export | Đã chấp nhận (2026-11-22); bổ sung 0008; thay thế một phần bởi 0013 |
 | [0012](./adr/0012-blog-static-registry.md) | Blog: MDX tĩnh, registry TypeScript, 404 bằng danh sách slug trong proxy | Đã chấp nhận (chủ dự án duyệt hướng ở Cổng 1, 2026-11-22) |
+| [0013](./adr/0013-db-client-recycle.md) | `dbQuery` hết giờ thì dựng lại client Postgres (mạng nuốt gói); chỉ `src/db` chạm driver | Đã chấp nhận (2026-11-23); thay thế một phần 0011 |
 
 ## Quản lý công việc
 

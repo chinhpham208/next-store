@@ -1,6 +1,6 @@
 # ADR-0011: Truy vấn runtime đi qua `dbQuery`
 
-- Trạng thái: Đã chấp nhận (theo plan M3 đã duyệt ở Cổng 1, quyết định 10)
+- Trạng thái: Đã chấp nhận (theo plan M3 đã duyệt ở Cổng 1, quyết định 10); thay thế một phần bởi [ADR-0013](./0013-db-client-recycle.md) (hết giờ thì dựng lại client; luật dependency-cruiser của `src/db`)
 - Ngày: 2026-11-22
 - Bổ sung: [ADR-0008](./0008-listing-cache-keys.md) (thay câu "`searchCatalog` bắt lỗi và ném một `Error` mới"), [ADR-0009](./0009-product-404-in-proxy.md) (không đổi ngưỡng 400 ms của proxy)
 - Liên quan: ticket NS-55 (M3 Task 7), audit PR #26 (L4), QA NS-52
