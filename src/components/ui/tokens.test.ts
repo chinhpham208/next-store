@@ -8,9 +8,12 @@ import { beforeAll, describe, expect, it } from 'vitest'
 // against the classes the primitives actually use is the only check that catches it.
 
 const APP_DIR = join(process.cwd(), 'src/app')
-const COMPONENT_DIRS = ['src/components/ui', 'src/components/layout', 'src/features/products/components'].map(
-  (dir) => join(process.cwd(), dir),
-)
+const COMPONENT_DIRS = [
+  'src/components/ui',
+  'src/components/layout',
+  'src/features/products/components',
+  'src/features/blog/components',
+].map((dir) => join(process.cwd(), dir))
 
 const stringLiterals = (code: string): string[] => [...code.matchAll(/'([^']*)'|"([^"]*)"/g)].map((m) => m[1] ?? m[2] ?? '')
 

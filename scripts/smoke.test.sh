@@ -40,8 +40,8 @@ EOF
 chmod +x "$TMP/bin/curl"
 
 # start_server <port> <header-file> [status] [404-body] [soft-regex] [hard-404-regex]: answers / and the smoke's
-# product page (and its RSC / segment prefetch forms) with the default SMOKE_TEXT, the smoke's listing paths with the
-# labelled grid (or with <status>, e.g. 401 like Vercel Deployment Protection), everything else with 404 and
+# product page (and its RSC / segment prefetch forms) with the default SMOKE_TEXT, /blog and the smoke's post with an
+# article and its h1, the smoke's listing paths with the labelled grid (or with <status>, e.g. 401 like Vercel Deployment Protection), everything else with 404 and
 # <404-body> (default: the app's Vietnamese page). URLs matching <soft-regex> answer 200 with the not-found page, like
 # a page-level notFound() under Cache Components (K3) or a proxy that failed open; URLs matching <hard-404-regex>
 # answer 404 with the proxy's rewrite header even when they are a known product's.
@@ -54,6 +54,7 @@ start_server() {
       fs.appendFileSync(headers, JSON.stringify(req.headers) + "\n")
       if (hard && new RegExp(hard).test(req.url)) { res.writeHead(404, { "content-type": "text/html; charset=utf-8", "x-middleware-rewrite": "/_khong-tim-thay" }); res.end(body) }
       else if (req.url === "/" || ["/products/ao-404-not-found", "/products/ao-404-not-found?_rsc", "/products/ao-404-not-found.rsc", "/products/ao-404-not-found.segments/_tree.segment.rsc"].includes(req.url)) { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<h1>Áo thun 404 Not Found</h1>") }
+      else if (req.url === "/blog" || req.url === "/blog/chao-mung-den-next-store") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<article><h1>Chào mừng đến next-store</h1></article>") }
       else if (req.url === "/products" || req.url === "/products?page=abc&sort=xyz") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<ul aria-label=\"Danh sách sản phẩm\"></ul>") }
       else if (soft && new RegExp(soft).test(req.url)) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
       else { res.writeHead(404, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
