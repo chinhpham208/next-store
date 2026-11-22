@@ -28,8 +28,9 @@ test('bỏ qua test gắn @ghi trên Production', () => {
   expect(grepInvertFor('http://localhost:3100')).toBeUndefined()
 })
 
-test('chặn mọi request không phải GET / HEAD khi chạy trên Production', async ({ browser, baseURL }) => {
-  const context = await browser.newContext({ baseURL })
+test('chặn mọi request không phải GET / HEAD khi chạy trên Production', async ({ browser, baseURL, extraHTTPHeaders }) => {
+  // Same headers as the default context: a preview behind Deployment Protection still needs the bypass header.
+  const context = await browser.newContext({ baseURL, extraHTTPHeaders })
   try {
     const blocked = await blockWrites(context)
     const page = await context.newPage()
@@ -46,7 +47,10 @@ test('chặn mọi request không phải GET / HEAD khi chạy trên Production'
     expect(await send('POST')).toBe('huỷ')
     expect(await send('DELETE')).toBe('huỷ')
     expect(await send('GET')).toBe(200)
-    expect(blocked).toEqual(['POST /products', 'DELETE /products'])
+    // Contains, not equals: on a preview, Vercel's toolbar (vercel.live) also POSTs, and is blocked as well.
+    const { origin } = new URL(page.url())
+    expect(blocked).toEqual(expect.arrayContaining([`POST ${origin}/products`, `DELETE ${origin}/products`]))
+    expect(blocked.filter((entry) => entry.includes(`${origin}/`))).toHaveLength(2)
   } finally {
     await context.close()
   }

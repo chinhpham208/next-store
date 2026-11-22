@@ -10,13 +10,14 @@ const READ_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 const WRITE_HELPERS = ['post', 'put', 'patch', 'delete'] as const
 
 // Aborts every browser request that is not GET / HEAD / OPTIONS before it leaves the browser. Returns the blocked
-// requests ("POST /path"), so the caller can fail the test even when the page swallowed the network error.
+// requests ("POST https://host/path"), so the caller can fail the test even when the page swallowed the network error.
 export const blockWrites = async (context: BrowserContext): Promise<string[]> => {
   const blocked: string[] = []
   await context.route('**/*', async (route) => {
     const request = route.request()
     if (READ_METHODS.has(request.method())) return route.fallback()
-    blocked.push(`${request.method()} ${new URL(request.url()).pathname}`)
+    const { origin, pathname } = new URL(request.url())
+    blocked.push(`${request.method()} ${origin}${pathname}`)
     await route.abort('blockedbyclient')
   })
   return blocked
