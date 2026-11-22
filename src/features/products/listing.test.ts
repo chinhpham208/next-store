@@ -372,7 +372,7 @@ describe('cache key rules (structural: Vitest does not run the directive)', () =
       .filter((chunk) => /^\s*'use cache'/m.test(chunk))
       .map((chunk) => [/(?:export )?const (\w+) =/.exec(chunk)?.[1] ?? '?', chunk]),
   )
-  const PRODUCTS_TAGGED = ['getFeaturedProducts', 'getCategoryRows', 'countCatalog', 'getCatalogPage']
+  const PRODUCTS_TAGGED = ['getFeaturedProducts', 'getCategoryRows', 'countCatalog', 'getCatalogPage', 'getProductSitemapEntries']
 
   it('has exactly the expected cached functions', () => {
     expect([...cached.keys()].sort()).toEqual([...PRODUCTS_TAGGED, 'getCachedProductBySlug'].sort())

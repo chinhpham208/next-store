@@ -97,6 +97,9 @@ jobs:
         env:
           BASE_URL: ${{ steps.url.outputs.base_url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          # Owner decision 15 (plan M3): robots.txt allows everything everywhere, so a Preview / Dev deployment must
+          # carry Vercel's X-Robots-Tag: noindex. Never Production: this job does not run there.
+          SMOKE_EXPECT_NOINDEX: '1'
         run: npm run smoke
 
       - name: install Playwright Chromium

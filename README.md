@@ -72,6 +72,14 @@ Biến chỉ nhận **một** endpoint: đặt nó là một mục duy nhất ch
 
 `DB_LOG=1` in mọi câu lệnh kèm tham số (dữ liệu khách hàng) nên chỉ được bật với PGlite, Postgres trên `localhost` / `127.0.0.1` / `::1`, hoặc trên Vercel (`VERCEL` có giá trị) khi `VERCEL_ENV` là `preview` / `development`; mọi trường hợp khác (production, `VERCEL_ENV` thiếu hoặc sai chính tả, VPS, `VERCEL_ENV` tự đặt khi `VERCEL` trống) bị từ chối trước khi dựng client. Preview / Dev được phép chỉ vì database của chúng không phải production; nhưng hôm nay mỗi Neon branch preview là bản sao của `main` lúc fork, nên khi production đã có dữ liệu khách thì **không bật `DB_LOG` trên Preview / Dev** cho tới khi M3 Task 5 chuyển preview sang nhánh cha không có dữ liệu khách.
 
+Biến SEO (`src/lib/site-url.ts`, design.md §7):
+
+| Biến | Ai đặt | Production | Preview / Dev | Local, CI |
+|---|---|---|---|---|
+| `SITE_URL` | chủ dự án, **tuỳ chọn** (domain riêng, chạy ngoài Vercel) | bỏ trống: `https://` + `VERCEL_PROJECT_PRODUCTION_URL`; có thì phải là `https://<host>[:cổng]` | bỏ trống: `VERCEL_BRANCH_URL`, rồi `VERCEL_URL` | bỏ trống: `http://localhost:3000` |
+
+`SITE_URL` được đọc **lúc build** (`sitemap.xml`, `robots.txt` prerender; `metadataBase` ở root layout): đổi giá trị thì phải deploy lại. Sai dạng (có đường dẫn, query, user, `http://` tới host không phải local) thì build dừng; thông báo chỉ nêu tên biến.
+
 ## Smoke test và E2E trên URL thật
 
 ```bash
@@ -80,7 +88,7 @@ BASE_URL=https://next-store-dev-ginpham.vercel.app npm run smoke
 BASE_URL=https://<url-preview> npm run smoke
 ```
 
-URL preview của từng deploy có thể bị Vercel Deployment Protection chặn (trang đăng nhập Vercel); khi đó cần `VERCEL_AUTOMATION_BYPASS_SECRET` (script gửi header `x-vercel-protection-bypass`, không in giá trị). Thiếu secret, smoke báo rõ là bị Deployment Protection chặn. `SMOKE_TEXT` đổi chuỗi cần có trên trang chủ.
+URL preview của từng deploy có thể bị Vercel Deployment Protection chặn (trang đăng nhập Vercel); khi đó cần `VERCEL_AUTOMATION_BYPASS_SECRET` (script gửi header `x-vercel-protection-bypass`, không in giá trị). Thiếu secret, smoke báo rõ là bị Deployment Protection chặn. `SMOKE_TEXT` đổi chuỗi cần có trên trang chủ. `SMOKE_EXPECT_NOINDEX=1` bắt buộc header `X-Robots-Tag: noindex` trên `/`, `/robots.txt`, `/sitemap.xml` (workflow `e2e-preview` luôn đặt; không đặt khi kiểm Production) — không đặt thì smoke chỉ in giá trị header.
 
 E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMATION_BYPASS_SECRET`.
 

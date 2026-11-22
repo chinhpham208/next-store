@@ -140,8 +140,9 @@ describe('getProductMetadata', () => {
     })
     expect(getProductBySlug).toHaveBeenCalledWith('ao-git-push-force')
   })
-  it('US-05: titles a missing product "Không tìm thấy trang"', async () => {
+  // noindex: if the proxy fails open (ADR-0009) and the page renders for an unknown slug, it is still never indexed.
+  it('US-05: titles a missing product "Không tìm thấy trang" and marks it noindex', async () => {
     vi.mocked(getProductBySlug).mockResolvedValue(null)
-    expect(await getProductMetadata('khong-ton-tai')).toEqual({ title: 'Không tìm thấy trang' })
+    expect(await getProductMetadata('khong-ton-tai')).toEqual({ title: 'Không tìm thấy trang', robots: { index: false } })
   })
 })
