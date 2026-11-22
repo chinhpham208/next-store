@@ -1,4 +1,5 @@
-import { expect, test, type APIRequestContext } from '@playwright/test'
+import type { APIRequestContext } from '@playwright/test'
+import { expect, test } from './test'
 import { PRODUCT_SEEDS } from '@/db/seed-data'
 import { POSTS } from '@/features/blog/posts'
 import { POSTS_NEWEST_FIRST } from './blog'

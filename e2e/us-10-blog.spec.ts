@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './test'
 import { formatDate } from '@/lib/format-date'
 import { expectNoSeriousA11yViolations } from './axe'
 import { blogList, breadcrumb, freshPostSlug, listedSlugs, POSTS_NEWEST_FIRST } from './blog'
