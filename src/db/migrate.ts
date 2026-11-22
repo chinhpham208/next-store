@@ -63,6 +63,16 @@ type MigrationEnv = {
   VERCEL_ENV?: string
   NEON_PRODUCTION_ENDPOINT?: string
 }
+
+// Explicit keys, tested: a variable forgotten here silently changes which checks the migration URL gets
+// (review of PR #15). Nothing else from process.env reaches the migration target.
+export const readMigrationEnv = (env: NodeJS.ProcessEnv): MigrationEnv => ({
+  DATABASE_URL_UNPOOLED: env.DATABASE_URL_UNPOOLED,
+  VERCEL: env.VERCEL,
+  VERCEL_ENV: env.VERCEL_ENV,
+  NEON_PRODUCTION_ENDPOINT: env.NEON_PRODUCTION_ENDPOINT,
+})
+
 type MigrationTargetInput = { pooledUrl: string; env: MigrationEnv }
 
 // The URL migrate connects to goes through resolveDatabaseTarget again, so the Vercel checks (including the
@@ -84,12 +94,7 @@ export const resolveMigrationTarget = ({ pooledUrl, env }: MigrationTargetInput)
 // createConnection builds the client with the same explicit-options builder as the runtime connection.
 const openMigrationConnection = (): Connection => {
   if (connection.kind !== 'postgres') return connection
-  const env = {
-    DATABASE_URL_UNPOOLED: process.env.DATABASE_URL_UNPOOLED,
-    VERCEL: process.env.VERCEL,
-    VERCEL_ENV: process.env.VERCEL_ENV,
-    NEON_PRODUCTION_ENDPOINT: process.env.NEON_PRODUCTION_ENDPOINT,
-  }
+  const env = readMigrationEnv(process.env)
   const { target, name } = resolveMigrationTarget({ pooledUrl: connection.target.url, env })
   return createConnection(target, { max: 1, name })
 }
