@@ -6,20 +6,32 @@
 #   bash scripts/verify.sh wait    # đợi tiếp lần chạy đang dở
 #
 # Chạy nền, ghi log vào .verify/<thời gian>.log. Mỗi lần gọi đợi tối đa VERIFY_WAIT giây (mặc định 160).
-# Mã thoát: 0 = qua, 1 = lỗi, 3 = vẫn đang chạy (gọi lại `verify.sh wait`).
+# Mã thoát: 0 = qua, 1 = lỗi, 2 = cách gọi / cổng sai, 3 = vẫn đang chạy (gọi lại `verify.sh wait`).
+#
+# Cổng: E2E_PORT (dùng E2E_PORT … E2E_PORT+3) và SMOKE_PORT; chỉ đặt một biến thì biến kia lấy cùng giá trị,
+# không đặt gì thì 3100. Cổng đang bận bởi tiến trình khác → dừng với lỗi, không tắt hộ.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
 STATE_DIR=.verify
 mkdir -p "$STATE_DIR"
 WAIT=${VERIFY_WAIT:-160}
-# Both read from the environment so a second worktree can run alongside another on 3100 (process.md §4);
-# free_port kills whatever holds these ports, so they must never point at someone else's servers.
-export SMOKE_PORT=${SMOKE_PORT:-3100}
-export E2E_PORT=${E2E_PORT:-3100}
-# E2E starts four local processes (playwright.config.ts): the app, a server with a dead database (M2 Task 15),
-# a silent TCP listener and a server whose database hangs on it (NS-55).
-E2E_PORTS=("$E2E_PORT" "$((E2E_PORT + 1))" "$((E2E_PORT + 2))" "$((E2E_PORT + 3))")
+# Ports (process.md §4: a second worktree runs on other ports). One base: setting only E2E_PORT or only
+# SMOKE_PORT moves both, so a run never lands on another worktree's 3100 by default (audit PR #38 M2). Smoke and
+# e2e run one after the other, so they may share the base. E2E uses four ports (playwright.config.ts): the app,
+# a server with a dead database (M2 Task 15), a server whose database hangs, and the silent listener (NS-55).
+port_ok() { [[ $1 =~ ^[0-9]{1,5}$ ]] && [ "$((10#$1))" -ge 1 ] && [ "$((10#$1))" -le "$2" ]; }
+
+resolve_ports() {
+  local e2e=${E2E_PORT:-} smoke=${SMOKE_PORT:-}
+  [ -n "$e2e" ] || e2e=${smoke:-3100}
+  [ -n "$smoke" ] || smoke=$e2e
+  port_ok "$e2e" 65532 || { echo "verify: E2E_PORT không hợp lệ: cần số nguyên 1–65532 (dùng E2E_PORT … E2E_PORT+3)." >&2; return 1; }
+  port_ok "$smoke" 65535 || { echo "verify: SMOKE_PORT không hợp lệ: cần số nguyên 1–65535." >&2; return 1; }
+  # Base 10 and exported normalised: Playwright reads `08` as 8, bash arithmetic would read it as octal.
+  export E2E_PORT=$((10#$e2e)) SMOKE_PORT=$((10#$smoke))
+  E2E_PORTS=("$E2E_PORT" "$((E2E_PORT + 1))" "$((E2E_PORT + 2))" "$((E2E_PORT + 3))")
+}
 
 has_script() { node -e "process.exit(require('./package.json').scripts?.['$1'] ? 0 : 1)" 2>/dev/null; }
 
@@ -29,10 +41,54 @@ run_step() {
   if "$@"; then echo "::pass $name"; else echo "::fail $name"; return 1; fi
 }
 
-free_port() {
-  local port targets=("$SMOKE_PORT/tcp")
-  for port in "${E2E_PORTS[@]}"; do targets+=("$port/tcp"); done
-  (command -v fuser >/dev/null && fuser -k "${targets[@]}" >/dev/null 2>&1) || true
+# Only processes this run started are ever killed (audit PR #38 M2): smoke and e2e each run in their own
+# process group, recorded in OWN_GROUP_FILE, and the whole group is stopped when the step ends — including a
+# `next start` left behind by a crashed Playwright. A port held by anything else is refused, never killed: it
+# may be another worktree's server.
+OWN_GROUP_FILE=${VERIFY_OWN_GROUP_FILE:-$STATE_DIR/step.pgid}
+
+# A recorded group counts as ours only while one of its processes still runs in this worktree, so a reused
+# process-group id of an unrelated program is never signalled.
+group_is_ours() {
+  local pid
+  for pid in $(pgrep -g "$1" 2>/dev/null); do
+    [ "$(readlink "/proc/$pid/cwd" 2>/dev/null)" = "$PWD" ] && return 0
+  done
+  return 1
+}
+
+stop_own_group() {
+  [ -f "$OWN_GROUP_FILE" ] || return 0
+  local pgid; pgid=$(cat "$OWN_GROUP_FILE"); rm -f "$OWN_GROUP_FILE"
+  [[ $pgid =~ ^[0-9]+$ ]] && group_is_ours "$pgid" || return 0
+  kill -TERM -- "-$pgid" 2>/dev/null || return 0
+  local waited=0
+  while pgrep -g "$pgid" >/dev/null 2>&1 && [ $waited -lt 10 ]; do sleep 1; waited=$((waited + 1)); done
+  kill -KILL -- "-$pgid" 2>/dev/null || true
+}
+
+# Job control gives the background job its own process group whose id is its pid.
+in_own_group() {
+  local pid rc
+  set -m
+  "$@" &
+  pid=$!
+  set +m
+  echo "$pid" > "$OWN_GROUP_FILE"
+  wait "$pid"; rc=$?
+  stop_own_group
+  return $rc
+}
+
+port_in_use() { (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null; }
+
+ports_free() {
+  local port busy=()
+  for port in "$SMOKE_PORT" "${E2E_PORTS[@]}"; do port_in_use "$port" && busy+=("$port"); done
+  [ ${#busy[@]} -eq 0 ] && return 0
+  echo "verify: cổng ${busy[*]} đang bận bởi tiến trình không do lần chạy này tạo; không tắt hộ." >&2
+  echo "verify: chờ nó xong hoặc đặt E2E_PORT / SMOKE_PORT khác." >&2
+  return 1
 }
 
 pipeline() {
@@ -42,8 +98,13 @@ pipeline() {
   for s in "${steps[@]}"; do
     if ! has_script "$s"; then echo "::skip $s (chưa có script)"; continue; fi
     if [ "$s" = smoke ] || [ "$s" = e2e ]; then
-      free_port
-      run_step "$s" npm run -s "$s" || { echo "::retry $s"; free_port; run_step "$s" npm run -s "$s" || return 1; }
+      stop_own_group
+      ports_free || { echo "::fail $s"; return 1; }
+      run_step "$s" in_own_group npm run -s "$s" || {
+        echo "::retry $s"
+        ports_free || { echo "::fail $s"; return 1; }
+        run_step "$s" in_own_group npm run -s "$s" || return 1
+      }
     else
       run_step "$s" npm run -s "$s" || return 1
     fi
@@ -73,8 +134,15 @@ wait_result() {
   echo "KẾT QUẢ: QUA ($(readlink "$STATE_DIR/latest.log"))"; exit 0
 }
 
+resolve_ports || exit 2
+
 case "${1:-}" in
   __run) pipeline "$2" > "$3" 2>&1; echo $? > "$STATE_DIR/exit" ;;
+  # Test hooks for scripts/verify.test.sh.
+  __ports) echo "SMOKE_PORT=$SMOKE_PORT E2E_PORTS=${E2E_PORTS[*]}" ;;
+  __ports-free) ports_free ;;
+  __own) shift; in_own_group "$@" ;;
+  __stop-stale) stop_own_group ;;
   quick|full) start "$1"; wait_result ;;
   wait) wait_result ;;
   *) echo "Dùng: bash scripts/verify.sh quick|full|wait"; exit 2 ;;
