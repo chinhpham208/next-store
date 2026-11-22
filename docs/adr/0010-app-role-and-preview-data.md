@@ -9,9 +9,11 @@
 
 Audit PR #6 nêu các vấn đề về dữ liệu và quyền DB:
 
-- **M1:** biến `DATABASE_URL` tĩnh ở phạm vi Preview có thể đang trỏ `main` (production).
-- **M2:** preview và production dùng chung một database Neon, nên preview có thể đọc và ghi dữ liệu khách thật. Nhánh Neon của `develop` và của mỗi preview được fork từ `main` lúc tạo, nên dữ liệu của chúng là bản sao của production tại thời điểm đó. Role chạy ứng dụng là role chủ mà tích hợp Neon inject, cùng mật khẩu với production.
-- **M3:** domain Dev `next-store-dev-ginpham.vercel.app` có cần được bảo vệ hay không. Dữ kiện 6 xác nhận domain đang được bảo vệ bằng đăng nhập Vercel.
+- **audit PR #6 M1:** biến `DATABASE_URL` tĩnh ở phạm vi Preview có thể đang trỏ `main` (production).
+- **audit PR #6 M2:** preview và production dùng chung một database Neon, nên preview có thể đọc và ghi dữ liệu khách thật. Nhánh Neon của `develop` và của mỗi preview được fork từ `main` lúc tạo, nên dữ liệu của chúng là bản sao của production tại thời điểm đó. Role chạy ứng dụng là role chủ mà tích hợp Neon inject, cùng mật khẩu với production.
+- **audit PR #6 M3:** domain Dev `next-store-dev-ginpham.vercel.app` có cần được bảo vệ hay không. Dữ kiện 6 xác nhận domain đang được bảo vệ bằng đăng nhập Vercel.
+
+Các nhãn `audit ADR-0010 …` trong ADR này trỏ tới mục của audit PR #34 (vòng audit trên chính ADR này), không trỏ tới audit PR #6.
 
 Việc chia role và tách dữ liệu preview khỏi production phụ thuộc vào những gì tích hợp Neon ↔ Vercel cho phép. Các dữ kiện dưới đây được Orchestrator thu thập ngày 2026-11-22 bằng thao tác chỉ đọc, với sự đồng ý của chủ dự án ở Cổng 1.
 
@@ -41,7 +43,7 @@ ADR-0007 vẫn đúng ở phần chọn Neon branch do tích hợp tạo cho Dev
 
 | Phương án | Điều kiện | Ưu | Nhược |
 |---|---|---|---|
-| **B1. Database Neon riêng cho Preview + Development** — một resource Neon thứ hai (resource 2) nối vào project Vercel chỉ cho hai environment đó; nhánh mặc định của nó là nhánh cha ("preview-base") | Tích hợp cho nối nhiều resource vào một project theo từng environment mà không ai phải chép mật khẩu production | Preview không bao giờ là bản sao của production; mật khẩu khác hẳn production (sau khi đóng M2, xem Quyết định B); hạn mức 10 nhánh tách riêng; API key của Task 16 không chạm được production | Thêm một resource phải theo dõi; phải gỡ kết nối Preview của resource 1 (resource 1 chỉ còn Production) |
+| **B1. Database Neon riêng cho Preview** — một resource Neon thứ hai (resource 2) nối vào project Vercel chỉ cho environment Preview; nhánh mặc định của nó là nhánh cha ("preview-base") | Tích hợp cho nối nhiều resource vào một project theo từng environment mà không ai phải chép mật khẩu production | Preview không bao giờ là bản sao của production; mật khẩu khác hẳn production (sau khi đóng audit PR #6 M2, xem Quyết định B); hạn mức 10 nhánh tách riêng; API key của Task 16 không chạm được production | Thêm một resource phải theo dõi; phải gỡ kết nối Preview của resource 1 (resource 1 chỉ còn Production) |
 | A. Nhánh `preview-base` trong cùng project — tạo từ `main`, tích hợp đặt làm nhánh cha của preview | Tích hợp cho chọn nhánh cha của preview | Ít thay đổi nhất | **Không khả thi theo dữ kiện 2**: tích hợp không có tuỳ chọn chọn nhánh cha. Ngoài ra cùng project với production: API key dọn nhánh đọc được chuỗi kết nối production |
 | B2. Vẫn fork từ `main`, bước build preview xoá dữ liệu khách trước khi seed | Không cần gì | Không đổi hạ tầng | Dữ liệu khách vẫn được sao sang nhánh preview rồi mới bị xoá; một build hỏng giữa chừng để lại dữ liệu. **Không dùng một mình** |
 
@@ -54,8 +56,8 @@ ADR-0007 vẫn đúng ở phần chọn Neon branch do tích hợp tạo cho Dev
 - Chủ dự án xác nhận ở Cổng 1 (quyết định 2): giữ tích hợp như hiện tại. Biến `DATABASE_APP_*` là **bắt buộc trên Vercel sau khi đã xác minh**. Thiếu biến thì build hoặc runtime trên Vercel phải lỗi, không được lặng lẽ dùng role chủ.
 - Việc bắt buộc role app là **một thay đổi code** áp dụng cho mọi `VERCEL_ENV` (production, preview, development); không bật riêng cho từng môi trường.
 - Đánh đổi: mật khẩu role chủ vẫn nằm trong biến môi trường của function (Vercel không tách biến build và runtime).
-- Phạm vi bảo vệ của role app (M7): role này **chặn** `DROP`, `ALTER`, `TRUNCATE`, tạo đối tượng mới và leo quyền (vì không phải chủ bảng và không có `CREATE` trên schema). Role này **không chặn** đọc, sửa, xoá hàng loạt qua DML (`SELECT / UPDATE / DELETE` không điều kiện trên mọi bảng), nên SQL injection vẫn đọc và xoá được dữ liệu khách. Và không chặn kẻ đã đọc được biến môi trường.
-- Bảng và sequence do migration sau này tạo được cấp quyền cho role app tự động nhờ `ALTER DEFAULT PRIVILEGES` (L1); migration không tự `GRANT`. Script `app-role.sql` **phải chạy bằng đúng role `db:migrate` dùng** (role chủ), vì default privileges gắn với role tạo đối tượng; chạy bằng role khác thì bảng do migration tạo sẽ không tự cấp quyền cho role app.
+- Phạm vi bảo vệ của role app (audit ADR-0010 M7): role này **chặn** `DROP`, `ALTER`, `TRUNCATE`, tạo đối tượng mới và leo quyền (vì không phải chủ bảng và không có `CREATE` trên schema). Role này **không chặn** đọc, sửa, xoá hàng loạt qua DML (`SELECT / UPDATE / DELETE` không điều kiện trên mọi bảng), nên SQL injection vẫn đọc và xoá được dữ liệu khách. Và không chặn kẻ đã đọc được biến môi trường.
+- Bảng và sequence do migration sau này tạo được cấp quyền cho role app tự động nhờ `ALTER DEFAULT PRIVILEGES` (audit ADR-0010 L1); migration không tự `GRANT`. Script `app-role.sql` **phải chạy bằng đúng role `db:migrate` dùng** (role chủ), vì default privileges gắn với role tạo đối tượng; chạy bằng role khác thì bảng do migration tạo sẽ không tự cấp quyền cho role app.
 
 ### B. Nhánh cha của preview: B1, chờ xác nhận tại chỗ
 
@@ -66,29 +68,31 @@ ADR-0007 vẫn đúng ở phần chọn Neon branch do tích hợp tạo cho Dev
 
 Quyết định chỉ có hiệu lực khi Task 5 xác nhận đủ hai bước sau, **không ai chép mật khẩu production**:
 
-1. Tạo resource 2 và nối vào project Vercel chỉ cho environment Preview + Development.
+1. Tạo resource 2 và nối vào project Vercel chỉ cho environment Preview.
 2. Sửa kết nối của resource 1 (`next-store-db`) thành Production only (và xoá biến tĩnh, xem Thứ tự áp dụng bước 3).
 
-**Quyết định của Orchestrator (ghi lại, 2026-11-22):**
+**Quyết định của Orchestrator (đáp ứng audit ADR-0010, ghi lại 2026-11-22):**
 
-- **M1:** phương án A không khả thi (dữ kiện 2). Nếu B1 không làm được thì dừng và hỏi chủ dự án.
-- **M3:** nhánh cha của resource 2 **chỉ có role và default privileges, không có bảng**. Mỗi preview tự migrate từ đầu rồi seed (xem Thứ tự áp dụng). Lệnh `GRANT … ON ALL TABLES` trên nhánh cha là no-op; `app-role-check.sql` chạy trên `preview/develop`, không chạy trên nhánh cha. Plan Task 5 Step 4 (`count(*) = 24` trên nhánh cha) phải đổi thành kiểm trên `preview/develop`.
-- **L2:** không dùng phạm vi Development (không có `vercel dev`). Biến `DATABASE_APP_*` đặt ở phạm vi **Preview** (và Production cho resource 1), kiểu **Sensitive**. Không đặt biến nào ở phạm vi Development.
-- **L4:** `main` không được bảo vệ trên gói Free. Chấp nhận, ghi nhận.
+- **audit ADR-0010 M1:** phương án A không khả thi (dữ kiện 2). Nếu B1 không làm được thì dừng và hỏi chủ dự án.
+- **audit ADR-0010 M3:** nhánh cha của resource 2 **chỉ có role và default privileges, không có bảng**. Mỗi preview tự migrate từ đầu rồi seed (xem Thứ tự áp dụng). Lệnh `GRANT … ON ALL TABLES` trên nhánh cha là no-op; `app-role-check.sql` chạy trên `preview/develop`, không chạy trên nhánh cha. Plan Task 5 Step 4 (`count(*) = 24` trên nhánh cha) phải đổi thành kiểm trên `preview/develop`.
+- **audit ADR-0010 L2:** không dùng phạm vi Development (không có `vercel dev`). Biến `DATABASE_APP_*` đặt ở phạm vi **Preview** (và Production cho resource 1), kiểu **Sensitive**. Không đặt biến nào ở phạm vi Development.
+- **audit ADR-0010 L4:** `main` không được bảo vệ trên gói Free. Chấp nhận, ghi nhận.
 
 **Ngoại lệ một lần của ADR-0007 (quyết định 4 của chủ dự án):** `preview/develop` hiện có trong project production là bản sao của `main`. Chủ dự án đồng ý **xoá nhánh này một lần** để dọn project production (Thứ tự áp dụng bước 6). Ngoại lệ này chỉ áp dụng cho nhánh cũ đó. Quy tắc "không xoá `preview/develop`" của ADR-0007 vẫn áp dụng cho nhánh `preview/develop` **mới ở resource 2**.
 
 ## Thứ tự áp dụng (Task 5)
 
+Thứ tự này **thay thế plan M3 Task 5 Step 1–4**. Planner phải cập nhật `docs/plans/M3.md` trước khi Task 5 bắt đầu.
+
 Mỗi bước ghi rõ người thực hiện. Không agent nào nhìn thấy, gõ hay chép mật khẩu; mật khẩu chỉ do chủ dự án đặt trong Neon console và Vercel.
 
 1. **Chủ dự án** (Neon console, SQL Editor, role chủ): trên nhánh `main` của resource 1, tạo role `next_store_app` với mật khẩu do chủ dự án đặt; chạy `scripts/sql/app-role.sql` bằng role `db:migrate` (role chủ); chạy `scripts/sql/app-role-check.sql`, mọi cột boolean `false`, `can_dml` `true`. Điều kiện: Task 4 đã release lên nhánh `production` (không chỉ đã merge vào `develop`).
 2. **Chủ dự án** đặt `DATABASE_APP_USER` / `DATABASE_APP_PASSWORD` ở phạm vi **Production** (Sensitive), redeploy production. **Orchestrator** xác minh bằng smoke test trên production và truy vấn `pg_stat_activity` (qua console, không đọc chuỗi kết nối) cho thấy kết nối của `next_store_app`. Lưu ý: production bỏ qua `db:seed`, nên log build không có dòng `user=next_store_app`; bằng chứng là smoke và `pg_stat_activity`.
-3. **Chủ dự án** thông báo dừng merge. Chủ dự án **xoá** biến `DATABASE_URL` tĩnh ở phạm vi Preview (xoá không cần đọc giá trị; H1), rồi sửa resource 1 thành Production only. Điều kiện xong: danh sách biến trên Vercel (tên và phạm vi) không còn biến `DATABASE*` / `POSTGRES*` nào của resource 1 ở phạm vi Preview hay Development. Từ bước này preview không build được (code báo `DATABASE_URL is required on Vercel`); đây là hành vi fail closed có chủ đích.
-4. **Chủ dự án** tạo resource 2 **cùng region `aws-ap-southeast-1` (`sin1`)** (M6). Ghi lại tên nhánh mặc định thực tế (L3). Tạo role `next_store_app` trên nhánh mặc định đó với mật khẩu **khác** production; chạy `app-role.sql` (nhánh cha chưa có bảng, chỉ đặt default privileges). Đặt `DATABASE_APP_USER` / `DATABASE_APP_PASSWORD` ở phạm vi **Preview** (Sensitive), giá trị khác production. **Rồi mới** nối resource 2 vào Preview + Development.
-5. **Chủ dự án** redeploy `develop`. **Orchestrator** kiểm log: `db:migrate … user=<role chủ>`, `db:seed … user=next_store_app`; host thuộc project của resource 2 và khác `NEON_PRODUCTION_ENDPOINT`. Chạy `app-role-check.sql` trên `preview/develop` mới (có bảng, `count(*)` và cột boolean như bước 1).
-6. **Chủ dự án** bấm "Rotate Secrets" của resource 1 (có sẵn trong Vercel, không cần chép mật khẩu). Task 5 xác minh trước khi làm: Rotate Secrets có đổi luôn mật khẩu `next_store_app` không; nếu có thì cập nhật `DATABASE_APP_PASSWORD` ở Production trước khi redeploy. Sau đó redeploy production. **Chủ dự án xoá mọi nhánh `preview/*` trong project production** (kể cả `preview/develop` cũ, theo ngoại lệ một lần ở trên). Điều kiện xong: project production chỉ còn `main`.
-7. **Chủ dự án** (sau khi có bằng chứng bước 2 và 5): merge PR "contract" bắt buộc role app. Chỉ sau đó **Chủ dự án** cấp API key project-scoped cho project của resource 2 để dùng cho Task 16. Key này không được gắn project production.
+3. **Chủ dự án** thông báo dừng merge. Chủ dự án **xoá** biến `DATABASE_URL` tĩnh ở phạm vi Preview (xoá không cần đọc giá trị; audit ADR-0010 H1), rồi sửa resource 1 thành Production only. Điều kiện xong: danh sách biến trên Vercel (tên và phạm vi) không còn biến `DATABASE*` / `POSTGRES*` nào của resource 1 ở phạm vi Preview hay Development. Từ bước này preview không build được (code báo `DATABASE_URL is required on Vercel`); đây là hành vi fail closed có chủ đích.
+4. **Chủ dự án** tạo resource 2 **cùng region `aws-ap-southeast-1` (`sin1`)** (audit ADR-0010 M6). Resource 2 dùng prefix `DATABASE`, bật deployment branching cho Preview (Actions: Neon). Ghi lại tên nhánh mặc định thực tế (audit ADR-0010 L3). Nếu "Create Database" bắt nối ngay, xoá mọi nhánh con đã tạo trước khi role tồn tại (nhánh con không có role). Tạo role `next_store_app` trên nhánh mặc định đó với mật khẩu **khác** production; chạy `app-role.sql` (nhánh cha chưa có bảng, chỉ đặt default privileges). Đặt `DATABASE_APP_USER` / `DATABASE_APP_PASSWORD` ở phạm vi **Preview** (Sensitive), giá trị khác production. **Rồi mới** nối resource 2 vào Preview.
+5. **Chủ dự án** redeploy `develop`. **Orchestrator** kiểm log: `db:migrate … user=<role chủ>`, `db:seed … user=next_store_app`; host thuộc project của resource 2 và khác `NEON_PRODUCTION_ENDPOINT`. Chạy `app-role-check.sql` trên `preview/develop` mới (có bảng, `count(*)` và cột boolean như bước 1). Dừng merge được gỡ sau khi có bằng chứng bước 5.
+6. **Chủ dự án** bấm "Rotate Secrets" của resource 1 (có sẵn trong Vercel, không cần chép mật khẩu). Giả định: Rotate Secrets đặt lại mật khẩu của `next_store_app`. Chủ dự án sẵn sàng đặt lại mật khẩu role đó, cập nhật `DATABASE_APP_PASSWORD` ở Production và redeploy ngay (theo quy trình đổi mật khẩu production trong Hệ quả). Sau đó redeploy production. **Chủ dự án xoá mọi nhánh `preview/*` trong project production** (kể cả `preview/develop` cũ, theo ngoại lệ một lần ở trên). Điều kiện xong: project production chỉ còn `main`.
+7. **Orchestrator** merge PR "contract" sau khi chủ dự án đồng ý, khi đã có bằng chứng bước 2 và 5. Chỉ sau đó **chủ dự án** cấp API key project-scoped cho project của resource 2 để dùng cho Task 16. Key này không được gắn project production.
 
 Ghi chú về cửa sổ thời gian: giữa bước 2 và bước 6, production chạy bằng role app nhưng role chủ còn dùng được cho `db:migrate`; giữa bước 3 và bước 5, preview đứng yên. Không có bước nào làm preview fork production sau bước 3.
 
@@ -102,13 +106,13 @@ Ghi chú về cửa sổ thời gian: giữa bước 2 và bước 6, production
 
 ## Hệ quả
 
-- **Dừng và hỏi (M1):** nếu bước 4 không làm được (không nối được resource 2 cho Preview + Development hoặc phải chép mật khẩu), Task 5 dừng và hỏi chủ dự án. Không tự chuyển sang phương án khác.
-- **Nhánh cha không có bảng (M3):** nhánh cha của resource 2 chỉ có role và default privileges. Mỗi preview migrate từ đầu rồi seed chính nó (`db:migrate` và `db:seed` chạy trên nhánh con `preview/<nhánh git>`). Không có "schema lệch khỏi develop" vì không có schema ở nhánh cha; không có lý do tạo lại nhánh cha, trừ khi role hoặc default privileges của nó hỏng (khi đó chủ dự án đồng ý và tạo lại từ đầu).
+- **Dừng và hỏi (audit ADR-0010 M1):** nếu bước 4 không làm được (không nối được resource 2 cho Preview hoặc phải chép mật khẩu), Task 5 dừng và hỏi chủ dự án. Không tự chuyển sang phương án khác.
+- **Nhánh cha không có bảng (audit ADR-0010 M3):** nhánh cha của resource 2 chỉ có role và default privileges. Mỗi preview migrate từ đầu rồi seed chính nó (`db:migrate` và `db:seed` chạy trên nhánh con `preview/<nhánh git>`). Không có "schema lệch khỏi develop" vì không có schema ở nhánh cha; không có lý do tạo lại nhánh cha, trừ khi role hoặc default privileges của nó hỏng (khi đó chủ dự án đồng ý và tạo lại từ đầu).
 - **`preview-base` không bao giờ được "reset from parent"** (không có dữ liệu để reset).
-- **Đổi mật khẩu role app trên resource 2 (M4):** mật khẩu đi theo nhánh. Đổi trên nhánh cha không đổi các nhánh con đã fork. Chủ dự án phải đổi mật khẩu trên **từng** nhánh có role (nhánh cha và mỗi nhánh `preview/*` đang tồn tại) cùng một giá trị mới, rồi cập nhật `DATABASE_APP_PASSWORD` ở Preview và redeploy. Biến Preview là một giá trị dùng chung, nên mọi nhánh phải khớp; không có cách đổi một nhánh.
-- **Đổi mật khẩu role app ở production (M4):** giữa lúc đổi mật khẩu trong DB và lúc redeploy xong, function đang chạy giữ mật khẩu cũ, kết nối mới bị từ chối. Thứ tự: chủ dự án đổi mật khẩu trên DB → cập nhật `DATABASE_APP_PASSWORD` ở Production → redeploy ngay. Có gián đoạn ngắn; chủ dự án phải có mặt suốt thao tác.
-- **Biến Preview tĩnh biến mất** khi bước 3 xong. Lớp chặn `NEON_PRODUCTION_ENDPOINT` vẫn giữ nguyên làm lớp dự phòng, **nhưng có giới hạn (M2):** nó chỉ so endpoint với endpoint của `main`. Nếu ai đó đổi "Allowed Environments" của resource 1 về "All", preview sẽ fork production sang nhánh có endpoint riêng và lớp chặn cho qua. Kiểm soát phát hiện: **project production chỉ được có nhánh `main`; mọi nhánh `preview/*` xuất hiện ở đó là sự cố bảo mật.** Orchestrator kiểm điều này sau mỗi lần đổi cài đặt tích hợp và trước mỗi release.
+- **Đổi mật khẩu role app trên resource 2 (audit ADR-0010 M4):** mật khẩu đi theo nhánh. Đổi trên nhánh cha không đổi các nhánh con đã fork. Chủ dự án phải đổi mật khẩu trên **từng** nhánh có role (nhánh cha và mỗi nhánh `preview/*` đang tồn tại) cùng một giá trị mới, rồi cập nhật `DATABASE_APP_PASSWORD` ở Preview và redeploy. Biến Preview là một giá trị dùng chung, nên mọi nhánh phải khớp; không có cách đổi một nhánh.
+- **Đổi mật khẩu role app ở production (audit ADR-0010 M4):** giữa lúc đổi mật khẩu trong DB và lúc redeploy xong, function đang chạy giữ mật khẩu cũ, kết nối mới bị từ chối. Thứ tự: chủ dự án đổi mật khẩu trên DB → cập nhật `DATABASE_APP_PASSWORD` ở Production → redeploy ngay. Có gián đoạn ngắn; chủ dự án phải có mặt suốt thao tác.
+- **Biến Preview tĩnh biến mất** khi bước 3 xong. Lớp chặn `NEON_PRODUCTION_ENDPOINT` vẫn giữ nguyên làm lớp dự phòng, **nhưng có giới hạn (audit ADR-0010 M2):** nó chỉ so endpoint với endpoint của `main`. Nếu ai đó đổi "Allowed Environments" của resource 1 về "All", preview sẽ fork production sang nhánh có endpoint riêng và lớp chặn cho qua. Kiểm soát phát hiện: **project production chỉ được có nhánh `main`; mọi nhánh `preview/*` xuất hiện ở đó là sự cố bảo mật.** Orchestrator kiểm điều này sau mỗi lần đổi cài đặt tích hợp và trước mỗi release.
 - **Dev (`develop`)** nằm trên resource 2. Quy tắc không xoá `preview/develop` áp dụng cho nhánh mới ở resource 2.
-- **NS-53 (L3):** API key dọn nhánh (Task 16) chỉ dùng loại **project-scoped**, gắn project của resource 2. Task 16 **phải từ chối** `NEON_PROJECT_ID` bằng id project production (`frosty-queen-67078672`) và từ chối xoá nhánh mặc định của resource 2. Key này không đọc được chuỗi kết nối production (dữ kiện 5 cho thấy loại key này có sẵn).
-- ADR-0007 giữ nguyên, chỉ thêm dòng "bổ sung bởi ADR-0010" ở trạng thái và ngoại lệ một lần của `preview/develop` cũ.
-- Trạng thái ADR này vẫn là "Đề xuất" cho tới khi chủ dự án duyệt. Orchestrator đổi thành "Đã chấp nhận" sau khi chủ dự án duyệt (L5).
+- **NS-53 (audit ADR-0010 L3):** API key dọn nhánh (Task 16) chỉ dùng loại **project-scoped**, gắn project của resource 2. Task 16 **phải từ chối** `NEON_PROJECT_ID` bằng id project production (`frosty-queen-67078672`) và từ chối xoá nhánh mặc định của resource 2. Key này không đọc được chuỗi kết nối production (dữ kiện 5 cho thấy loại key này có sẵn).
+- **Diff của ADR-0007 chỉ là dòng trạng thái** ("Đã chấp nhận; bổ sung bởi ADR-0010"); nội dung ADR-0007 không đổi. Ngoại lệ một lần của `preview/develop` cũ được ghi trong ADR này, không sửa ADR-0007.
+- Trạng thái ADR này vẫn là "Đề xuất" cho tới khi chủ dự án duyệt. Orchestrator đổi thành "Đã chấp nhận" sau khi chủ dự án duyệt (audit ADR-0010 L5).
