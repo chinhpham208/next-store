@@ -60,6 +60,7 @@ Biến môi trường của database trên Vercel:
 |---|---|---|---|---|
 | `DATABASE_URL`, `DATABASE_URL_UNPOOLED` | tích hợp Neon | Neon nhánh chính | Neon branch của nhánh git | trống (PGlite) |
 | `NEON_PRODUCTION_ENDPOINT` | chủ dự án (Vercel → Environment Variables, **một** mục chọn cả ba environment, không bí mật) | không bắt buộc; có thì phải khớp endpoint của `DATABASE_URL` | **bắt buộc**; phải khác endpoint của `DATABASE_URL` | bỏ trống, không kiểm |
+| `DATABASE_APP_USER`, `DATABASE_APP_PASSWORD` | chủ dự án (Vercel → Environment Variables, **Sensitive**; mục [Role app](#role-app)) | role `next_store_app` của resource 1 | role `next_store_app` của resource 2, mật khẩu khác production; **chỉ** phạm vi Preview, không đặt ở Development | bỏ trống (role trong `DATABASE_URL`) |
 | `DB_LOG` | người gỡ lỗi | **bị từ chối** (`1` làm kết nối dừng ngay) | code cho bật, nhưng **không bật** cho tới khi M3 Task 5 tách dữ liệu preview khỏi production (xem dưới) | được bật với PGlite / `localhost`; Postgres ở xa ngoài Vercel bị từ chối, kể cả khi tự đặt `VERCEL_ENV` |
 
 Chặn preview chạm database production (NS-36): giá trị là endpoint id của Neon branch production (`ep-…`, **viết thường**, không có `-pooler`, không có tên miền); sai dạng thì mọi environment trên Vercel, kể cả production, đều từ chối kết nối. Khi `VERCEL` có giá trị, mọi kết nối (runtime, `db:migrate` với cả URL unpooled, `db:seed`) đều bị kiểm trước khi mở socket:
@@ -132,3 +133,20 @@ less "$SEED_SQL"                       # đọc lướt trước khi dán: begin
 4. Xoá file: `rm -f "$SEED_SQL"`.
 
 Câu lệnh dùng `on conflict (slug) do nothing`: chỉ thêm dòng còn thiếu theo slug, không bao giờ ghi đè dòng đã có. Dù vậy, **không** chạy lại trên production sau khi admin đã sửa dữ liệu (từ M5), trừ khi chủ dự án yêu cầu: sản phẩm admin đã xoá sẽ bị thêm lại.
+
+## Role app
+
+Runtime, prerender và `db:seed` đăng nhập bằng role `next_store_app`, chỉ có `SELECT / INSERT / UPDATE / DELETE` trên bảng và `USAGE / SELECT` trên sequence của schema `public` ([ADR-0010](./docs/adr/0010-app-role-and-preview-data.md), quyết định A). Host, cổng, database, TLS và `options` vẫn lấy từ `DATABASE_URL` do tích hợp Neon inject, nên mọi lớp chặn ở trên giữ nguyên; chỉ user và mật khẩu lấy từ `DATABASE_APP_USER` / `DATABASE_APP_PASSWORD`. `db:migrate` vẫn dùng role chủ của URL (DDL và default privileges thuộc role chủ). Dòng log cho biết role thật: `db:migrate: … user=neondb_owner`, `db:seed: … user=next_store_app`.
+
+- Hai biến cùng trống: dùng role của `DATABASE_URL` (hành vi trước NS-60). Đây là bước expand; M3 Task 5 đổi `APP_ROLE_REQUIRED_ON_VERCEL` trong `src/db/client.ts` thành `true`, từ đó thiếu biến trên Vercel (mọi `VERCEL_ENV`) là lỗi build.
+- Chỉ một biến có giá trị, user không phải tên role viết thường (`a-z`, `0-9`, `_`, tối đa 63 ký tự), user trùng user của `DATABASE_URL`, hay mật khẩu có ký tự điều khiển hoặc bắt đầu bằng `endpoint=` / `project=`: từ chối trước khi mở socket, thông báo chỉ nêu tên biến.
+- Role này chặn `DROP`, `ALTER`, `TRUNCATE`, tạo bảng / schema / role, `setval`, đọc bảng theo dõi migration và leo quyền; **không** chặn đọc / sửa / xoá hàng loạt bằng DML (ADR-0010, audit M7).
+
+Thứ tự áp dụng trên Neon / Vercel thuộc M3 Task 5 (ADR-0010, mục "Thứ tự áp dụng"). Trên mỗi nhánh Neon cần role (`main` của resource 1; nhánh mặc định của resource 2, trước khi nối resource 2 vào Preview), **chủ dự án** làm trong Neon SQL Editor, đăng nhập bằng role chủ (role mà `db:migrate` dùng):
+
+1. Tạo role bằng SQL: `CREATE ROLE next_store_app LOGIN PASSWORD '…';` với mật khẩu tự đặt (không dán vào chat, ticket hay PR). Role tạo trong màn hình Roles của Neon console có thể là thành viên `neon_superuser`; `app-role.sql` sẽ từ chối role đó, và role chủ không gỡ được (thuộc tính `SUPERUSER` chỉ superuser đổi được; `REVOKE` một membership do role khác cấp chỉ báo WARNING). Câu lệnh có mật khẩu có thể nằm lại trong lịch sử của SQL Editor: xoá mục đó sau khi chạy nếu editor có lưu.
+2. Chạy toàn bộ [`scripts/sql/app-role.sql`](./scripts/sql/app-role.sql): kiểm role (tồn tại, không thuộc tính đặc biệt, không là thành viên role nào, không sở hữu gì, role đang chạy là chủ database và chủ mọi bảng), rồi cấp quyền DML trên bảng hiện có và đặt default privileges cho bảng / sequence migration tạo sau này. Chạy lại được; một kiểm tra hỏng thì cả script rollback. Trên nhánh chưa có bảng (nhánh cha của resource 2) chỉ default privileges có tác dụng; nhánh `preview/*` fork từ đó tự migrate và bảng mới tự có quyền.
+3. Trên nhánh **đã migrate** (`main`, `preview/develop` của resource 2; không chạy trên nhánh cha) chạy [`scripts/sql/app-role-check.sql`](./scripts/sql/app-role-check.sql): một dòng, mọi cột `false`, riêng `can_dml` `true`.
+4. Đặt `DATABASE_APP_USER=next_store_app` và `DATABASE_APP_PASSWORD` (Sensitive) trên Vercel ở đúng phạm vi (Production cho resource 1, Preview cho resource 2), rồi redeploy.
+
+Đổi mật khẩu: `ALTER ROLE next_store_app PASSWORD '…';` trên **từng** nhánh có role, cập nhật `DATABASE_APP_PASSWORD`, redeploy ngay (ADR-0010, Hệ quả). Rollback trước Task 5: xoá hai biến trên Vercel và redeploy là quay về role chủ.

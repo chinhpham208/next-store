@@ -46,7 +46,8 @@ const isDirectRun = process.argv[1] !== undefined && import.meta.url === pathToF
 
 if (isDirectRun) {
   const main = async () => {
-    console.log(`db:seed: ${describeTarget(connection.target)}`)
+    // Shows user=next_store_app once the app role is configured (ADR-0010, Task 5 step 5 reads this line).
+    console.log(`db:seed: ${describeTarget(connection.target, connection.appRole)}`)
     await seed()
     console.log('db:seed: xong')
     // postgres-js keeps the pool open and PGlite must flush to disk; close both before exiting.

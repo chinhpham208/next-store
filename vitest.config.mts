@@ -18,6 +18,8 @@ export default defineConfig({
     env: {
       DATABASE_URL: '',
       DATABASE_URL_UNPOOLED: '',
+      DATABASE_APP_USER: '',
+      DATABASE_APP_PASSWORD: '',
       VERCEL: '',
       VERCEL_ENV: '',
       NEON_PRODUCTION_ENDPOINT: '',
