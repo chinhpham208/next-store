@@ -1,6 +1,6 @@
 # ADR-0007: Dev dùng Neon branch do tích hợp tự tạo cho nhánh git `develop`
 
-- Trạng thái: Đã chấp nhận
+- Trạng thái: Đã chấp nhận; bổ sung bởi ADR-0010
 - Ngày: 2026-11-20
 - Thay thế một phần: [ADR-0006](./0006-branch-strategy.md) (dòng Dev trong bảng môi trường: "branch `dev`, có seed"; hệ quả về biến `DATABASE_URL` / `DATABASE_URL_UNPOOLED` của Dev). Mọi phần khác của ADR-0006 giữ nguyên.
 

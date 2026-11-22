@@ -1,11 +1,15 @@
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { sql } from 'drizzle-orm'
 import postgres from 'postgres'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  assertDbLogAllowed,
+  isDbLogOn,
   closeConnection,
   createConnection,
+  type DatabaseTarget,
   describeError,
   describeTarget,
   neonEndpointIds,
@@ -548,6 +552,62 @@ describe('production endpoint guard (NS-36)', () => {
       globalThis.nextStoreDbConnection = saved
     }
   })
+  // Audit PR #15 L1: Neon reads the endpoint from the password for clients without SNI, so the connection could
+  // reach an endpoint other than the host we checked.
+  const withPassword = (id: string, password: string) =>
+    `postgresql://neondb_owner:${encodeURIComponent(password)}@${id}.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`
+  it.each(['endpoint=ep-prod-main-a1b2c3d4;x', 'ENDPOINT=ep-x$y', 'project=ep-prod-main-a1b2c3d4;x', 'Project=p$y'])(
+    'refuses a password that carries an endpoint (%s) in every environment',
+    (password) => {
+      expect(onVercel('preview', withPassword(BRANCH, password), PROD)).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+      expect(onVercel('development', withPassword(BRANCH, password), PROD)).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+      expect(onVercel('production', withPassword(PROD, password), PROD)).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+      expect(onVercel('production', withPassword(PROD, password))).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+    },
+  )
+  it.each([' endpoint=ep-prod-main-a1b2c3d4;x', '   project=ep-prod-main-a1b2c3d4$x'])(
+    'refuses a password that carries an endpoint after leading spaces (%j)',
+    (password) => {
+      expect(onVercel('preview', withPassword(BRANCH, password), PROD)).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+      expect(onVercel('production', withPassword(PROD, password), PROD)).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+    },
+  )
+  it.each([
+    ['the host', neon(`${PROD}-pooler-pooler`)],
+    ['an upper-case host', neon(`${PROD}-POOLER-pooler`)],
+    ['options=endpoint', neon(BRANCH, `sslmode=require&options=endpoint%3D${PROD}-pooler-pooler`)],
+  ])('refuses a preview that reaches production through a repeated -pooler suffix in %s', (_label, url) => {
+    expect(onVercel('preview', url, PROD)).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+  })
+  it('never echoes a password that carries an endpoint', () => {
+    expect(onVercel('preview', withPassword(BRANCH, 'endpoint=ep-prod-main-a1b2c3d4;npg_FakePass123'), PROD)).not.toThrow(
+      /npg_FakePass123|neondb_owner|neon\.tech|ep-prod|ep-fake/,
+    )
+  })
+  it('still accepts a password that only contains the word endpoint', () => {
+    expect(onVercel('preview', withPassword(BRANCH, 'my-endpoint=x'), PROD)()).toMatchObject({ kind: 'postgres' })
+  })
+  it.each(['pg.neon.tech', 'proxy.ap-southeast-1.aws.neon.tech', 'PG.NEON.TECH', 'api.c-2.ap-southeast-1.aws.neon.tech.'])(
+    'refuses a preview on the Neon host %s that names no endpoint',
+    (host) => {
+      expect(onVercel('preview', `postgresql://u:p@${host}/neondb?sslmode=require`, PROD)).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+      expect(onVercel('development', `postgresql://u:p@${host}/neondb?sslmode=require`, PROD)).toThrow(
+        /NEON_PRODUCTION_ENDPOINT/,
+      )
+    },
+  )
+  it('still lets a preview use a non-Neon host', () => {
+    expect(onVercel('preview', 'postgres://u:p@db.example.com/app?sslmode=require', PROD)()).toMatchObject({
+      kind: 'postgres',
+    })
+  })
+  it('refuses options with an upper-case key or endpoint id', () => {
+    expect(() => parsePostgresUrl(neon(BRANCH, 'sslmode=require&options=ENDPOINT%3Dep-x'))).toThrow(/options/)
+    expect(() => parsePostgresUrl(neon(BRANCH, 'sslmode=require&options=endpoint%3DEP-X'))).toThrow(/options/)
+    expect(onVercel('preview', neon(BRANCH, `sslmode=require&options=endpoint%3D${PROD.toUpperCase()}`), PROD)).toThrow(
+      /options/,
+    )
+  })
   it('neonEndpointIds lists the host endpoint and the options endpoint once each', () => {
     expect(
       neonEndpointIds(parsePostgresUrl(neon(`${BRANCH}-pooler`, `sslmode=require&options=endpoint%3D${PROD}`))),
@@ -557,6 +617,127 @@ describe('production endpoint guard (NS-36)', () => {
     ])
     expect(neonEndpointIds(parsePostgresUrl(neon(PROD.toUpperCase())))).toEqual([PROD])
     expect(neonEndpointIds(parsePostgresUrl('postgres://u:p@db.example.com/app?sslmode=require'))).toEqual([])
+  })
+})
+
+// ADR-0008: DB_LOG=1 prints every statement with its parameters, i.e. customer data, to the function log.
+describe('DB_LOG guard (NS-36 L3)', () => {
+  const pg = (url: string): DatabaseTarget => ({ kind: 'postgres', url })
+  it.each([
+    ['production', 'production'],
+    ['an unset VERCEL_ENV (VPS)', undefined],
+    ['a misspelt VERCEL_ENV', 'Production'],
+    ['a padded VERCEL_ENV', 'preview '],
+  ])('refuses DB_LOG=1 on %s', (_label, vercelEnv) => {
+    expect(() => assertDbLogAllowed({ dbLog: '1', target: pg(neon(PROD)), vercel: '1', vercelEnv })).toThrow(/DB_LOG/)
+  })
+  it('refuses DB_LOG=1 on a remote non-Neon Postgres outside Vercel', () => {
+    expect(() =>
+      assertDbLogAllowed({ dbLog: '1', target: pg('postgres://u:p@db.example.com/app'), vercel: undefined, vercelEnv: undefined }),
+    ).toThrow(/DB_LOG/)
+  })
+  it.each(['preview', 'development'])('allows DB_LOG=1 on a Vercel %s database', (vercelEnv) => {
+    expect(() => assertDbLogAllowed({ dbLog: '1', target: pg(neon(BRANCH)), vercel: '1', vercelEnv })).not.toThrow()
+  })
+  // Audit PR #35 M1: off Vercel the endpoint guard never ran, so a hand-set VERCEL_ENV proves nothing.
+  it.each([
+    ['unset', undefined],
+    ['empty', ''],
+  ])('refuses DB_LOG=1 on a remote Postgres when VERCEL is %s, whatever VERCEL_ENV says', (_label, vercel) => {
+    for (const vercelEnv of ['preview', 'development']) {
+      for (const url of [neon(BRANCH), 'postgres://u:p@db.example.com/app']) {
+        expect(() => assertDbLogAllowed({ dbLog: '1', target: pg(url), vercel, vercelEnv })).toThrow(/DB_LOG/)
+      }
+    }
+  })
+  it('keeps PGlite and a local Postgres loggable without VERCEL', () => {
+    expect(() =>
+      assertDbLogAllowed({ dbLog: '1', target: { kind: 'pglite', dataDir: 'memory://' }, vercel: undefined, vercelEnv: 'preview' }),
+    ).not.toThrow()
+    expect(() =>
+      assertDbLogAllowed({ dbLog: '1', target: pg('postgres://u:p@localhost/app'), vercel: undefined, vercelEnv: 'preview' }),
+    ).not.toThrow()
+  })
+  it('refuses DB_LOG=1 through createConnection when VERCEL_ENV=preview is set by hand off Vercel', () => {
+    vi.stubEnv('DB_LOG', '1')
+    vi.stubEnv('VERCEL', '')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    expect(() => createConnection(pg(neon(PROD)))).toThrow(/DB_LOG/)
+    expect(postgresFactory).not.toHaveBeenCalled()
+  })
+  it('allows DB_LOG=1 on PGlite and on a local Postgres', () => {
+    expect(() =>
+      assertDbLogAllowed({ dbLog: '1', target: { kind: 'pglite', dataDir: 'memory://' }, vercel: '1', vercelEnv: 'production' }),
+    ).not.toThrow()
+    for (const host of ['localhost', '127.0.0.1', '[::1]', 'LOCALHOST']) {
+      expect(() =>
+        assertDbLogAllowed({ dbLog: '1', target: pg(`postgres://u:p@${host}/app`), vercel: undefined, vercelEnv: undefined }),
+      ).not.toThrow()
+    }
+  })
+  it.each([undefined, '', '0', 'true'])('ignores DB_LOG=%j', (dbLog) => {
+    expect(() => assertDbLogAllowed({ dbLog, target: pg(neon(PROD)), vercel: '1', vercelEnv: 'production' })).not.toThrow()
+  })
+  it('never echoes the URL, host or password', () => {
+    expect(() => assertDbLogAllowed({ dbLog: '1', target: pg(neon(PROD)), vercel: '1', vercelEnv: 'production' })).toThrow(/DB_LOG/)
+    expect(() => assertDbLogAllowed({ dbLog: '1', target: pg(neon(PROD)), vercel: '1', vercelEnv: 'production' })).not.toThrow(
+      /npg_FakePass123|neondb_owner|neon\.tech|ep-prod/,
+    )
+  })
+  it('refuses DB_LOG=1 on a production database before constructing a client', () => {
+    vi.stubEnv('DB_LOG', '1')
+    vi.stubEnv('VERCEL_ENV', 'production')
+    expect(() => createConnection(pg(neon(PROD)))).toThrow(/DB_LOG/)
+    expect(postgresFactory).not.toHaveBeenCalled()
+  })
+  it('still builds a logging client for a preview database', async () => {
+    vi.stubEnv('DB_LOG', '1')
+    vi.stubEnv('VERCEL', '1')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    const connection = createConnection(pg(neon(`${BRANCH}-pooler`)))
+    expect(postgresFactory).toHaveBeenCalledOnce()
+    await closeConnection(connection)
+  })
+  // Audit PR #35 L3: if the logger ever accepted a value the guard ignores, production would log unguarded.
+  it.each(['1', '', '0', 'true', 'TRUE', ' 1', '1 ', '01', 'yes', undefined])(
+    'guard and logger agree on DB_LOG=%j',
+    async (value) => {
+      const remote = () =>
+        assertDbLogAllowed({ dbLog: value, target: pg(neon(PROD)), vercel: '1', vercelEnv: 'production' })
+      if (isDbLogOn(value)) expect(remote).toThrow(/DB_LOG/)
+      else expect(remote).not.toThrow()
+      vi.stubEnv('DB_LOG', value)
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined)
+      const local = createConnection({ kind: 'pglite', dataDir: 'memory://' })
+      try {
+        await local.db.execute(sql`select 1`)
+        const logged = log.mock.calls.some((call) => String(call[0]).startsWith('Query:'))
+        expect(logged).toBe(isDbLogOn(value))
+      } finally {
+        log.mockRestore()
+        await closeConnection(local)
+      }
+    },
+  )
+  it('isDbLogOn is true only for exactly "1"', () => {
+    expect(isDbLogOn('1')).toBe(true)
+    for (const value of [undefined, '', '0', 'true', ' 1', '1 ']) expect(isDbLogOn(value)).toBe(false)
+  })
+  it('refuses to load the runtime connection with DB_LOG=1 on production', async () => {
+    vi.resetModules()
+    vi.stubEnv('DB_LOG', '1')
+    vi.stubEnv('VERCEL', '1')
+    vi.stubEnv('VERCEL_ENV', 'production')
+    vi.stubEnv('NEON_PRODUCTION_ENDPOINT', PROD)
+    vi.stubEnv('DATABASE_URL', neon(`${PROD}-pooler`))
+    const saved = globalThis.nextStoreDbConnection
+    globalThis.nextStoreDbConnection = undefined
+    try {
+      await expect(import('@/db/client')).rejects.toThrow(/DB_LOG/)
+      expect(postgresFactory).not.toHaveBeenCalled()
+    } finally {
+      globalThis.nextStoreDbConnection = saved
+    }
   })
 })
 

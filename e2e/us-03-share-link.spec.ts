@@ -193,6 +193,21 @@ test('US-03: nút back / forward trả lại bộ lọc tương ứng với URL'
   await expect.poll(() => productPrices(page)).toEqual(STICKER_PRICES_ASC)
 })
 
+// The search box is an uncontrolled input, so before NS-57 it kept the last typed text when Back / Forward changed
+// q in the URL (the results followed the URL, the box did not).
+test('US-03 / NS-57: sau Back và Forward, ô tìm khớp với URL', async ({ page }) => {
+  await page.goto('/products')
+  await searchBox(page).fill('cốc')
+  await page.getByRole('button', { name: 'Tìm', exact: true }).click()
+  await expect(resultCount(page)).toHaveText('6 sản phẩm')
+  await page.goBack()
+  await expect(resultCount(page)).toHaveText('24 sản phẩm')
+  await expect(searchBox(page)).toHaveValue('')
+  await page.goForward()
+  await expect(resultCount(page)).toHaveText('6 sản phẩm')
+  await expect(searchBox(page)).toHaveValue('cốc')
+})
+
 // Bad parameters are about what the server parses, not about layout: they run once (review of PR #28).
 test.describe('tham số không hợp lệ', () => {
   test.skip(({ isMobile }) => isMobile, VIEWPORT_INDEPENDENT)

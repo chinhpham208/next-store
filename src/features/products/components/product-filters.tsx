@@ -44,7 +44,12 @@ const SearchForm = ({ query }: { query: ProductQuery }) => (
       Tìm sản phẩm
     </label>
     <div className="flex gap-2">
+      {/* Uncontrolled, so defaultValue is read only on mount: a soft navigation that changes q (Back, Forward, a
+          link) re-renders with the new value but the DOM keeps the old text. Keying on q remounts the input so the
+          box always matches the URL (NS-57), without "use client" or state. Text typed but not submitted still
+          survives links that keep q (category, sort): accepted, since those links carry the submitted q anyway. */}
       <Input
+        key={query.q}
         id={SEARCH_INPUT_ID}
         type="search"
         name="q"

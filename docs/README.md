@@ -25,6 +25,7 @@
 | [0007](./adr/0007-dev-neon-branch.md) | Dev dùng Neon branch do tích hợp tự tạo cho nhánh `develop` | Đã chấp nhận; thay thế một phần 0006 |
 | [0008](./adr/0008-listing-cache-keys.md) | Danh sách sản phẩm cache theo khoá đã chuẩn hoá; tìm theo `q` không cache | Đã chấp nhận; bổ sung 0003 |
 | [0009](./adr/0009-product-404-in-proxy.md) | `proxy.ts` trả 404 thật cho slug sản phẩm không tồn tại; fail-open khi DB lỗi hoặc chậm | Đã chấp nhận |
+| [0010](./adr/0010-app-role-and-preview-data.md) | Runtime dùng role `next_store_app`; preview có database Neon riêng (B1, chờ xác nhận tại chỗ) | Đã chấp nhận (2026-11-22); bổ sung 0007 |
 | [0012](./adr/0012-blog-static-registry.md) | Blog: MDX tĩnh, registry TypeScript, 404 bằng danh sách slug trong proxy | Đã chấp nhận (chủ dự án duyệt hướng ở Cổng 1, 2026-11-22) |
 
 ## Quản lý công việc
