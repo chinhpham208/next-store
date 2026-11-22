@@ -30,9 +30,6 @@ const OG_WIDTH = 1200
 const OG_HEIGHT = 630
 const MAX_OG_BYTES = 300 * 1024
 
-// Until NS-67 (M3 Task 13) the proxy does not answer image paths of unknown slugs (K10). NS-67 removes the fixme.
-const AWAITS_PROXY_404 = 'NS-67'
-
 const readPage = async (request: APIRequestContext, path: string): Promise<Record<string, string>> => {
   const response = await request.get(path)
   expect(response.status(), path).toBe(200)
@@ -194,7 +191,6 @@ test.describe('Sitemap và robots', () => {
   })
 
   test('US-11: ảnh og của slug lạ trả 404', async ({ request }) => {
-    test.fixme(true, AWAITS_PROXY_404)
     const unknown = `khong-co-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
     for (const [page, segment] of [
       [`/products/${SHARED_PRODUCT.slug}`, `/products/${SHARED_PRODUCT.slug}/`],
