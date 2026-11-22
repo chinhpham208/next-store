@@ -6,6 +6,7 @@
 
 - `src/app/` chỉ chứa file routing của Next.js (`page.tsx`, `layout.tsx`, `loading.tsx`, `error.tsx`, `not-found.tsx`, `route.ts`, `sitemap.ts`, `robots.ts`, `opengraph-image.tsx`). Logic nằm ở `src/features/`.
 - `src/mdx-components.tsx` (bắt buộc với `@next/mdx`) chỉ trả `PROSE_COMPONENTS` của `@/components/ui/prose`, không import feature (sẽ thành vòng `content.ts` → `.mdx` → `mdx-components`). Bài blog là `content/blog/<slug>.mdx`, import qua alias `@content/*` và chỉ từ `src/features/blog/content.ts`.
+- `opengraph-image.tsx` chỉ chọn nội dung (eyebrow, tiêu đề, footer, hình minh hoạ) và gọi `renderOgImage` của `@/lib/og-image`; bố cục, màu và font nằm ở đó. Không đọc file hay `fetch` trong route ảnh, không `generateImageMetadata` (M3 K7 → K9).
 - Chiều phụ thuộc: `app → features → db | lib | components/ui`. Không có chiều ngược lại. *(dependency-cruiser)*
 - Ngoài một feature, chỉ import feature đó qua `@/features/<tên>` (file `index.ts`), không import sâu vào bên trong. *(dependency-cruiser)* Ngoại lệ duy nhất: `src/proxy.ts` import `@/features/<tên>/proxy-api` (lối vào hẹp, không kéo component / zod vào bundle của proxy) và không bao giờ import `index.ts` — [ADR-0009](./adr/0009-product-404-in-proxy.md).
 - Không có vòng phụ thuộc. *(dependency-cruiser)*

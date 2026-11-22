@@ -176,10 +176,53 @@ Link trong bài **chỉ** đặt trên `background` (thân bài không có nền
 
   Quy tắc "mọi khối code rào ghi ngôn ngữ" được kiểm tự động: Vitest `every fenced code block in a post names its language` (`src/features/blog/posts.test.ts`).
 
+### Ảnh Open Graph (1200 × 630, `src/lib/og-image.tsx`)
+
+Một theme duy nhất (dải đảo, giống footer) vì ảnh không đổi theo người xem. Chỉ flexbox, không grid, không bóng, không gradient; chỉ Lexend 400 và 700 (TTF tĩnh). Màu là hằng trùng giá trị `--color-inverse*`: nền `#0c0f12`, chữ `#e8eef0`, chữ phụ `#9ba2aa`, đường kẻ / viền `#38424c`, khối con trỏ `#2ee6ea`. Cyan chỉ ở khối con trỏ (và khối con trỏ có sẵn trong hình minh hoạ danh mục). `next-store` + khối con trỏ, **không** logo Smile G hay lockup gin pham.
+
+- Gốc: `display:flex; flex-direction:column; justify-content:space-between; padding:64px 80px; background:#0c0f12; color:#e8eef0; font-family:Lexend`.
+- Hàng trên: chữ `next-store` 40 px / 700, `letter-spacing:-0.02em`, `line-height:1`; khối con trỏ 20 × 20 px `#2ee6ea`, `margin-left:12px`, `margin-bottom:2px`, không bo góc.
+- Hàng giữa: `display:flex; align-items:center; gap:64px`.
+  - Cột chữ (`flex:1`, cột, `gap:24px`): eyebrow 24 px / 400, `line-height:1.33`, `letter-spacing:0.14em`, chữ hoa, `#9ba2aa`; tiêu đề 700, `line-height:1.1`, `letter-spacing:-0.02em`, `display:block` + `lineClamp` theo bảng dưới.
+  - Hình minh hoạ (khi `illustration` có): `<img>` SVG data URI của `public/images/<danh-mục>.svg`, 320 × 320, `border-radius:16px`, `border:2px solid #38424c`.
+- Hàng dưới: `border-top:2px solid #38424c; padding-top:32px`; footer 32 px / 700, `line-height:1.25` (giá `450.000 ₫`, ngày `16 tháng 11, 2026`).
+
+Quy tắc tiêu đề (đếm theo code point: `Array.from(title).length`):
+
+| Có hình minh hoạ (cột chữ 656 px) | Không hình (cột chữ 1040 px) |
+|---|---|
+| ≤ 24 ký tự: 72 px, tối đa 3 dòng | ≤ 24 ký tự: 96 px, tối đa 2 dòng |
+| 25–40: 64 px, 3 dòng | 25–48: 72 px, 3 dòng |
+| > 40: 56 px, 3 dòng | > 48: 60 px, 3 dòng |
+| > 60 ký tự: cắt ở khoảng trắng cuối cùng trước ký tự thứ 60, bỏ dấu câu cuối, thêm `…` | > 75 ký tự: như vậy với 75 |
+
+`lineClamp` giữ làm lưới an toàn (satori cắt giữa từ); phép cắt theo từ chạy trước nên dấu `…` không rơi giữa từ. Bảng và phép cắt nằm trong `fitOgTitle` (`src/lib/og-image.tsx`), kiểm bằng Vitest `fitOgTitle (Task 6 title rules)`. Bài blog có tiêu đề ≤ 70 ký tự nên không bao giờ bị cắt; sản phẩm dài nhất hiện có (`Sticker It's not a bug, it's a feature`, 38 ký tự) ở 64 px vừa 2 dòng.
+
+Ba loại:
+
+| Route | eyebrow | title | footer | illustration |
+|---|---|---|---|---|
+| `app/opengraph-image.tsx` | `Áo thun · Cốc · Sticker · Sách` | `Đồ dùng cho dân code.` | `Cửa hàng online cho lập trình viên` | không |
+| `products/[slug]/opengraph-image.tsx` | tên danh mục | tên sản phẩm | `formatPrice(price)` | slug danh mục nếu thuộc `ao-thun`, `coc`, `sticker`, `sach`; khác → không hình, tiêu đề dùng cột rộng |
+| `blog/[slug]/opengraph-image.tsx` | `Blog` | tiêu đề bài | `formatDate(publishedAt)` | không |
+
+`alt` cố định: mặc định `"next-store: đồ dùng cho dân code"`; sản phẩm `"Ảnh giới thiệu sản phẩm của next-store"`; bài `"Ảnh giới thiệu bài viết trên blog next-store"`.
+
+Bố cục đã dựng thử bằng `ImageResponse` của next 16.4.6 (cùng satori + resvg) với hai file TTF tĩnh ở §3: chữ có dấu, `₫`, `--force`, dấu nháy đều đúng; PNG thật ở artifact M3.
+
 ## 3. Tài nguyên
 
 | File trong repo | Nguồn |
 |---|---|
 | `public/images/{ao-thun,coc,sticker,sach}.svg` | Designer v2 (chỉ Ink/Paper + một khối cyan, nền xen kẽ sáng/tối) |
 | `src/app/fonts/lexend-full-wght.woff2` | Brand kit `fonts/lexend-full-wght.woff2` (SIL OFL) |
+| `src/app/fonts/lexend-regular.ttf`, `src/app/fonts/lexend-bold.ttf` | Cắt từ `lexend-full-wght.woff2` (SIL OFL) thành TTF **tĩnh** `wght=400` / `wght=700` cho ảnh Open Graph (~78 KB mỗi file; `ImageResponse` không đọc woff2 hay TTF variable — K7) |
 | `public/brand/gin-pham-horizontal-dark.svg` | Brand kit `master/gin-pham-horizontal-dark.svg` (lockup trên nền tối) |
+
+Tái tạo font tĩnh (fontTools ≥ 4.40 + brotli):
+
+    python3 -c "from fontTools.ttLib import TTFont; f=TTFont('src/app/fonts/lexend-full-wght.woff2'); f.flavor=None; f.save('/tmp/lexend-var.ttf')"
+    fonttools varLib.instancer /tmp/lexend-var.ttf wght=400 -o src/app/fonts/lexend-regular.ttf
+    fonttools varLib.instancer /tmp/lexend-var.ttf wght=700 -o src/app/fonts/lexend-bold.ttf
+
+Kết quả: 4 byte đầu `00010000`, không có bảng `fvar`, có đủ chữ tiếng Việt và `₫` (U+20AB).
