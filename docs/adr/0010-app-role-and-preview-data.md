@@ -1,6 +1,6 @@
 # ADR-0010: Role app cho runtime và nhánh cha không có dữ liệu khách cho preview
 
-- Trạng thái: Đề xuất — chờ chủ dự án duyệt
+- Trạng thái: Đã chấp nhận (chủ dự án duyệt 2026-11-22, gồm việc chỉ dùng phạm vi Preview cho resource 2)
 - Ngày: 2026-11-22
 - Bổ sung: [ADR-0007](./0007-dev-neon-branch.md) (hệ quả 2: "Rủi ro này và việc tách role / `preview-base` thuộc NS-36")
 - Liên quan: ticket NS-36 (M3 Task 3), NS-53 (dọn nhánh Neon preview), audit PR #6 (mục M1, M2, M3)
@@ -115,4 +115,4 @@ Ghi chú về cửa sổ thời gian: giữa bước 2 và bước 6, production
 - **Dev (`develop`)** nằm trên resource 2. Quy tắc không xoá `preview/develop` áp dụng cho nhánh mới ở resource 2.
 - **NS-53 (audit ADR-0010 L3):** API key dọn nhánh (Task 16) chỉ dùng loại **project-scoped**, gắn project của resource 2. Task 16 **phải từ chối** `NEON_PROJECT_ID` bằng id project production (`frosty-queen-67078672`) và từ chối xoá nhánh mặc định của resource 2. Key này không đọc được chuỗi kết nối production (dữ kiện 5 cho thấy loại key này có sẵn).
 - **Diff của ADR-0007 chỉ là dòng trạng thái** ("Đã chấp nhận; bổ sung bởi ADR-0010"); nội dung ADR-0007 không đổi. Ngoại lệ một lần của `preview/develop` cũ được ghi trong ADR này, không sửa ADR-0007.
-- Trạng thái ADR này vẫn là "Đề xuất" cho tới khi chủ dự án duyệt. Orchestrator đổi thành "Đã chấp nhận" sau khi chủ dự án duyệt (audit ADR-0010 L5).
+- Chủ dự án duyệt ADR này ngày 2026-11-22 (audit ADR-0010 L5 đã đóng).
