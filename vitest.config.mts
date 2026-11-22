@@ -5,6 +5,8 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
+      // Same alias as tsconfig; no test imports an .mdx file (Vitest does not compile MDX), but resolution stays in step.
+      '@content': fileURLToPath(new URL('./content', import.meta.url)),
       // The real package throws outside a React Server environment.
       'server-only': fileURLToPath(new URL('./test/server-only-stub.ts', import.meta.url)),
     },

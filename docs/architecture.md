@@ -12,7 +12,7 @@ flowchart TB
   payment["Cổng thanh toán<br/>Fake (test) / cổng VN khi mở bán"]
 
   subgraph next["Next.js 16 server"]
-    proxy["proxy.ts<br/>404 cho /products/:slug không tồn tại (M2)<br/>chặn /admin khi chưa đăng nhập (M5)"]
+    proxy["proxy.ts<br/>404 cho /products/:slug không tồn tại (M2)<br/>404 cho /blog/:slug không tồn tại, không chạm DB (M3)<br/>chặn /admin khi chưa đăng nhập (M5)"]
     subgraph app["src/app — chỉ routing"]
       pages["Pages<br/>Server Components"]
       actions["Server Actions<br/>giỏ hàng, sửa sản phẩm"]
@@ -51,7 +51,7 @@ flowchart LR
 | Miền | Trách nhiệm | Mốc |
 |---|---|---|
 | `products` | Đọc danh mục, danh sách, chi tiết; ghi sản phẩm (kèm `updateTag`) | M1, M2, M5 |
-| `blog` | Đọc file MDX, metadata bài viết | M3 |
+| `blog` | Registry bài viết (`posts.ts`, không import gì), nội dung MDX (`content.ts`), metadata bài viết | M3 |
 | `cart` | Cookie giỏ hàng, thêm / sửa / xoá, kiểm tra tồn kho | M4 |
 | `admin` | Phiên đăng nhập admin (ký / xác minh cookie) | M5 |
 | `checkout` | `PaymentProvider`, tạo phiên thanh toán | M6 |

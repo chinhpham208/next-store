@@ -49,11 +49,11 @@ module.exports = {
       name: 'proxy-narrow-entry',
       severity: 'error',
       comment:
-        'The proxy runs before every /products/<slug> request and is bundled on its own (audit PR #26 L1): it must ' +
-        'not pull in components, zod or tailwind-merge. Checked transitively.',
+        'The proxy runs before every /products/<slug> and /blog/<slug> request and is bundled on its own (audit PR ' +
+        '#26 L1): it must not pull in components, zod, tailwind-merge or MDX (blog content.ts). Checked transitively.',
       from: { path: '^src/proxy\\.ts$' },
       to: {
-        path: '^(src/(components|app)/|src/features/[^/]+/(index|components/|schema|queries|metadata)|node_modules/(zod|tailwind-merge|clsx|react|react-dom)/)',
+        path: '^(src/(components|app)/|src/features/[^/]+/(index|components/|schema|queries|metadata|content)|node_modules/(zod|tailwind-merge|clsx|react|react-dom|@mdx-js|@next/mdx)/)',
         reachable: true,
       },
     },

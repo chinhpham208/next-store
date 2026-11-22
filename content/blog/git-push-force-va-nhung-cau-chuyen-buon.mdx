@@ -1,0 +1,32 @@
+Kịch bản này có lẽ bạn đã nghe: chiều thứ sáu, ai đó rebase nhánh của mình cho gọn rồi gõ `git push --force`. Sáng thứ hai, đồng đội pull về và thấy commit hôm thứ sáu của họ biến mất.
+
+## Chuyện gì đã xảy ra
+
+`--force` bảo máy chủ: lấy nhánh của tôi, bỏ qua mọi thứ đang có trên đó. Những commit người khác đẩy lên sau lần fetch cuối của bạn không còn nằm trên nhánh nữa.
+
+## Dùng --force-with-lease
+
+`--force-with-lease` chỉ ghi đè khi nhánh trên máy chủ vẫn đúng như lần cuối bạn thấy. Có ai đẩy thêm commit, lệnh sẽ dừng và báo lỗi thay vì xoá. Nếu editor của bạn tự fetch ngầm, thêm `--force-if-includes` (có từ Git 2.30) để lớp bảo vệ này không bị vô hiệu:
+
+```bash
+git push --force-with-lease --force-if-includes origin feature/doi-ten-bien-cho-de-doc
+```
+
+Chi tiết từng tuỳ chọn có trong [tài liệu chính thức của git push](https://git-scm.com/docs/git-push).
+
+> Trước khi ghi đè một nhánh, hãy tự hỏi: ngoài mình ra, còn ai đang làm việc trên nhánh này không?
+
+## Nếu lỡ rồi
+
+Commit chưa mất hẳn. Trên máy của người đã viết nó, hoặc của bất kỳ ai đã fetch trước đó, `git reflog` vẫn giữ mã hash. Tạo lại một nhánh từ mã đó rồi đẩy lên:
+
+```bash
+git reflog
+git branch cuu-commit 3f2a1c9
+```
+
+Để chuyện không lặp lại, hãy bật bảo vệ nhánh cho `main` trên dịch vụ git bạn dùng, để không ai force push vào đó được, kể cả chính bạn lúc mệt.
+
+---
+
+Còn nếu muốn nhắc cả nhóm mỗi ngày, đã có [Áo thun git push --force](/products/ao-git-push-force). Mặc thì thoải mái, còn gõ thì nên cân nhắc.
