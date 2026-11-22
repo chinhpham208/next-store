@@ -12,6 +12,8 @@ export type Db = PgDatabase<PgQueryResultHKT, typeof schema>
 
 type DatabaseEnv = {
   DATABASE_URL?: string
+  DATABASE_APP_USER?: string
+  DATABASE_APP_PASSWORD?: string
   VERCEL?: string
   VERCEL_ENV?: string
   PGLITE_DATA_DIR?: string
@@ -302,12 +304,73 @@ export const resolveDatabaseTarget = (env: DatabaseEnv): DatabaseTarget => {
   return { kind: 'pglite', dataDir: env.PGLITE_DATA_DIR || DEFAULT_PGLITE_DATA_DIR }
 }
 
+export type RoleCredentials = { username: string; password: string }
+
+/**
+ * Expand step of ADR-0010 decision A (NS-60): while the owner rolls the role out, missing DATABASE_APP_* variables
+ * keep the owner role of DATABASE_URL. The contract step (M3 Task 5) sets this to true, which makes the app role
+ * mandatory on every Vercel deployment whatever VERCEL_ENV says; off Vercel it stays optional.
+ */
+export const APP_ROLE_REQUIRED_ON_VERCEL: boolean = false
+
+// The only role the SQL scripts grant to and check (scripts/sql/app-role*.sql). Any other name, even a valid one,
+// could be a role with wider rights that nothing has checked (audit PR #39 L7).
+export const APP_ROLE_NAME = 'next_store_app'
+
+// Fixed text: the variable names only, never the user name, password or URL.
+const APP_ROLE_MISSING_MESSAGE =
+  'DATABASE_APP_USER and DATABASE_APP_PASSWORD are required on Vercel (VERCEL is set); refusing to run the app as ' +
+  'the owner role of DATABASE_URL (ADR-0010).'
+const APP_USER_MISSING_MESSAGE =
+  'DATABASE_APP_USER is empty while DATABASE_APP_PASSWORD is set; set both (app role) or neither (owner role).'
+const APP_PASSWORD_MISSING_MESSAGE =
+  'DATABASE_APP_PASSWORD is empty while DATABASE_APP_USER is set; set both (app role) or neither (owner role).'
+const APP_USER_INVALID_MESSAGE =
+  `DATABASE_APP_USER is refused: it must be exactly ${APP_ROLE_NAME}, the role scripts/sql/app-role.sql grants to ` +
+  'and app-role-check.sql checks, and differ from the user in DATABASE_URL.'
+const APP_PASSWORD_INVALID_MESSAGE =
+  'DATABASE_APP_PASSWORD is refused: it must not contain control characters or start with endpoint= / project= ' +
+  '(Neon would route by it instead of by the checked host).'
+
+type AppRoleInput = { env: DatabaseEnv; url: ParsedPostgresUrl; requiredOnVercel?: boolean }
+
+// Host, port and database stay those of the injected URL (already checked by the endpoint guard); only the login
+// changes. The password goes through the same checks as the URL password: postgres-js writes it NUL-terminated, and
+// Neon's SNI fallback reads an endpoint from it (audit PR #15 L1).
+export const resolveAppRole = ({
+  env,
+  url,
+  requiredOnVercel = APP_ROLE_REQUIRED_ON_VERCEL,
+}: AppRoleInput): RoleCredentials | undefined => {
+  const username = env.DATABASE_APP_USER?.trim() ?? ''
+  const password = env.DATABASE_APP_PASSWORD?.trim() ?? ''
+  if (username === '' && password === '') {
+    // Any non-empty VERCEL counts, as in resolveDatabaseTarget, so a format change cannot switch the check off.
+    if (requiredOnVercel && Boolean(env.VERCEL)) throw new Error(APP_ROLE_MISSING_MESSAGE)
+    return undefined
+  }
+  if (username === '') throw new Error(APP_USER_MISSING_MESSAGE)
+  if (password === '') throw new Error(APP_PASSWORD_MISSING_MESSAGE)
+  // The owner check still matters if the integration ever injected next_store_app itself as the URL user.
+  if (username !== APP_ROLE_NAME || username === url.username.toLowerCase()) {
+    throw new Error(APP_USER_INVALID_MESSAGE)
+  }
+  if (DECODED_FORBIDDEN_CHARS.test(password) || NEON_PASSWORD_ENDPOINT.test(password)) {
+    throw new Error(APP_PASSWORD_INVALID_MESSAGE)
+  }
+  return { username, password }
+}
+
+// PGlite has no login, so the app role applies to Postgres targets only.
+const resolveCredentials = (target: DatabaseTarget, env: DatabaseEnv): RoleCredentials | undefined =>
+  target.kind === 'postgres' ? resolveAppRole({ env, url: parsePostgresUrl(target.url) }) : undefined
+
 // One log line for CLI scripts: enough to see which database is about to change, never credentials or query.
-export const describeTarget = (target: DatabaseTarget): string => {
+export const describeTarget = (target: DatabaseTarget, appRole?: Pick<RoleCredentials, 'username'>): string => {
   if (target.kind === 'pglite') return `pglite dir=${target.dataDir}`
   const url = parsePostgresUrl(target.url)
-  // The user tells which role DDL runs as (owner vs app role); the password and query never appear.
-  return `postgres host=${url.host} port=${url.port} db=${url.database} user=${url.username}`
+  // The user tells which role the script runs as (owner vs app role); the password and query never appear.
+  return `postgres host=${url.host} port=${url.port} db=${url.database} user=${appRole?.username ?? url.username}`
 }
 
 const describeOne = (error: Error): string => {
@@ -323,8 +386,11 @@ export const describeError = (error: unknown): string => {
   return describeOne(error)
 }
 
-/** `name`: the variable the URL came from, used in every error so the operator knows which one to fix. */
-type ConnectionOptions = { max?: number; name?: string }
+/**
+ * `name`: the variable the URL came from, used in every error so the operator knows which one to fix.
+ * `credentials`: log in as this role instead of the URL's user; host, port, database, TLS and options are unchanged.
+ */
+type ConnectionOptions = { max?: number; name?: string; credentials?: RoleCredentials }
 type PostgresOptions = postgres.Options<Record<string, never>>
 
 // Rethrow with fixed text and the errno / SQLSTATE code only; no `cause`, because describeError prints it.
@@ -352,7 +418,7 @@ const loadSsl = ({ policy, name, readFile }: LoadSslOptions): PostgresOptions['s
 // and host / port / database / user / ssl from PG* env variables cannot override what we checked.
 export const buildPostgresOptions = (
   url: string,
-  { max = 5, name = 'DATABASE_URL' }: ConnectionOptions = {},
+  { max = 5, name = 'DATABASE_URL', credentials }: ConnectionOptions = {},
   readFile: (path: string) => Buffer = readFileSync,
 ): PostgresOptions => {
   const parsed = parsePostgresUrl(url, name)
@@ -368,8 +434,8 @@ export const buildPostgresOptions = (
     host: [parsed.host],
     port: [parsed.port],
     database: parsed.database,
-    username: parsed.username,
-    password: parsed.password,
+    username: credentials?.username ?? parsed.username,
+    password: credentials?.password ?? parsed.password,
     ssl,
     ...(channelBinding === undefined ? {} : { channel_binding: channelBinding }),
     connection,
@@ -408,26 +474,31 @@ export const assertDbLogAllowed = ({ dbLog, target, vercel, vercelEnv }: DbLogGu
   throw new Error(DB_LOG_REFUSED_MESSAGE)
 }
 
-export const createConnection = (target: DatabaseTarget, { max = 5, name = 'DATABASE_URL' }: ConnectionOptions = {}) => {
+export const createConnection = (
+  target: DatabaseTarget,
+  { max = 5, name = 'DATABASE_URL', credentials }: ConnectionOptions = {},
+) => {
   // Before anything else: no client, and so no logger, may exist for a database that must not be logged.
   const dbLog = process.env.DB_LOG
   assertDbLogAllowed({ dbLog, target, vercel: process.env.VERCEL, vercelEnv: process.env.VERCEL_ENV })
   const logger = isDbLogOn(dbLog)
   if (target.kind === 'postgres') {
     // Our own refusals already carry fixed text; only the driver's constructor errors need wrapping.
-    const options = buildPostgresOptions(target.url, { max, name })
+    const options = buildPostgresOptions(target.url, { max, name, credentials })
     let client: postgres.Sql
     try {
       client = postgres(options)
     } catch (error) {
       throw withFixedMessage(clientCreateMessage(name), error)
     }
-    return { kind: 'postgres', target, db: drizzlePostgres({ client, schema, logger }) } as const
+    // Only the role name is kept for log lines; the password stays inside the driver's options.
+    const appRole = credentials === undefined ? undefined : { username: credentials.username }
+    return { kind: 'postgres', target, appRole, db: drizzlePostgres({ client, schema, logger }) } as const
   }
   // PGlite does not create missing parent directories (fresh clone has no `.data/`).
   if (!target.dataDir.startsWith('memory://')) mkdirSync(dirname(target.dataDir), { recursive: true })
   const client = new PGlite(target.dataDir)
-  return { kind: 'pglite', target, db: drizzlePglite({ client, schema, logger }) } as const
+  return { kind: 'pglite', target, appRole: undefined, db: drizzlePglite({ client, schema, logger }) } as const
 }
 
 export type Connection = ReturnType<typeof createConnection>
@@ -437,15 +508,23 @@ declare global {
   var nextStoreDbConnection: Connection | undefined
 }
 
-export const connection: Connection = (globalThis.nextStoreDbConnection ??= createConnection(
-  resolveDatabaseTarget({
+// Runtime, prerender and db:seed: the app role when configured. db:migrate opens its own connection from the URL
+// alone (openMigrationConnection), because DDL and the default privileges belong to the owner.
+const openRuntimeConnection = (): Connection => {
+  const env: DatabaseEnv = {
     DATABASE_URL: process.env.DATABASE_URL,
+    DATABASE_APP_USER: process.env.DATABASE_APP_USER,
+    DATABASE_APP_PASSWORD: process.env.DATABASE_APP_PASSWORD,
     VERCEL: process.env.VERCEL,
     VERCEL_ENV: process.env.VERCEL_ENV,
     PGLITE_DATA_DIR: process.env.PGLITE_DATA_DIR,
     NEON_PRODUCTION_ENDPOINT: process.env.NEON_PRODUCTION_ENDPOINT,
-  }),
-))
+  }
+  const target = resolveDatabaseTarget(env)
+  return createConnection(target, { credentials: resolveCredentials(target, env) })
+}
+
+export const connection: Connection = (globalThis.nextStoreDbConnection ??= openRuntimeConnection())
 
 export const db: Db = connection.db
 

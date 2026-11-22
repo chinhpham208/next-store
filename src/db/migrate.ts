@@ -91,8 +91,9 @@ export const resolveMigrationTarget = ({ pooledUrl, env }: MigrationTargetInput)
 
 // DDL goes over the direct (unpooled) endpoint when Neon provides one; PgBouncer in transaction mode is for
 // short app queries. Only switch when runtime is already Postgres, so migrate never targets another database.
-// createConnection builds the client with the same explicit-options builder as the runtime connection.
-const openMigrationConnection = (): Connection => {
+// createConnection builds the client with the same explicit-options builder as the runtime connection, but without
+// the app role credentials: migrations run as the URL's owner role (ADR-0010 decision A).
+export const openMigrationConnection = (): Connection => {
   if (connection.kind !== 'postgres') return connection
   const env = readMigrationEnv(process.env)
   const { target, name } = resolveMigrationTarget({ pooledUrl: connection.target.url, env })

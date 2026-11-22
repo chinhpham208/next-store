@@ -1,11 +1,14 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sql } from 'drizzle-orm'
 import postgres from 'postgres'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  APP_ROLE_NAME,
+  APP_ROLE_REQUIRED_ON_VERCEL,
   assertDbLogAllowed,
+  buildPostgresOptions,
   isDbLogOn,
   closeConnection,
   createConnection,
@@ -14,7 +17,9 @@ import {
   describeTarget,
   neonEndpointIds,
   parsePostgresUrl,
+  resolveAppRole,
   resolveDatabaseTarget,
+  type RoleCredentials,
   resolveSsl,
 } from '@/db/client'
 
@@ -738,6 +743,182 @@ describe('DB_LOG guard (NS-36 L3)', () => {
     } finally {
       globalThis.nextStoreDbConnection = saved
     }
+  })
+})
+
+// ADR-0010 decision A: runtime, prerender and db:seed log in as next_store_app; db:migrate keeps the URL's owner role.
+describe('app role (NS-60)', () => {
+  const url = parsePostgresUrl(neon(BRANCH))
+  const APP = { DATABASE_APP_USER: 'next_store_app', DATABASE_APP_PASSWORD: 'npg_AppFake456' }
+  const VERCEL_ENVS = ['production', 'preview', 'development']
+
+  it('returns nothing when neither variable is set', () => {
+    expect(resolveAppRole({ env: {}, url })).toBeUndefined()
+    expect(resolveAppRole({ env: { DATABASE_APP_USER: ' ', DATABASE_APP_PASSWORD: '' }, url })).toBeUndefined()
+  })
+  it('returns the credentials when both are set, trimmed', () => {
+    expect(resolveAppRole({ env: APP, url })).toEqual({ username: 'next_store_app', password: 'npg_AppFake456' })
+    expect(
+      resolveAppRole({ env: { DATABASE_APP_USER: ' next_store_app\n', DATABASE_APP_PASSWORD: ' npg_AppFake456 ' }, url }),
+    ).toEqual({ username: 'next_store_app', password: 'npg_AppFake456' })
+  })
+  it('refuses half-configured app role credentials', () => {
+    expect(() => resolveAppRole({ env: { DATABASE_APP_USER: 'next_store_app' }, url })).toThrow(/^DATABASE_APP_PASSWORD/)
+    expect(() => resolveAppRole({ env: { DATABASE_APP_USER: 'next_store_app', DATABASE_APP_PASSWORD: ' ' }, url })).toThrow(
+      /^DATABASE_APP_PASSWORD/,
+    )
+    expect(() => resolveAppRole({ env: { DATABASE_APP_PASSWORD: 'x' }, url })).toThrow(/^DATABASE_APP_USER/)
+  })
+  it.each([
+    'neondb_owner',
+    'NEONDB_OWNER',
+    'Next_Store_App',
+    'NEXT_STORE_APP',
+    'next_store_app2',
+    'next_store',
+    'other_app',
+    'next_store_app;x',
+    'app role',
+    'a;b',
+    '1app',
+    'app-role',
+    ''.padEnd(64, 'a'),
+  ])(
+    'refuses the user name %j',
+    (user) => {
+      expect(() => resolveAppRole({ env: { DATABASE_APP_USER: user, DATABASE_APP_PASSWORD: 'x' }, url })).toThrow(
+        /^DATABASE_APP_USER/,
+      )
+    },
+  )
+  // Audit PR #39 L7: a valid name of another role (possibly with wider rights) must not be accepted.
+  it('accepts exactly next_store_app, the role the SQL scripts grant to', () => {
+    expect(APP_ROLE_NAME).toBe('next_store_app')
+    expect(readFileSync('scripts/sql/app-role.sql', 'utf8')).toContain(`TO ${APP_ROLE_NAME};`)
+    expect(readFileSync('scripts/sql/app-role-check.sql', 'utf8')).toContain(`rolname = '${APP_ROLE_NAME}'`)
+    expect(resolveAppRole({ env: { DATABASE_APP_USER: 'next_store_app', DATABASE_APP_PASSWORD: 'x' }, url })?.username).toBe(
+      'next_store_app',
+    )
+  })
+  it('refuses next_store_app when it is also the user of DATABASE_URL', () => {
+    const own = parsePostgresUrl(neon(BRANCH).replace('neondb_owner', 'next_store_app'))
+    expect(() => resolveAppRole({ env: { DATABASE_APP_USER: 'next_store_app', DATABASE_APP_PASSWORD: 'x' }, url: own })).toThrow(
+      /^DATABASE_APP_USER/,
+    )
+  })
+  it.each(['a\u0000b', 'a\u001bb', 'a\u007fb', 'endpoint=ep-x;y', 'project=ep-x$y', 'ENDPOINT=ep-x;y', ' endpoint=ep-x;y'])(
+    'refuses the password %j without echoing it',
+    (password) => {
+      const run = () => resolveAppRole({ env: { DATABASE_APP_USER: 'next_store_app', DATABASE_APP_PASSWORD: password }, url })
+      expect(run).toThrow(/^DATABASE_APP_PASSWORD/)
+      expect(run).toThrow(expect.objectContaining({ message: expect.not.stringContaining(password.trim()) }))
+    },
+  )
+  it('never echoes the user name, password or URL in a refusal', () => {
+    const run = () => resolveAppRole({ env: { DATABASE_APP_USER: 'Bad_S3cr3t', DATABASE_APP_PASSWORD: 'npg_AppFake456' }, url })
+    expect(run).toThrow(/DATABASE_APP_USER/)
+    expect(run).not.toThrow(/Bad_S3cr3t|npg_|neondb_owner|neon\.tech/)
+  })
+
+  // Expand step (Task 4): missing variables keep the owner role everywhere. Task 5 (contract) flips
+  // APP_ROLE_REQUIRED_ON_VERCEL and turns this test into the refusal below for the default.
+  it('falls back to the owner role on every Vercel environment while the app role is optional', () => {
+    expect(APP_ROLE_REQUIRED_ON_VERCEL).toBe(false)
+    for (const VERCEL_ENV of VERCEL_ENVS) {
+      expect(resolveAppRole({ env: { VERCEL: '1', VERCEL_ENV }, url })).toBeUndefined()
+    }
+  })
+  it('refuses every Vercel environment without the app role once it is required', () => {
+    for (const VERCEL_ENV of VERCEL_ENVS) {
+      for (const VERCEL of ['1', 'true']) {
+        const run = () => resolveAppRole({ env: { VERCEL, VERCEL_ENV }, url, requiredOnVercel: true })
+        expect(run).toThrow(/^DATABASE_APP_USER/)
+        expect(run).not.toThrow(/npg_|neondb_owner|neon\.tech/)
+      }
+    }
+  })
+  it('keeps the app role optional outside Vercel even once it is required', () => {
+    expect(resolveAppRole({ env: {}, url, requiredOnVercel: true })).toBeUndefined()
+    expect(resolveAppRole({ env: { VERCEL: '', VERCEL_ENV: 'production' }, url, requiredOnVercel: true })).toBeUndefined()
+  })
+  it('still validates the pair on Vercel once it is required', () => {
+    expect(resolveAppRole({ env: { ...APP, VERCEL: '1', VERCEL_ENV: 'production' }, url, requiredOnVercel: true })).toEqual({
+      username: 'next_store_app',
+      password: 'npg_AppFake456',
+    })
+  })
+
+  it('swaps only user and password, keeping host, database, TLS and options', () => {
+    const base = buildPostgresOptions(neon(BRANCH, `sslmode=require&channel_binding=require&options=endpoint%3D${BRANCH}`))
+    const app = buildPostgresOptions(neon(BRANCH, `sslmode=require&channel_binding=require&options=endpoint%3D${BRANCH}`), {
+      credentials: { username: 'next_store_app', password: 'npg_AppFake456' },
+    })
+    expect(app).toMatchObject({ username: 'next_store_app', password: 'npg_AppFake456' })
+    expect({ ...app, username: base.username, password: base.password }).toEqual(base)
+  })
+  it('passes the app role to postgres() and keeps only its name on the connection', async () => {
+    const connection = createConnection(
+      { kind: 'postgres', url: neon(BRANCH) },
+      { credentials: { username: 'next_store_app', password: 'npg_AppFake456' } },
+    )
+    expect(postgresFactory.mock.calls[0]?.[0]).toMatchObject({
+      host: [`${BRANCH}.ap-southeast-1.aws.neon.tech`],
+      username: 'next_store_app',
+      password: 'npg_AppFake456',
+      ssl: VERIFIED,
+    })
+    // The password stays inside the driver options; the connection keeps only the role name for log lines.
+    expect(connection.appRole).toStrictEqual({ username: 'next_store_app' })
+    expect(JSON.stringify({ ...connection, db: undefined })).not.toMatch(/npg_AppFake456/)
+    await closeConnection(connection)
+  })
+  it('describes the role actually used and never a password', () => {
+    // A full credential pair is accepted too (structural typing); only the name may reach the line.
+    const credentials: RoleCredentials = { username: 'next_store_app', password: 'npg_AppFake456' }
+    const line = describeTarget({ kind: 'postgres', url: neon(BRANCH) }, credentials)
+    expect(line).toBe(`postgres host=${BRANCH}.ap-southeast-1.aws.neon.tech port=5432 db=neondb user=next_store_app`)
+    expect(line).not.toMatch(/npg_/)
+  })
+  it('describes the URL role when there are no app credentials', () => {
+    expect(describeTarget({ kind: 'postgres', url: neon(BRANCH) }, undefined)).toMatch(/ user=neondb_owner$/)
+  })
+
+  const loadRuntime = async (env: Record<string, string>) => {
+    vi.resetModules()
+    for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value)
+    const saved = globalThis.nextStoreDbConnection
+    globalThis.nextStoreDbConnection = undefined
+    try {
+      return await import('@/db/client')
+    } finally {
+      globalThis.nextStoreDbConnection = saved
+    }
+  }
+  const PREVIEW = { VERCEL: '1', VERCEL_ENV: 'preview', NEON_PRODUCTION_ENDPOINT: PROD, DATABASE_URL: neon(`${BRANCH}-pooler`) }
+
+  it('connects the runtime as the app role from process.env', async () => {
+    const fresh = await loadRuntime({ ...PREVIEW, ...APP })
+    expect(postgresFactory.mock.calls[0]?.[0]).toMatchObject({ username: 'next_store_app', password: 'npg_AppFake456' })
+    expect(fresh.connection.appRole).toEqual({ username: 'next_store_app' })
+    await fresh.closeConnection()
+  })
+  it('keeps the runtime on the URL role while the variables are absent', async () => {
+    const fresh = await loadRuntime({ ...PREVIEW, DATABASE_APP_USER: '', DATABASE_APP_PASSWORD: '' })
+    expect(postgresFactory.mock.calls[0]?.[0]).toMatchObject({ username: 'neondb_owner', password: 'npg_FakePass123' })
+    expect(fresh.connection.appRole).toBeUndefined()
+    await fresh.closeConnection()
+  })
+  it('refuses to load the runtime connection with half-configured credentials before constructing a client', async () => {
+    await expect(loadRuntime({ ...PREVIEW, DATABASE_APP_USER: 'next_store_app', DATABASE_APP_PASSWORD: '' })).rejects.toThrow(
+      /^DATABASE_APP_PASSWORD/,
+    )
+    expect(postgresFactory).not.toHaveBeenCalled()
+  })
+  it('ignores the app role variables for PGlite', async () => {
+    const fresh = await loadRuntime({ DATABASE_URL: '', ...APP })
+    expect(fresh.connection.kind).toBe('pglite')
+    expect(fresh.connection.appRole).toBeUndefined()
+    await fresh.closeConnection()
   })
 })
 
