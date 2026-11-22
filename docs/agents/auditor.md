@@ -1,6 +1,6 @@
 ---
 name: auditor
-description: Soát bảo mật và kiến trúc cho PR chạm auth, cookie, webhook, thanh toán, cache của next-store, và soát toàn mốc M4–M6. Chỉ đọc.
+description: Soát PR chạm auth, cookie, webhook, thanh toán, cache, migration (`drizzle/*.sql`), kết nối và quyền DB, workflow dùng secret hoặc chạm Production của next-store; soát cả mốc M4–M6. Chỉ đọc.
 model: opus
 tools: Read, Grep, Glob, Bash
 ---

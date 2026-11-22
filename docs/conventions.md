@@ -110,8 +110,14 @@ Chi tiết và lý do: [ADR-0006](./adr/0006-branch-strategy.md).
 
 - `db:migrate` chạy trong bước build của **mọi** deploy, trước khi code mới nhận request. Trong lúc đó và khi rollback, **code cũ vẫn chạy trên schema mới**. Hai build cùng lúc có thể cùng migrate.
 - **Expand** (làm cùng release với code dùng nó): thêm bảng, thêm cột nullable hoặc có `DEFAULT`, thêm index, thêm ràng buộc mà dữ liệu hiện có đã thoả.
-- **Contract** (chỉ ở release **sau** release cuối cùng còn code đọc / ghi đối tượng đó): `DROP TABLE`, `DROP COLUMN`, `RENAME`, đổi kiểu cột, thêm `NOT NULL` không có `DEFAULT`, `TRUNCATE`, `DELETE` không `WHERE`. File migration phải có dòng `-- contract: NS-<số>` ghi ticket của bước expand tương ứng.
+- **Contract** (chỉ ở release **sau** release cuối cùng còn code đọc / ghi đối tượng đó):
+  - `DROP TABLE`, `DROP COLUMN` (kể cả `ALTER TABLE t DROP c` không có từ `COLUMN`), `RENAME`, đổi kiểu cột (`ALTER COLUMN … TYPE`), `TRUNCATE`.
+  - `ALTER COLUMN … SET NOT NULL`; `ALTER TABLE … ADD [COLUMN] … NOT NULL` không có `DEFAULT`, `GENERATED` hoặc kiểu serial.
+  - `ALTER COLUMN … DROP DEFAULT`, `DROP INDEX`, `DROP CONSTRAINT`, `DROP TYPE / SCHEMA / VIEW / SEQUENCE`, `SET SCHEMA`, `REVOKE`.
+  - `DELETE FROM` và `UPDATE` không có `WHERE` (kể cả trong CTE).
+  - File migration phải có dòng `-- contract: NS-<số>` ghi ticket của bước expand tương ứng. Một dòng cho cả file: Auditor kiểm từng câu lệnh contract trong file khớp ticket đó.
+- `CREATE INDEX` (không `CONCURRENTLY`) và `ADD CONSTRAINT` khoá bảng khi chạy; không nằm trong danh sách trên nhưng Auditor đánh giá riêng với `orders` và `cart_items` trước khi merge.
 - Backfill dữ liệu là migration riêng, chạy lại được, không nằm chung file với đổi schema.
 - Không sửa hay xoá file `drizzle/*.sql` đã merge; sai thì viết migration mới.
 - PR có `drizzle/*.sql`: Auditor bắt buộc; mô tả PR ghi từng câu lệnh thuộc expand hay contract và code nào đang chạy còn dùng đối tượng bị đổi. Migration chỉ lên production qua release PR.
-- Bảng mới tự có quyền cho role app nhờ `ALTER DEFAULT PRIVILEGES`; migration không tự `GRANT`.
+- Bảng mới tự có quyền cho role app nhờ `ALTER DEFAULT PRIVILEGES` (có hiệu lực từ khi M3 Task 4–5 xong); migration không tự `GRANT`.
