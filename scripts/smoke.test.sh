@@ -20,6 +20,7 @@ WARM_PORT=3192
 SEG_PORT=3191
 NOINDEX_PORT=3190
 SITEMAP_PORT=3189
+OG_PORT=3188
 
 TMP=$(mktemp -d)
 PIDS=()
@@ -48,11 +49,14 @@ chmod +x "$TMP/bin/curl"
 # a page-level notFound() under Cache Components (K3) or a proxy that failed open; URLs matching <hard-404-regex>
 # answer 404 with the proxy's rewrite header even when they are a known product's. /sitemap.xml and /robots.txt
 # answer like the app on <sitemap-origin> (default https://shop.example.test); <robots-tag>, when set, is sent as
-# X-Robots-Tag on every response; <robots-rule> (default `Allow: /`) is the rule line of robots.txt.
+# X-Robots-Tag on every response; <robots-rule> (default `Allow: /`) is the rule line of robots.txt. The pages carry an
+# og:image on http://localhost:3000 (as under next start); its path answers <og-status> (default 200) with a PNG.
 start_server() {
-  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ready="$TMP/ready-$1"
+  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} ready="$TMP/ready-$1"
   node -e '
-    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule] = process.argv.slice(1)
+    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule, ogStatus] = process.argv.slice(1)
+    const og = (path) => `<meta property="og:image" content="http://localhost:3000${path}"/>`
+    const images = ["/opengraph-image?a1b2c3", "/products/ao-404-not-found/opengraph-image-16g1u1?d4e5f6", "/blog/chao-mung-den-next-store/opengraph-image-16g1u1?a7b8c9"]
     const fs = require("node:fs")
     require("node:http").createServer((req, res) => {
       fs.appendFileSync(headers, JSON.stringify(req.headers) + "\n")
@@ -60,14 +64,15 @@ start_server() {
       const locs = ["/", "/products/ao-404-not-found", "/blog/chao-mung-den-next-store"]
       if (req.url === "/sitemap.xml") { res.writeHead(200, { "content-type": "application/xml" }); res.end(`<urlset>${locs.map((p) => `<url>\n<loc>${p === "/" ? "https://shop.example.test" : origin}${p}</loc>\n</url>`).join("\n")}</urlset>`); return }
       if (req.url === "/robots.txt") { res.writeHead(200, { "content-type": "text/plain" }); res.end(`User-Agent: *\n${robotsRule}\n\nSitemap: https://shop.example.test/sitemap.xml\n`); return }
+      if (images.includes(req.url)) { res.writeHead(Number(ogStatus), { "content-type": Number(ogStatus) === 200 ? "image/png" : "text/html" }); res.end("png"); return }
       if (hard && new RegExp(hard).test(req.url)) { res.writeHead(404, { "content-type": "text/html; charset=utf-8", "x-middleware-rewrite": "/_khong-tim-thay" }); res.end(body) }
-      else if (req.url === "/" || ["/products/ao-404-not-found", "/products/ao-404-not-found?_rsc", "/products/ao-404-not-found.rsc", "/products/ao-404-not-found.segments/_tree.segment.rsc"].includes(req.url)) { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<meta property=\"og:site_name\" content=\"next-store\"/><h1>Áo thun 404 Not Found</h1>") }
-      else if (req.url === "/blog" || req.url === "/blog/chao-mung-den-next-store") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<article><h1>Chào mừng đến next-store</h1></article>") }
+      else if (req.url === "/" || ["/products/ao-404-not-found", "/products/ao-404-not-found?_rsc", "/products/ao-404-not-found.rsc", "/products/ao-404-not-found.segments/_tree.segment.rsc"].includes(req.url)) { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end(`<meta property="og:site_name" content="next-store"/>${og(req.url === "/" ? images[0] : images[1])}<h1>Áo thun 404 Not Found</h1>`) }
+      else if (req.url === "/blog" || req.url === "/blog/chao-mung-den-next-store") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end(`${og(images[2])}<article><h1>Chào mừng đến next-store</h1></article>`) }
       else if (req.url === "/products" || req.url === "/products?page=abc&sort=xyz") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<ul aria-label=\"Danh sách sản phẩm\"></ul>") }
       else if (soft && new RegExp(soft).test(req.url)) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
       else { res.writeHead(404, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
     }).listen(Number(port), "127.0.0.1", () => fs.writeFileSync(ready, ""))
-  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" &
+  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" "$ogStatus" &
   PIDS+=($!)
   local i
   for i in $(seq 1 50); do [ -f "$ready" ] && return 0; sleep 0.1; done
@@ -235,3 +240,16 @@ run BASE_URL="http://127.0.0.1:$SITEMAP_PORT" -- bash scripts/smoke.sh
 [ "$CODE" = 1 ] || fail sitemap-two-origins "thoát $CODE, cần 1"
 grep -qF '/sitemap.xml có <loc> trên nhiều origin' "$TMP/out" || fail sitemap-two-origins "thông báo không nêu nhiều origin"
 echo "ok sitemap-two-origins"
+
+# og-image (US-11, K8): each og:image is fetched by path on BASE, not on the tag's host; an image route that answers
+# 500 at request time fails smoke.
+run BASE_URL="http://127.0.0.1:$PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail og-image "thoát $CODE, cần 0"
+grep -qF 'og:image của /products/ao-404-not-found → GET /products/ao-404-not-found/opengraph-image-16g1u1?d4e5f6 → 200, image/png' "$TMP/out" ||
+  fail og-image "không kiểm og:image của sản phẩm"
+! grep -q 'localhost:3000' "$TMP/curl-calls" || fail og-image "đã gọi host trong thẻ thay vì BASE_URL"
+start_server "$OG_PORT" "$TMP/og-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" "" "" 500
+run BASE_URL="http://127.0.0.1:$OG_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail og-image "ảnh trả 500: thoát $CODE, cần 1"
+grep -qF 'GET /opengraph-image?a1b2c3 (og:image của /) trả 500, cần 200' "$TMP/out" || fail og-image "thông báo không nêu ảnh lỗi"
+echo "ok og-image"

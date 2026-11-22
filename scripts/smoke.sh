@@ -3,7 +3,7 @@
 # một trang chi tiết sản phẩm trả 200 và có tên sản phẩm; /products trả 200 và có lưới sản phẩm, kể cả với
 # tham số không hợp lệ; /blog và một bài blog trả 200 và có nội dung; slug sản phẩm không tồn tại trả 404 ngay lần
 # đầu; /sitemap.xml và /robots.txt trả 200, cùng một origin tuyệt đối, robots.txt chặn hay cho crawl đúng môi trường;
-# trang chủ có og:site_name.
+# trang chủ có og:site_name; og:image của trang chủ, một sản phẩm và một bài blog tải được, là PNG.
 #
 #   npm run smoke                                   # chạy `next start` từ bản build hiện có (.next/), kiểm rồi tắt
 #   BASE_URL=https://<deploy>.vercel.app npm run smoke   # kiểm một URL đã deploy
@@ -231,6 +231,25 @@ status=$(fetch "$BASE$POST_PATH" "$TMP/post.html") || fail "không kết nối �
 grep -qF -- '<h1' "$TMP/post.html" || fail "HTML $POST_PATH không có <h1"
 grep -qF -- '<article' "$TMP/post.html" || fail "HTML $POST_PATH không có <article"
 echo "smoke: GET $POST_PATH → 200, có <h1 và <article"
+
+# US-11: each page's og:image loads as a PNG. Only the path and query of the tag are fetched, on BASE: the host in the
+# tag is the site URL read at build time (localhost:3000 under next start, K6). A route that built but reads uncached
+# IO answers 500 here (K8). The value comes from the page, so it is reduced to a URL path before it reaches curl.
+expect_og_image() { # expect_og_image <page path> <html file>
+  local page=$1 html=$2 url path status type
+  url=$(grep -o '<meta property="og:image" content="[^"]*"' "$html" | head -n 1 | sed -E 's/.*content="([^"]*)"/\1/; s/&amp;/\&/g')
+  [ -n "$url" ] || fail "HTML $page không có og:image"
+  path=$(printf '%s' "$url" | sed -E 's#^https?://[^/]+##')
+  [[ $path =~ ^/[A-Za-z0-9/._?=-]*$ ]] || fail "og:image của $page không phải đường dẫn hợp lệ"
+  status=$(fetch "$BASE$path" "$TMP/og.png" '' "$TMP/og.headers") || fail "không kết nối được $BASE$path"
+  [ "$status" = 200 ] || fail "GET $path (og:image của $page) trả $status, cần 200"
+  type=$(tr -d '\r' < "$TMP/og.headers" | sed -n 's/^[Cc]ontent-[Tt]ype: *//p' | tail -n 1)
+  [ "$type" = image/png ] || fail "GET $path (og:image của $page) có content-type \"$type\", cần image/png"
+  echo "smoke: og:image của $page → GET $path → 200, image/png"
+}
+expect_og_image / "$TMP/home.html"
+expect_og_image "$DETAIL_PATH" "$TMP/detail.html"
+expect_og_image "$POST_PATH" "$TMP/post.html"
 
 # US-05 (ADR-0009): src/proxy.ts answers an unknown product slug with a real 404 on the very first request, before
 # render; a page-level notFound() would send a 200 shell first (K3). Fresh slugs each run, so no earlier request
