@@ -6,7 +6,7 @@
 
 - `src/app/` chỉ chứa file routing của Next.js (`page.tsx`, `layout.tsx`, `loading.tsx`, `error.tsx`, `not-found.tsx`, `route.ts`, `sitemap.ts`, `robots.ts`, `opengraph-image.tsx`). Logic nằm ở `src/features/`.
 - Chiều phụ thuộc: `app → features → db | lib | components/ui`. Không có chiều ngược lại. *(dependency-cruiser)*
-- Ngoài một feature, chỉ import feature đó qua `@/features/<tên>` (file `index.ts`), không import sâu vào bên trong. *(dependency-cruiser)*
+- Ngoài một feature, chỉ import feature đó qua `@/features/<tên>` (file `index.ts`), không import sâu vào bên trong. *(dependency-cruiser)* Ngoại lệ duy nhất: `src/proxy.ts` import `@/features/<tên>/proxy-api` (lối vào hẹp, không kéo component / zod vào bundle của proxy) và không bao giờ import `index.ts` — [ADR-0009](./adr/0009-product-404-in-proxy.md).
 - Không có vòng phụ thuộc. *(dependency-cruiser)*
 - Luôn dùng alias `@/` thay cho đường dẫn tương đối đi ra khỏi thư mục hiện tại (`../../`).
 
@@ -19,6 +19,8 @@
 | `actions.ts` | Server Actions (`"use server"`) |
 | `schema.ts` | Zod schema cho dữ liệu đầu vào |
 | `types.ts` | Kiểu dùng chung trong feature |
+| `metadata.ts` | Dựng `Metadata` của trang từ dữ liệu feature (`generateMetadata` của `page.tsx` gọi vào) |
+| `slug-guard.ts` | Kiểm slug tồn tại, không cache, cho `src/proxy.ts` trước khi render |
 | `components/` | Component của miền |
 | `*.test.ts` | Test, đặt cạnh file được test |
 

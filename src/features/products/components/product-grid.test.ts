@@ -26,7 +26,7 @@ it('renders image alt, name, price, category and sold-out badge', () => {
   const html = render([product])
   expect(html).toContain('aria-label="Sản phẩm nổi bật"')
   expect(html).toContain('alt="Sổ tay rebase"')
-  expect(html).toMatch(/<h3[^>]*>Sổ tay rebase<\/h3>/)
+  expect(html).toMatch(/<h3[^>]*><a[^>]*>Sổ tay rebase<\/a><\/h3>/)
   expect(html).toContain(`199.000${NBSP}₫`)
   expect(html).toContain('>Sách<')
   expect(html).toContain('Hết hàng')
@@ -38,6 +38,24 @@ it('renders exactly one image per product', () => {
   const html = render([product, { ...product, slug: 'b', name: 'B' }])
   expect(html.match(/<img /g)).toHaveLength(2)
   expect(html.match(/<li/g)).toHaveLength(2)
+})
+it('links each product name to its detail page', () => {
+  expect(render([product])).toMatch(/<h3[^>]*><a[^>]*href="\/products\/so-tay-rebase"[^>]*>Sổ tay rebase<\/a><\/h3>/)
+})
+it('makes the whole card clickable: the link overlay fills the relative card', () => {
+  const html = render([product])
+  const card = /<li><div class="([^"]*)"/.exec(html)?.[1]?.split(' ') ?? []
+  expect(card).toContain('relative')
+  const link = /<a class="([^"]*)"[^>]*href="\/products\/so-tay-rebase"/.exec(html)?.[1]?.split(' ') ?? []
+  expect(link).toEqual(expect.arrayContaining(['after:absolute', 'after:inset-0']))
+  // A positioned element between the card and the link would become the overlay's box instead of the card.
+  const between = html.slice(html.indexOf('<li>'), html.indexOf('<a '))
+  expect(between.match(/class="[^"]*\b(relative|absolute|fixed|sticky)\b/g)).toHaveLength(1)
+})
+it('keeps the image outside the link and lets a long name break inside the card', () => {
+  const html = render([product])
+  expect(html).not.toMatch(/<a[^>]*>(?:(?!<\/a>)[\s\S])*<img /)
+  expect(html).toMatch(/<h3[^>]*class="[^"]*break-words/)
 })
 it('keeps a CLI flag on one line without changing the heading text', () => {
   const html = render([{ ...product, inStock: true, name: 'Áo thun git push --force' }])

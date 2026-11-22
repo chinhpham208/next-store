@@ -2,10 +2,13 @@ import { createElement, type FunctionComponent } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { Badge } from '@/components/ui/badge'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Container } from '@/components/ui/container'
 import { CursorBlock } from '@/components/ui/cursor-block'
+import { Input } from '@/components/ui/input'
 import { Price } from '@/components/ui/price'
+import { Skeleton } from '@/components/ui/skeleton'
 
 const NBSP = ' '
 // Required `children` must sit in props for TypeScript, which react/no-children-prop rejects on a literal
@@ -66,5 +69,60 @@ describe('CursorBlock', () => {
   })
   it('adds the blink modifier when asked', () => {
     expect(classOf(render(CursorBlock, { blink: true }))).toContain('cursor-block--blink')
+  })
+})
+
+describe('Button', () => {
+  it('Button defaults to type=button and renders its label', () => {
+    const html = render(Button, { children: 'Thử lại' })
+    expect(html).toMatch(/^<button[^>]*type="button"[^>]*>Thử lại<\/button>$/)
+  })
+  it('Button keeps an explicit type=submit', () => {
+    expect(render(Button, { type: 'submit', children: 'Tìm' })).toContain('type="submit"')
+  })
+  it('Button uses the primary variant by default and keeps a 44 px target', () => {
+    const classes = classOf(render(Button, { children: 'Thử lại' }))
+    expect(classes).toEqual(expect.arrayContaining(['min-h-11', 'bg-foreground', 'text-background']))
+  })
+  it('Button applies the secondary variant and merges className', () => {
+    const classes = classOf(render(Button, { variant: 'secondary', className: 'w-full', children: 'Về trang chủ' }))
+    expect(classes).toEqual(expect.arrayContaining(['border-border-strong', 'text-foreground', 'w-full']))
+    expect(classes).not.toContain('bg-foreground')
+  })
+  it('Button forwards disabled and event props', () => {
+    expect(render(Button, { disabled: true, children: 'Thêm vào giỏ' })).toContain('disabled=""')
+  })
+  it('buttonVariants returns different classes per variant and merges className', () => {
+    expect(buttonVariants({ variant: 'primary' })).not.toBe(buttonVariants({ variant: 'secondary' }))
+    expect(buttonVariants({ className: 'w-full' })).toContain('w-full')
+    expect(buttonVariants()).toBe(buttonVariants({ variant: 'primary' }))
+  })
+  it('buttonVariants lets className override a conflicting utility', () => {
+    const classes = buttonVariants({ variant: 'secondary', className: 'px-4' }).split(' ')
+    expect(classes).toContain('px-4')
+    expect(classes).not.toContain('px-6')
+  })
+})
+
+describe('Input', () => {
+  it('Input forwards name, type and aria-label', () => {
+    const html = render(Input, { name: 'q', type: 'search', 'aria-label': 'Tìm sản phẩm' })
+    expect(html).toContain('name="q"')
+    expect(html).toContain('type="search"')
+    expect(html).toContain('aria-label="Tìm sản phẩm"')
+  })
+  it('Input uses 16 px text and a 44 px target', () => {
+    expect(classOf(render(Input, {}))).toEqual(expect.arrayContaining(['min-h-11', 'text-base', 'border-border-strong']))
+  })
+})
+
+describe('Skeleton', () => {
+  it('Skeleton is hidden from assistive technology', () => {
+    expect(render(Skeleton, { className: 'h-6' })).toContain('aria-hidden="true"')
+  })
+  it('Skeleton uses the border colour, no animation, and merges its size', () => {
+    const classes = classOf(render(Skeleton, { className: 'h-6 w-36' }))
+    expect(classes).toEqual(expect.arrayContaining(['bg-border', 'h-6', 'w-36']))
+    expect(classes.some((c) => c.startsWith('animate-'))).toBe(false)
   })
 })

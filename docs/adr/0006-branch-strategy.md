@@ -1,6 +1,6 @@
 # ADR-0006: Chiến lược nhánh develop → production, main đóng băng
 
-- Trạng thái: Đã chấp nhận
+- Trạng thái: Đã chấp nhận; thay thế một phần bởi [ADR-0007](./0007-dev-neon-branch.md) (Neon branch của Dev)
 - Ngày: 2026-11-19
 - Thay thế một phần: [ADR-0005](./0005-hosting.md) (nhánh kích hoạt deploy production và câu "nhánh `main` được bảo vệ"; giữ nguyên Vercel + Neon, CI trên GitHub Actions, `build:vercel`)
 

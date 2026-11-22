@@ -45,4 +45,5 @@ next-env.d.ts
 # next-store
 .data/
 .verify/
+__pycache__/
 !.env.example

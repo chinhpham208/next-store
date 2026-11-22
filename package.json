@@ -8,6 +8,7 @@
     "build:vercel": "npm run db:migrate && (test \"$VERCEL_ENV\" = production || npm run db:seed) && next build",
     "start": "next start",
     "smoke": "bash scripts/smoke.sh",
+    "test:scripts": "bash scripts/smoke.test.sh && python3 -m unittest discover -s scripts/youtrack -p 'test_*.py'",
     "e2e": "playwright test",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
@@ -17,6 +18,7 @@
     "db:generate": "drizzle-kit generate",
     "db:migrate": "tsx --conditions=react-server src/db/migrate.ts",
     "db:seed": "tsx --conditions=react-server src/db/seed.ts",
+    "db:seed:sql": "tsx scripts/seed-sql.ts",
     "db:setup": "npm run db:migrate && npm run db:seed",
     "prebuild": "npm run db:setup"
   },
@@ -29,7 +31,8 @@
     "react": "19.3.1",
     "react-dom": "19.3.1",
     "server-only": "0.0.1",
-    "tailwind-merge": "3.7.0"
+    "tailwind-merge": "3.7.0",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@axe-core/playwright": "4.14.0",

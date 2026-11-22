@@ -1,6 +1,6 @@
 # ADR-0005: Hosting trên Vercel + Neon, CI trên GitHub Actions
 
-- Trạng thái: Đề xuất — chờ chủ dự án xác nhận tài khoản; thay thế một phần bởi [ADR-0006](./0006-branch-strategy.md) (nhánh kích hoạt deploy production, bảo vệ nhánh `main`)
+- Trạng thái: Đã chấp nhận (chủ dự án xác nhận 2026-11-20); thay thế một phần bởi [ADR-0006](./0006-branch-strategy.md) (nhánh kích hoạt deploy production, bảo vệ nhánh `main`)
 - Ngày: 2026-11-19
 
 ## Bối cảnh

@@ -13,6 +13,16 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts'],
     // Override, not default: a DATABASE_URL exported in the developer's shell must never reach the tests.
-    env: { DATABASE_URL: '', DATABASE_URL_UNPOOLED: '', VERCEL: '', VERCEL_ENV: '', PGLITE_DATA_DIR: 'memory://' },
+    env: {
+      DATABASE_URL: '',
+      DATABASE_URL_UNPOOLED: '',
+      VERCEL: '',
+      VERCEL_ENV: '',
+      NEON_PRODUCTION_ENDPOINT: '',
+      // postgres-js falls back to these libpq variables, so a developer's shell could change what the tests see.
+      PGCHANNELBINDING: '',
+      PGSSLMODE: '',
+      PGLITE_DATA_DIR: 'memory://',
+    },
   },
 })

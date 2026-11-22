@@ -57,16 +57,41 @@ export const resolveMigrationUrl = ({ pooledUrl, unpooledUrl }: MigrationUrls): 
   return unpooledUrl
 }
 
+type MigrationEnv = {
+  DATABASE_URL_UNPOOLED?: string
+  VERCEL?: string
+  VERCEL_ENV?: string
+  NEON_PRODUCTION_ENDPOINT?: string
+}
+type MigrationTargetInput = { pooledUrl: string; env: MigrationEnv }
+
+// The URL migrate connects to goes through resolveDatabaseTarget again, so the Vercel checks (including the
+// production endpoint guard) apply to the unpooled URL too, not only to the pooled one the runtime uses.
+export const resolveMigrationTarget = ({ pooledUrl, env }: MigrationTargetInput) => {
+  const url = resolveMigrationUrl({ pooledUrl, unpooledUrl: env.DATABASE_URL_UNPOOLED?.trim() ?? '' })
+  const target = resolveDatabaseTarget({
+    DATABASE_URL: url,
+    VERCEL: env.VERCEL,
+    VERCEL_ENV: env.VERCEL_ENV,
+    NEON_PRODUCTION_ENDPOINT: env.NEON_PRODUCTION_ENDPOINT,
+  })
+  // Errors while building the client (sslrootcert, driver) must name the variable the operator has to fix.
+  return { target, name: url === pooledUrl ? 'DATABASE_URL' : UNPOOLED }
+}
+
 // DDL goes over the direct (unpooled) endpoint when Neon provides one; PgBouncer in transaction mode is for
 // short app queries. Only switch when runtime is already Postgres, so migrate never targets another database.
 // createConnection builds the client with the same explicit-options builder as the runtime connection.
 const openMigrationConnection = (): Connection => {
   if (connection.kind !== 'postgres') return connection
-  const pooledUrl = connection.target.url
-  const url = resolveMigrationUrl({ pooledUrl, unpooledUrl: process.env.DATABASE_URL_UNPOOLED?.trim() ?? '' })
-  const target = resolveDatabaseTarget({ DATABASE_URL: url, VERCEL: process.env.VERCEL, VERCEL_ENV: process.env.VERCEL_ENV })
-  // Errors while building the client (sslrootcert, driver) must name the variable the operator has to fix.
-  return createConnection(target, { max: 1, name: url === pooledUrl ? 'DATABASE_URL' : UNPOOLED })
+  const env = {
+    DATABASE_URL_UNPOOLED: process.env.DATABASE_URL_UNPOOLED,
+    VERCEL: process.env.VERCEL,
+    VERCEL_ENV: process.env.VERCEL_ENV,
+    NEON_PRODUCTION_ENDPOINT: process.env.NEON_PRODUCTION_ENDPOINT,
+  }
+  const { target, name } = resolveMigrationTarget({ pooledUrl: connection.target.url, env })
+  return createConnection(target, { max: 1, name })
 }
 
 const isDirectRun = process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href

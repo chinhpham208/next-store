@@ -35,6 +35,7 @@ Biến môi trường: sao chép `.env.example` thành `.env.local` (mô tả t�
 | `npm run db:generate` | Sinh migration SQL vào `drizzle/` từ `src/db/schema.ts` |
 | `npm run db:migrate` | Chạy migration (dùng `DATABASE_URL_UNPOOLED` nếu có, cùng database với `DATABASE_URL`) |
 | `npm run db:seed` | Seed dữ liệu mẫu (idempotent; quy tắc production bên dưới) |
+| `npm run -s db:seed:sql` | In SQL seed production ra stdout, không kết nối database (xem "Seed production") |
 | `npm run db:setup` | `db:migrate` rồi `db:seed` |
 
 Kiểm tra đầy đủ như CI, chịu được giới hạn thời gian của shell: `bash scripts/verify.sh quick` hoặc `bash scripts/verify.sh full`.
@@ -53,6 +54,15 @@ Tóm tắt [`docs/design.md`](./docs/design.md) §7.
 
 Trên Vercel, `DATABASE_URL` (pooled) và `DATABASE_URL_UNPOOLED` do tích hợp Neon đặt; thiếu `DATABASE_URL` thì build dừng thay vì lặng lẽ dùng PGlite. Kết nối tới host không phải local luôn dùng TLS đã kiểm chứng chỉ (`verify-full`).
 
+Biến môi trường của database trên Vercel:
+
+| Biến | Ai đặt | Production | Preview / Dev | Local, CI |
+|---|---|---|---|---|
+| `DATABASE_URL`, `DATABASE_URL_UNPOOLED` | tích hợp Neon | Neon nhánh chính | Neon branch của nhánh git | trống (PGlite) |
+| `NEON_PRODUCTION_ENDPOINT` | chủ dự án (Vercel → Environment Variables, cả ba environment, không bí mật) | không bắt buộc; có thì phải khớp endpoint của `DATABASE_URL` | **bắt buộc**; phải khác endpoint của `DATABASE_URL` | bỏ trống, không kiểm |
+
+Chặn preview chạm database production (NS-36): giá trị là endpoint id của Neon branch production (`ep-…`, không có `-pooler`, không có tên miền). Khi `VERCEL` có giá trị, mọi kết nối (runtime, `db:migrate` với cả URL unpooled, `db:seed`) đều bị kiểm trước khi mở socket: preview / Dev từ chối nếu biến thiếu hoặc nếu host (bỏ `-pooler`, không phân biệt hoa thường) hay tham số `options=endpoint=` trùng endpoint production; production từ chối nếu biến có mặt mà host không phải endpoint đó. Thông báo lỗi chỉ nêu tên biến, không in URL, host hay mật khẩu.
+
 ## Smoke test và E2E trên URL thật
 
 ```bash
@@ -65,18 +75,51 @@ URL preview của từng deploy có thể bị Vercel Deployment Protection ch�
 
 E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMATION_BYPASS_SECRET`.
 
+Không có `BASE_URL`, `npm run e2e` tự chạy hai `next start` từ cùng bản build: cổng 3100 và cổng 3101 với `DATABASE_URL` trỏ vào cổng đóng (trang lỗi của US-05; nhóm test này bỏ qua khi có `BASE_URL`). `E2E_PORT=<n>` dời cặp cổng sang `n` và `n+1`.
+
+### Tự chạy sau mỗi deploy: check `e2e-preview`
+
+Workflow `Preview E2E` (`.github/workflows/preview-e2e.yml`) chạy smoke + E2E mỗi khi Vercel báo một deployment **không phải Production** thành công (preview của PR, Dev). Kết quả là check `e2e-preview` trên commit đã deploy:
+
+```bash
+gh api repos/chinhpham208/next-store/commits/<sha>/check-runs \
+  --jq '.check_runs[] | select(.name == "e2e-preview") | {status, conclusion, html_url}'
+```
+
+Đọc kết quả:
+
+- **Qua** khi có ít nhất một check `e2e-preview` với `conclusion == "success"` trên đúng SHA. Các lần `skipped` (trạng thái deployment khác `success`) không tính.
+- **Không có check `e2e-preview` nào = chưa qua**, không phải "không áp dụng": có thể Vercel chưa deploy xong, sự kiện không tới, hoặc bước kiểm URL đã chặn.
+- **Không** đặt `e2e-preview` làm required check: check này chỉ xuất hiện sau khi Vercel deploy thành công (không có khi deploy lỗi hay khi sự kiện bị tắt), nên required check sẽ treo PR. Orchestrator tự kiểm theo hai quy tắc trên trước khi merge.
+
+- Chạy từ sự kiện `deployment_status`: GitHub đọc workflow từ chính commit được deploy, nên PR sửa workflow này được kiểm bằng bản của chính nó.
+- Cần bật Vercel → Project → Settings → Git → **deployment_status Events** (bật ngày 2026-11-20, PR #23). Tắt thì Vercel chỉ gửi commit status `Vercel`, không có sự kiện nào và check `e2e-preview` không xuất hiện.
+- Chỉ kiểm URL do Vercel gửi (cả deployment lẫn deployment status đều do `vercel[bot]` tạo), và URL phải là `https://next-store-…-chinhpham208s-projects.vercel.app` hoặc `https://next-store-dev-ginpham.vercel.app`; khác thì job dừng trước khi dùng secret. Production không chạy ở đây.
+- E2E chạy với `--trace off`: trace của Playwright ghi cả header bypass, và report được upload khi bước e2e lỗi.
+- Chạy tay (gỡ lỗi, hoặc khi không có sự kiện): `gh api -X POST repos/chinhpham208/next-store/actions/workflows/preview-e2e.yml/dispatches -f ref=<nhánh> -f 'inputs[base_url]=<URL trong danh sách trên>'`, hoặc nút "Run workflow" trong tab Actions. Test lấy từ `ref`, nên chọn đúng nhánh của deployment.
+
+**Rủi ro đã chấp nhận (audit PR #23):**
+
+- Với `deployment_status`, GitHub đọc workflow từ **chính commit được deploy**, và job có quyền đọc `VERCEL_AUTOMATION_BYPASS_SECRET`. Ai push được một nhánh (hoặc có PR từ fork mà Vercel deploy) đều có thể sửa workflow trong nhánh đó để đọc secret. Chấp nhận được khi repo riêng tư và chỉ có một chủ dự án; Vercel "Git Fork Protection" phải giữ bật.
+- **Xem lại khi thêm collaborator hoặc repo chuyển public.** Cách sửa: Vercel gửi `repository_dispatch` (sự kiện này chỉ chạy workflow trên nhánh mặc định), nên mã dùng secret luôn là bản đã review trên `develop`.
+- Chạy tay có thể trỏ vào URL production dạng hash (không phân biệt được bằng URL); E2E hiện chỉ đọc, và chỉ người có quyền ghi mới dispatch được.
+
 ## Seed production
 
 - `db:seed` với Postgres chỉ tự chạy khi `VERCEL_ENV=preview`. Mọi trường hợp khác (production, biến thiếu hoặc sai chính tả, VPS) bị coi là production và bị từ chối trước mọi câu lệnh DB.
 - `build:vercel` không gọi seed khi `VERCEL_ENV=production`.
-- Production chỉ được seed **một lần**, do chủ dự án chạy thủ công từ bản clone riêng:
+- `db:seed` bị từ chối trên production. Đường **duy nhất** được hỗ trợ để seed production là chạy SQL sinh từ `src/db/seed-data.ts` trong Neon SQL Editor, branch `main`; không ai cầm mật khẩu hay `DATABASE_URL` production trên máy.
 
 ```bash
-vercel link && vercel env pull --environment=production .env.production.local
-set -a; . ./.env.production.local; set +a
-VERCEL_ENV=production npm run db:seed                         # bị từ chối, mã thoát 1
-VERCEL_ENV=production npm run db:seed -- --allow-production   # mã thoát 0
-rm .env.production.local
+SEED_SQL="$(mktemp -t seed-sql.XXXXXX)"
+npm run -s db:seed:sql > "$SEED_SQL"   # chỉ sinh văn bản, không kết nối database nào
+npm test src/db/seed-sql.test.ts       # áp SQL vào PGlite đã migrate: cùng dòng với seed(), idempotent, escape an toàn
+less "$SEED_SQL"                       # đọc lướt trước khi dán: begin; → 2 câu insert … on conflict (slug) do nothing → commit;
 ```
 
-Sau lần đó, dữ liệu production do admin quản lý (từ M5).
+1. Mở Neon Console → SQL Editor, chọn **branch `main`**, dán toàn bộ nội dung file `$SEED_SQL`, chạy.
+2. Nếu lỗi, sửa nguyên nhân rồi chạy lại: câu lệnh idempotent.
+3. Kiểm: `select (select count(*) from public.categories) as categories, (select count(*) from public.products) as products;` phải ra 4 danh mục, 24 sản phẩm.
+4. Xoá file: `rm -f "$SEED_SQL"`.
+
+Câu lệnh dùng `on conflict (slug) do nothing`: chỉ thêm dòng còn thiếu theo slug, không bao giờ ghi đè dòng đã có. Dù vậy, **không** chạy lại trên production sau khi admin đã sửa dữ liệu (từ M5), trừ khi chủ dự án yêu cầu: sản phẩm admin đã xoá sẽ bị thêm lại.

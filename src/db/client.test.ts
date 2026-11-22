@@ -8,6 +8,7 @@ import {
   createConnection,
   describeError,
   describeTarget,
+  neonEndpointIds,
   parsePostgresUrl,
   resolveDatabaseTarget,
   resolveSsl,
@@ -79,9 +80,11 @@ describe('resolveDatabaseTarget', () => {
     )
   })
   it.each(['production', 'preview', 'development'])('accepts VERCEL_ENV=%s on Vercel', (vercelEnv) => {
-    expect(resolveDatabaseTarget({ VERCEL: '1', VERCEL_ENV: vercelEnv, DATABASE_URL: SECRET_URL }).kind).toBe(
-      'postgres',
-    )
+    // Production may omit the variable; preview and development must name an endpoint other than theirs.
+    const NEON_PRODUCTION_ENDPOINT = vercelEnv === 'production' ? undefined : 'ep-unrelated-main'
+    expect(
+      resolveDatabaseTarget({ VERCEL: '1', VERCEL_ENV: vercelEnv, DATABASE_URL: SECRET_URL, NEON_PRODUCTION_ENDPOINT }).kind,
+    ).toBe('postgres')
   })
   it.each([
     'mysql://shop:s3cr3t-pass@h/db',
@@ -438,6 +441,125 @@ describe('connection options passed to postgres()', () => {
   })
 })
 
+// Fake ids only: the real production endpoint lives in Vercel, never in the repo.
+const PROD = 'ep-prod-main-a1b2c3d4'
+const BRANCH = 'ep-fake-dew-a1b2c3d4'
+const neon = (id: string, query = 'sslmode=require') =>
+  `postgresql://neondb_owner:npg_FakePass123@${id}.ap-southeast-1.aws.neon.tech/neondb?${query}`
+const onVercel = (VERCEL_ENV: string, DATABASE_URL: string, NEON_PRODUCTION_ENDPOINT?: string) => () =>
+  resolveDatabaseTarget({ VERCEL: '1', VERCEL_ENV, DATABASE_URL, NEON_PRODUCTION_ENDPOINT })
+
+describe('production endpoint guard (NS-36)', () => {
+  it('lets a preview use its own branch endpoint', () => {
+    expect(onVercel('preview', neon(`${BRANCH}-pooler`), PROD)()).toMatchObject({ kind: 'postgres' })
+  })
+  it.each([
+    ['the pooled production host', neon(`${PROD}-pooler`)],
+    ['the direct production host', neon(PROD)],
+    ['an upper-case production host', neon(PROD.toUpperCase())],
+    ['an upper-case pooled production host', neon(`${PROD}-POOLER`)],
+    ['options=endpoint on another host', neon(BRANCH, `sslmode=require&options=endpoint%3D${PROD}`)],
+    ['options=endpoint with -pooler on another host', neon(BRANCH, `sslmode=require&options=endpoint%3D${PROD}-pooler`)],
+  ])('refuses a preview that points at %s', (_label, url) => {
+    expect(onVercel('preview', url, PROD)).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+  })
+  it('refuses a preview when NEON_PRODUCTION_ENDPOINT is missing or blank', () => {
+    expect(onVercel('preview', neon(`${BRANCH}-pooler`))).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+    expect(onVercel('preview', neon(`${BRANCH}-pooler`), '')).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+    expect(onVercel('preview', neon(`${BRANCH}-pooler`), '   ')).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+  })
+  it('refuses a preview on a non-Neon host when NEON_PRODUCTION_ENDPOINT is missing', () => {
+    expect(onVercel('preview', 'postgres://u:p@db.example.com/app?sslmode=require')).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+  })
+  it('treats VERCEL_ENV=development like preview', () => {
+    expect(onVercel('development', neon(PROD), PROD)).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+    expect(onVercel('development', neon(BRANCH))).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+    expect(onVercel('development', neon(`${BRANCH}-pooler`), PROD)()).toMatchObject({ kind: 'postgres' })
+  })
+  it.each([`${PROD}-pooler`, `${PROD}.ap-southeast-1.aws.neon.tech`, 'main', 'ep-prod main', 'EP-PROD', 'ep-', 'ep-prod-'])(
+    'refuses a malformed NEON_PRODUCTION_ENDPOINT %j in every environment',
+    (value) => {
+      expect(onVercel('preview', neon(BRANCH), value)).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+      expect(onVercel('production', neon(PROD), value)).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+    },
+  )
+  it('accepts production on the declared endpoint and trims the value', () => {
+    expect(onVercel('production', neon(`${PROD}-pooler`), ` ${PROD} `)()).toMatchObject({ kind: 'postgres' })
+    expect(onVercel('production', neon(PROD.toUpperCase()), PROD)()).toMatchObject({ kind: 'postgres' })
+  })
+  it.each([
+    ['another endpoint', neon(`${BRANCH}-pooler`)],
+    ['a non-Neon host', 'postgres://u:p@db.example.com/app?sslmode=require'],
+    ['options=endpoint naming another endpoint', neon(`${PROD}-pooler`, `sslmode=require&options=endpoint%3D${BRANCH}`)],
+  ])('refuses production on %s', (_label, url) => {
+    expect(onVercel('production', url, PROD)).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+  })
+  it('does not require the variable on production', () => {
+    expect(onVercel('production', neon(`${PROD}-pooler`))()).toMatchObject({ kind: 'postgres' })
+    expect(onVercel('production', neon(`${PROD}-pooler`), '  ')()).toMatchObject({ kind: 'postgres' })
+  })
+  it('does not check outside Vercel', () => {
+    expect(resolveDatabaseTarget({ DATABASE_URL: neon(PROD), NEON_PRODUCTION_ENDPOINT: PROD })).toMatchObject({
+      kind: 'postgres',
+    })
+    expect(resolveDatabaseTarget({ DATABASE_URL: neon(PROD), NEON_PRODUCTION_ENDPOINT: 'main' })).toMatchObject({
+      kind: 'postgres',
+    })
+  })
+  it('does not check PGlite fallbacks outside Vercel', () => {
+    expect(resolveDatabaseTarget({ NEON_PRODUCTION_ENDPOINT: 'main' })).toMatchObject({ kind: 'pglite' })
+  })
+  it.each([
+    ['production endpoint on preview', () => onVercel('preview', neon(`${PROD}-pooler`), PROD)()],
+    ['options endpoint on preview', () => onVercel('preview', neon(BRANCH, `sslmode=require&options=endpoint%3D${PROD}`), PROD)()],
+    ['missing variable on preview', () => onVercel('preview', neon(`${BRANCH}-pooler`))()],
+    ['malformed variable', () => onVercel('preview', neon(BRANCH), `${PROD}.ap-southeast-1.aws.neon.tech`)()],
+    ['mismatch on production', () => onVercel('production', neon(`${BRANCH}-pooler`), PROD)()],
+  ])('never echoes the URL, host, endpoint or password (%s)', (_label, run) => {
+    try {
+      run()
+    } catch (error) {
+      expect(String(error)).toMatch(/NEON_PRODUCTION_ENDPOINT/)
+      expect(String(error)).not.toMatch(/npg_FakePass123|neondb_owner|neon\.tech|ep-prod|ep-fake/)
+      return
+    }
+    throw new Error('expected a refusal')
+  })
+  it('explains the refusal in Vietnamese', () => {
+    expect(onVercel('preview', neon(`${PROD}-pooler`), PROD)).toThrow(/Từ chối/)
+    expect(onVercel('preview', neon(BRANCH))).toThrow(/Từ chối/)
+    expect(onVercel('production', neon(BRANCH), PROD)).toThrow(/Từ chối/)
+    expect(onVercel('preview', neon(BRANCH), 'main')).toThrow(/Từ chối/)
+  })
+  it('forwards NEON_PRODUCTION_ENDPOINT from process.env to the runtime connection', async () => {
+    vi.resetModules()
+    vi.stubEnv('VERCEL', '1')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    vi.stubEnv('NEON_PRODUCTION_ENDPOINT', PROD)
+    vi.stubEnv('DATABASE_URL', neon(`${BRANCH}-pooler`))
+    const saved = globalThis.nextStoreDbConnection
+    globalThis.nextStoreDbConnection = undefined
+    try {
+      // postgres-js connects lazily: loading the module builds the client without opening a socket.
+      const fresh = await import('@/db/client')
+      expect(fresh.connection.target).toEqual({ kind: 'postgres', url: neon(`${BRANCH}-pooler`) })
+      await fresh.closeConnection()
+    } finally {
+      globalThis.nextStoreDbConnection = saved
+    }
+  })
+  it('neonEndpointIds lists the host endpoint and the options endpoint once each', () => {
+    expect(
+      neonEndpointIds(parsePostgresUrl(neon(`${BRANCH}-pooler`, `sslmode=require&options=endpoint%3D${PROD}`))),
+    ).toEqual([BRANCH, PROD])
+    expect(neonEndpointIds(parsePostgresUrl(neon(`${PROD}-pooler`, `sslmode=require&options=endpoint%3D${PROD}`)))).toEqual([
+      PROD,
+    ])
+    expect(neonEndpointIds(parsePostgresUrl(neon(PROD.toUpperCase())))).toEqual([PROD])
+    expect(neonEndpointIds(parsePostgresUrl('postgres://u:p@db.example.com/app?sslmode=require'))).toEqual([])
+  })
+})
+
 // The exact shapes the Vercel ↔ Neon Marketplace integration injects (credentials are fake).
 describe('Neon integration URLs (Vercel Marketplace, ap-southeast-1)', () => {
   const NEON_POOLED = 'postgresql://neondb_owner:npg_FakePass123@ep-fake-dew-a1b2c3d4-pooler.ap-southeast-1.aws.neon.tech/neondb'
@@ -448,12 +570,17 @@ describe('Neon integration URLs (Vercel Marketplace, ap-southeast-1)', () => {
   ] as const
 
   it.each(NEON_SHAPES)('accepts %s on Vercel preview as a Postgres target', (_label, url) => {
-    expect(resolveDatabaseTarget({ DATABASE_URL: url, VERCEL: '1', VERCEL_ENV: 'preview' })).toEqual({
+    expect(
+      resolveDatabaseTarget({ DATABASE_URL: url, VERCEL: '1', VERCEL_ENV: 'preview', NEON_PRODUCTION_ENDPOINT: PROD }),
+    ).toEqual({
       kind: 'postgres',
       url,
     })
   })
   it.each(NEON_SHAPES)('connects with verified TLS and channel binding honoured for %s', async (_label, url, binding) => {
+    // postgres-js reads PGCHANNELBINDING when the URL has no channel_binding; the 'prefer' default must not depend on
+    // the shell that runs the tests.
+    vi.stubEnv('PGCHANNELBINDING', '')
     vi.stubEnv('PGSSLMODE', 'disable')
     vi.stubEnv('NODE_TLS_REJECT_UNAUTHORIZED', '0')
     const { passed, effective } = await connect(url)
@@ -471,6 +598,11 @@ describe('Neon integration URLs (Vercel Marketplace, ap-southeast-1)', () => {
     expect(effective.ssl).toEqual(VERIFIED)
     // postgres-js defaults to 'prefer' (SCRAM-SHA-256-PLUS when offered); `require` must reach the driver as is.
     expect(effective.channel_binding).toBe(binding ?? 'prefer')
+  })
+  it('lets an explicit channel_binding in the URL win over PGCHANNELBINDING', async () => {
+    vi.stubEnv('PGCHANNELBINDING', 'disable')
+    const { passed } = await connect(`${NEON_POOLED}?sslmode=require&channel_binding=require`)
+    expect(passed?.[0]).toHaveProperty('channel_binding', 'require')
   })
   it('still rejects a duplicated sslmode on a Neon URL', () => {
     const url = `${NEON_POOLED}?sslmode=require&channel_binding=require&sslmode=disable`

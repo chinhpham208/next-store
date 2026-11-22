@@ -39,6 +39,8 @@ jobs:
         run: npm run build
       - name: smoke
         run: npm run smoke
+      - name: test:scripts
+        run: npm run test:scripts
       - name: install Playwright Chromium
         run: npx playwright install --with-deps chromium
       - name: e2e

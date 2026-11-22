@@ -1,5 +1,16 @@
-import { describe, expect, it } from 'vitest'
-import { resolveMigrationUrl } from '@/db/migrate'
+import postgres from 'postgres'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { resolveMigrationTarget, resolveMigrationUrl } from '@/db/migrate'
+
+// Spy on the real factory so a refusal can be shown to happen before any client exists.
+vi.mock('postgres', async (importOriginal) => {
+  const actual = (await importOriginal<{ default: typeof postgres }>()).default
+  return { default: Object.assign(vi.fn(actual), actual) }
+})
+const postgresFactory = vi.mocked(postgres)
+
+beforeEach(() => postgresFactory.mockClear())
+afterEach(() => vi.unstubAllEnvs())
 
 const POOLED = 'postgres://shop:s3cr3t-pass@ep-cool-x-123-pooler.eu-central-1.aws.neon.tech/neondb?sslmode=require'
 const DIRECT = 'postgres://shop:s3cr3t-pass@ep-cool-x-123.eu-central-1.aws.neon.tech/neondb?sslmode=require'
@@ -99,4 +110,60 @@ describe('resolveMigrationUrl with Neon integration URLs', () => {
     expect(run).toThrow(MISMATCH)
     expect(run).not.toThrow(/npg_FakePass123|neon\.tech/)
   })
+})
+
+// Fake ids only: the real production endpoint lives in Vercel, never in the repo.
+describe('production endpoint guard on the migration path (NS-36)', () => {
+  const PROD = 'ep-prod-main-a1b2c3d4'
+  const BRANCH = 'ep-fake-dew-a1b2c3d4'
+  const neon = (host: string) =>
+    `postgresql://neondb_owner:npg_FakePass123@${host}.ap-southeast-1.aws.neon.tech/neondb?sslmode=require`
+  const preview = (NEON_PRODUCTION_ENDPOINT?: string) => ({ VERCEL: '1', VERCEL_ENV: 'preview', NEON_PRODUCTION_ENDPOINT })
+
+  it('lets a preview migrate over the direct endpoint of its own branch', () => {
+    const resolved = resolveMigrationTarget({
+      pooledUrl: neon(`${BRANCH}-pooler`),
+      env: { ...preview(PROD), DATABASE_URL_UNPOOLED: neon(BRANCH) },
+    })
+    expect(resolved).toEqual({ target: { kind: 'postgres', url: neon(BRANCH) }, name: 'DATABASE_URL_UNPOOLED' })
+  })
+  it('checks the unpooled URL against the production endpoint', () => {
+    const run = () =>
+      resolveMigrationTarget({ pooledUrl: neon(`${PROD}-pooler`), env: { ...preview(PROD), DATABASE_URL_UNPOOLED: neon(PROD) } })
+    expect(run).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+    expect(run).not.toThrow(/npg_FakePass123|neon\.tech|ep-prod/)
+  })
+  it('checks the pooled URL when DATABASE_URL_UNPOOLED is unset', () => {
+    expect(() => resolveMigrationTarget({ pooledUrl: neon(`${PROD}-pooler`), env: preview(PROD) })).toThrow(
+      /NEON_PRODUCTION_ENDPOINT/,
+    )
+  })
+  it('refuses a preview migration when NEON_PRODUCTION_ENDPOINT is missing', () => {
+    const run = () =>
+      resolveMigrationTarget({ pooledUrl: neon(`${BRANCH}-pooler`), env: { ...preview(), DATABASE_URL_UNPOOLED: neon(BRANCH) } })
+    expect(run).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+  })
+
+  const PROD_ENV = {
+    VERCEL: '1',
+    VERCEL_ENV: 'preview',
+    NEON_PRODUCTION_ENDPOINT: PROD,
+    DATABASE_URL: neon(`${PROD}-pooler`),
+    DATABASE_URL_UNPOOLED: neon(PROD),
+  }
+  it.each(['@/db/migrate', '@/db/seed'])(
+    'refuses to load %s for a preview against the production endpoint before constructing a client',
+    async (entry) => {
+      vi.resetModules()
+      for (const [key, value] of Object.entries(PROD_ENV)) vi.stubEnv(key, value)
+      const saved = globalThis.nextStoreDbConnection
+      globalThis.nextStoreDbConnection = undefined
+      try {
+        await expect(import(entry)).rejects.toThrow(/trùng NEON_PRODUCTION_ENDPOINT/)
+        expect(postgresFactory).not.toHaveBeenCalled()
+      } finally {
+        globalThis.nextStoreDbConnection = saved
+      }
+    },
+  )
 })
