@@ -2,6 +2,7 @@ import Link from "next/link";
 import { buttonVariants } from "@/components/ui/button";
 import { Container } from "@/components/ui/container";
 import { CursorBlock } from "@/components/ui/cursor-block";
+import { LatestPosts } from "@/features/blog";
 import { getFeaturedProducts, ProductGrid } from "@/features/products";
 
 const FEATURED_LABEL = "Sản phẩm nổi bật";
@@ -45,6 +46,8 @@ export default async function HomePage() {
           </div>
         </Container>
       </section>
+
+      <LatestPosts />
     </>
   );
 }
