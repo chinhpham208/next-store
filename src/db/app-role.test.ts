@@ -234,6 +234,30 @@ describe('scripts/sql/app-role.sql on a migrated database (NS-60)', () => {
     )
     expect(rows).toEqual([])
   })
+
+  // Audit PR #43 L-1 (NS-75): pg_db_role_setting is shared by the cluster, so a setting the app role made for another
+  // database must go too, not only the one of current_database(). PGlite ships template1 as that other database.
+  it('reports and removes a setting the app role made for another database', async () => {
+    await asApp(client, () => client.exec('ALTER ROLE next_store_app IN DATABASE template1 SET statement_timeout = 0'))
+    const otherDatabaseSettings = async () =>
+      (
+        await client.query<{ datname: string; setconfig: string[] }>(
+          `SELECT d.datname, s.setconfig FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase
+           WHERE s.setrole = 'next_store_app'::regrole AND d.datname <> current_database()`,
+        )
+      ).rows
+    try {
+      expect(await otherDatabaseSettings()).toEqual([{ datname: 'template1', setconfig: ['statement_timeout=0'] }])
+      expect(await check(client)).toMatchObject({ statement_timeout_not_6s: false, role_settings_not_exact: true })
+      await applyAppRole(client)
+      expect(await otherDatabaseSettings()).toEqual([])
+      expect(await check(client)).toEqual(DML_ONLY)
+    } finally {
+      // Left behind on failure, the row would make every later check in this file report role_settings_not_exact.
+      await client.exec('ALTER ROLE next_store_app IN DATABASE template1 RESET ALL')
+    }
+  })
+
   it('reports and removes another role-wide setting the app role made on itself', async () => {
     await asApp(client, () => client.exec('ALTER ROLE next_store_app SET search_path = pg_temp, public'))
     expect(await check(client)).toMatchObject({ statement_timeout_not_6s: false, role_settings_not_exact: true })
