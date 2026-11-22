@@ -1,5 +1,6 @@
 import 'server-only'
-import { db, type Db } from '@/db/client'
+import { runtime, type Db } from '@/db/client'
+import { MAX_QUERY_WAIT_MS } from '@/db/limits'
 
 /** `<domain>.<operation>`: a constant in code, never built from user input — it is printed as is. */
 export type DbQueryName = `${string}.${string}`
@@ -14,7 +15,7 @@ type DbQueryInput<T> = {
 // 10 s to connect (connect_timeout), so a page gives up well before that.
 const DEFAULT_TIMEOUT_MS = 5000
 const MIN_TIMEOUT_MS = 100
-const MAX_TIMEOUT_MS = 10_000
+const MAX_TIMEOUT_MS = MAX_QUERY_WAIT_MS
 // Digits only: Number() would also accept '1e3', '0x3e8', ' 1000' and '1000.5'.
 const TIMEOUT_DIGITS = /^[0-9]+$/
 
@@ -98,11 +99,11 @@ const TIMED_OUT = Symbol('timed out')
 /**
  * The only way code outside src/db reaches the database.
  *
- * A timeout abandons the query, it does not cancel it, and the connection is NOT closed (audit PR #38 M1):
- * connect_timeout only covers connecting and idle_timeout only an idle connection, so a connection waiting on an
- * answer keeps its pool slot until the query finishes or the socket dies, and further queries queue behind it.
- * A hang on the server side is bounded by statement_timeout of the app role (NS-36, M3 Task 4–5); a network that
- * drops packets on open connections needs the client to be recycled, tracked in a follow-up ticket (ADR-0011).
+ * A timeout abandons the query without cancelling it, and recycles the client the query ran on (ADR-0013): a
+ * network that swallows packets on open connections would otherwise keep every pool slot until the socket dies
+ * (audit PR #38 M1), since postgres-js has no read limit on a connected socket. The next query gets a new client;
+ * queries still running on the old one keep up to MAX_QUERY_WAIT_MS to finish. A hang on the server side is also
+ * bounded by statement_timeout of the app role (ADR-0010).
  */
 export const dbQuery = async <T>({ name, run, timeoutMs }: DbQueryInput<T>): Promise<T> => {
   const limit = timeoutMs === undefined ? resolveQueryTimeout(process.env.DB_QUERY_TIMEOUT_MS) : clampTimeout(timeoutMs)
@@ -112,8 +113,10 @@ export const dbQuery = async <T>({ name, run, timeoutMs }: DbQueryInput<T>): Pro
     // A pending limit must never keep a CLI script or a test worker alive.
     timer.unref?.()
   })
+  // Read once: a timeout must recycle the client this query used, not one that replaced it meanwhile.
+  const used = runtime.current
   // The executor turns a synchronous throw of `run` into a rejection; resolve() also runs a Drizzle builder's then.
-  const query = new Promise<T>((resolve) => resolve(run(db)))
+  const query = new Promise<T>((resolve) => resolve(run(used.db)))
   let result: T | typeof TIMED_OUT
   try {
     // race() keeps a handler on `query`, so a rejection that arrives after the timeout is not unhandled.
@@ -123,6 +126,9 @@ export const dbQuery = async <T>({ name, run, timeoutMs }: DbQueryInput<T>): Pro
   } finally {
     clearTimeout(timer)
   }
-  if (result === TIMED_OUT) throw queryTimedOut(name)
+  if (result === TIMED_OUT) {
+    runtime.recycle(used)
+    throw queryTimedOut(name)
+  }
   return result
 }

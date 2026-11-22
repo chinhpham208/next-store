@@ -180,8 +180,8 @@ describe('production endpoint guard on the migration path (NS-36)', () => {
       DATABASE_APP_PASSWORD: 'npg_AppFake456',
     }
     for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value)
-    const saved = globalThis.nextStoreDbConnection
-    globalThis.nextStoreDbConnection = undefined
+    const saved = globalThis.nextStoreDbRuntime
+    globalThis.nextStoreDbRuntime = undefined
     try {
       const { openMigrationConnection } = await import('@/db/migrate')
       const { closeConnection, connection, describeTarget } = await import('@/db/client')
@@ -197,7 +197,7 @@ describe('production endpoint guard on the migration path (NS-36)', () => {
       await closeConnection(migration)
       await closeConnection(connection)
     } finally {
-      globalThis.nextStoreDbConnection = saved
+      globalThis.nextStoreDbRuntime = saved
     }
   })
 
@@ -206,13 +206,13 @@ describe('production endpoint guard on the migration path (NS-36)', () => {
     async (entry) => {
       vi.resetModules()
       for (const [key, value] of Object.entries(PROD_ENV)) vi.stubEnv(key, value)
-      const saved = globalThis.nextStoreDbConnection
-      globalThis.nextStoreDbConnection = undefined
+      const saved = globalThis.nextStoreDbRuntime
+      globalThis.nextStoreDbRuntime = undefined
       try {
         await expect(import(entry)).rejects.toThrow(/trùng NEON_PRODUCTION_ENDPOINT/)
         expect(postgresFactory).not.toHaveBeenCalled()
       } finally {
-        globalThis.nextStoreDbConnection = saved
+        globalThis.nextStoreDbRuntime = saved
       }
     },
   )
