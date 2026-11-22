@@ -21,6 +21,9 @@ SEG_PORT=3191
 NOINDEX_PORT=3190
 SITEMAP_PORT=3189
 OG_PORT=3188
+SOFT_BLOG_PORT=3187
+SOFT_OG_PORT=3186
+POST_SEG_PORT=3185
 
 TMP=$(mktemp -d)
 PIDS=()
@@ -43,8 +46,8 @@ EOF
 chmod +x "$TMP/bin/curl"
 
 # start_server <port> <header-file> [status] [404-body] [soft-regex] [hard-404-regex]: answers / and the smoke's
-# product page (and its RSC / segment prefetch forms) with the default SMOKE_TEXT, /blog and the smoke's post with an
-# article and its h1, the smoke's listing paths with the labelled grid (or with <status>, e.g. 401 like Vercel Deployment Protection), everything else with 404 and
+# product page (and its RSC / segment prefetch forms) with the default SMOKE_TEXT, /blog and the smoke's post (and its
+# RSC / segment prefetch forms) with an article and its h1, the smoke's listing paths with the labelled grid (or with <status>, e.g. 401 like Vercel Deployment Protection), everything else with 404 and
 # <404-body> (default: the app's Vietnamese page). URLs matching <soft-regex> answer 200 with the not-found page, like
 # a page-level notFound() under Cache Components (K3) or a proxy that failed open; URLs matching <hard-404-regex>
 # answer 404 with the proxy's rewrite header even when they are a known product's. /sitemap.xml and /robots.txt
@@ -67,7 +70,7 @@ start_server() {
       if (images.includes(req.url)) { res.writeHead(Number(ogStatus), { "content-type": Number(ogStatus) === 200 ? "image/png" : "text/html" }); res.end("png"); return }
       if (hard && new RegExp(hard).test(req.url)) { res.writeHead(404, { "content-type": "text/html; charset=utf-8", "x-middleware-rewrite": "/_khong-tim-thay" }); res.end(body) }
       else if (req.url === "/" || ["/products/ao-404-not-found", "/products/ao-404-not-found?_rsc", "/products/ao-404-not-found.rsc", "/products/ao-404-not-found.segments/_tree.segment.rsc"].includes(req.url)) { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end(`<meta property="og:site_name" content="next-store"/>${og(req.url === "/" ? images[0] : images[1])}<h1>Áo thun 404 Not Found</h1>`) }
-      else if (req.url === "/blog" || req.url === "/blog/chao-mung-den-next-store") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end(`${og(images[2])}<article><h1>Chào mừng đến next-store</h1></article>`) }
+      else if (["/blog", "/blog/chao-mung-den-next-store", "/blog/chao-mung-den-next-store?_rsc", "/blog/chao-mung-den-next-store.rsc", "/blog/chao-mung-den-next-store.segments/_tree.segment.rsc"].includes(req.url)) { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end(`${og(images[2])}<article><h1>Chào mừng đến next-store</h1></article>`) }
       else if (req.url === "/products" || req.url === "/products?page=abc&sort=xyz") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<ul aria-label=\"Danh sách sản phẩm\"></ul>") }
       else if (soft && new RegExp(soft).test(req.url)) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
       else { res.writeHead(404, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
@@ -253,3 +256,32 @@ run BASE_URL="http://127.0.0.1:$OG_PORT" -- bash scripts/smoke.sh
 [ "$CODE" = 1 ] || fail og-image "ảnh trả 500: thoát $CODE, cần 1"
 grep -qF 'GET /opengraph-image?a1b2c3 (og:image của /) trả 500, cần 200' "$TMP/out" || fail og-image "thông báo không nêu ảnh lỗi"
 echo "ok og-image"
+
+# soft-404-blog (US-10, ADR-0012): an unknown blog slug answered 200 with the not-found page (page-level notFound(),
+# K3) fails smoke, without any warm-up: the blog branch of the proxy has no database lookup to wait for.
+start_server "$SOFT_BLOG_PORT" "$TMP/soft-blog-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/blog/khong-ton-tai-[0-9]'
+run BASE_URL="http://127.0.0.1:$SOFT_BLOG_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail soft-404-blog "thoát $CODE, cần 1"
+grep -qF '(bài: slug mới) trả 200 ngay lần đầu' "$TMP/out" || fail soft-404-blog "thông báo không nêu slug bài trả 200"
+[ "$(grep -c 'blog/smoke-warmup-' "$TMP/curl-calls")" = 0 ] || fail soft-404-blog "có request warm-up cho blog"
+grep -qF -- "--url http://127.0.0.1:$SOFT_BLOG_PORT/blog/constructor" "$TMP/curl-calls" || fail soft-404-blog "không kiểm /blog/constructor"
+echo "ok soft-404-blog"
+
+# soft-og (US-11, K10): the open graph image of an unknown slug answered 200 fails smoke. The unknown path keeps the
+# hash suffix of the real og:image, with the slug swapped.
+start_server "$SOFT_OG_PORT" "$TMP/soft-og-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/blog/khong-ton-tai-og-[0-9-]+/opengraph-image-16g1u1'
+run BASE_URL="http://127.0.0.1:$SOFT_OG_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail soft-og "thoát $CODE, cần 1"
+grep -qF '(ảnh OG: slug bài lạ) trả 200 ngay lần đầu' "$TMP/out" || fail soft-og "thông báo không nêu ảnh OG của slug bài lạ"
+grep -qE -- '--url http://127\.0\.0\.1:[0-9]+/products/khong-ton-tai-og-[0-9-]+/opengraph-image-16g1u1\?d4e5f6' "$TMP/curl-calls" ||
+  fail soft-og "không kiểm ảnh OG có hậu tố băm của slug sản phẩm lạ"
+grep -qE -- '--url http://127\.0\.0\.1:[0-9]+/products/khong-ton-tai-og-[0-9-]+-2/opengraph-image( |$)' "$TMP/curl-calls" ||
+  fail soft-og "không kiểm ảnh OG không hậu tố băm của slug sản phẩm lạ"
+echo "ok soft-og"
+
+# known-post-segment-404: a known post's segment prefetch path rewritten to not-found fails smoke, like a product's.
+start_server "$POST_SEG_PORT" "$TMP/post-seg-headers" 200 "<h1>Không tìm thấy trang</h1>" "" '^/blog/chao-mung-den-next-store\.segments/'
+run BASE_URL="http://127.0.0.1:$POST_SEG_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail known-post-segment-404 "thoát $CODE, cần 1"
+grep -qF '(bài: segment prefetch dạng đường dẫn) bị proxy rewrite sang not-found' "$TMP/out" || fail known-post-segment-404 "thông báo không nêu segment prefetch của bài"
+echo "ok known-post-segment-404"

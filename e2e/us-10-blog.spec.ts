@@ -8,10 +8,6 @@ const NOT_FOUND_TITLE = 'Không tìm thấy trang · next-store'
 const NEWEST = POSTS_NEWEST_FIRST[0]!
 const KNOWN_SLUG = NEWEST.slug
 
-// Until the proxy answers unknown blog slugs (NS-67, M3 Task 13), the page's notFound() answers 200 on the first hit
-// (M3 K3), so these tests are marked fixme rather than left red. NS-67 removes this line.
-const AWAITS_PROXY_404 = 'Chờ NS-67 (Task 13): proxy chưa trả 404 thật cho slug bài lạ, lần đầu vẫn 200 (K3)'
-
 test.describe('Danh sách và nội dung', () => {
   test.skip(({ isMobile }) => isMobile, VIEWPORT_INDEPENDENT)
 
@@ -80,7 +76,6 @@ test.describe('Danh sách và nội dung', () => {
 
 test.describe('404', () => {
   test.skip(({ isMobile }) => isMobile, VIEWPORT_INDEPENDENT)
-  test.fixme(true, AWAITS_PROXY_404)
 
   test('US-10: /blog/khong-ton-tai trả 404 và có link về trang chủ', async ({ page }) => {
     const response = await page.goto('/blog/khong-ton-tai')
@@ -108,7 +103,10 @@ test.describe('404', () => {
   }
 
   test('US-10: slug sai định dạng trả 404', async ({ request }) => {
-    for (const slug of [KNOWN_SLUG.toUpperCase(), KNOWN_SLUG.replaceAll('-', '%2D'), 'constructor', `${KNOWN_SLUG}.json`]) {
+    // One `%2D` is enough: the proxy does not decode, so a percent-encoded spelling of a real post is a 404, not a
+    // duplicate URL of it (M3 Task 13).
+    const encoded = [KNOWN_SLUG.replace('-', '%2D'), KNOWN_SLUG.replaceAll('-', '%2D')]
+    for (const slug of [KNOWN_SLUG.toUpperCase(), ...encoded, 'constructor', `${KNOWN_SLUG}.json`]) {
       expect((await request.get(`/blog/${slug}`)).status(), slug).toBe(404)
     }
   })

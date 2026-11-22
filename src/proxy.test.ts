@@ -1,6 +1,7 @@
 import { unstable_doesMiddlewareMatch } from 'next/experimental/testing/server'
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { isPostSlug } from '@/features/blog/proxy-api'
 import { isKnownProductSlug } from '@/features/products/proxy-api'
 import { config, proxy } from './proxy'
 
@@ -11,7 +12,16 @@ vi.mock('@/features/products/proxy-api', async (importOriginal) => ({
   isKnownProductSlug: vi.fn(),
 }))
 
+// The real registry check, wrapped only to see that the blog branch asks it (and nothing else).
+vi.mock('@/features/blog/proxy-api', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/features/blog/proxy-api')>()
+  return { ...real, isPostSlug: vi.fn(real.isPostSlug) }
+})
+
 const known = vi.mocked(isKnownProductSlug)
+const postCheck = vi.mocked(isPostSlug)
+const KNOWN_POST = '/blog/chao-mung-den-next-store'
+const KNOWN_PRODUCT = '/products/ao-git-push-force'
 const call = (path: string) => proxy(new NextRequest(`https://shop.test${path}`))
 const NOT_FOUND = 'https://shop.test/_khong-tim-thay'
 // What the audit asked for (PR #20): well under the 10 s connect_timeout of the database client.
@@ -19,6 +29,19 @@ const LOOKUP_BOUND_MS = 500
 
 const isPassThrough = (response: Response) =>
   response.headers.get('x-middleware-next') === '1' && response.headers.get('x-middleware-rewrite') === null
+const isNotFound = (response: Response) => response.headers.get('x-middleware-rewrite') === NOT_FOUND
+
+// Next.js 16.4.6 transport forms (build/analysis/get-page-static-info.js; shapes from .next/server/app/products/):
+// Vercel hands the proxy the full path (audit M1), `next start` strips only the final `.rsc` (measured).
+const TRANSPORT_SUFFIXES = [
+  '.rsc',
+  '.segments/_tree.segment.rsc',
+  '.segments/_tree.segment',
+  '.segments/!KHNob3Ap/products/$d$slug/__PAGE__.segment',
+  '.segments/_full.segment.rsc',
+  '.segments/!KHNob3Ap.segment.rsc',
+  '.segments/!KHNob3Ap/products/$d$slug/__PAGE__.segment.rsc',
+]
 
 let log: ReturnType<typeof vi.spyOn>
 
@@ -61,18 +84,6 @@ describe('proxy', () => {
     expect(known).not.toHaveBeenCalled()
     expect(log).not.toHaveBeenCalled()
   })
-
-  // Next.js 16.4.6 transport forms (build/analysis/get-page-static-info.js; shapes from .next/server/app/products/):
-  // Vercel hands the proxy the full path (audit M1), `next start` strips only the final `.rsc` (measured).
-  const TRANSPORT_SUFFIXES = [
-    '.rsc',
-    '.segments/_tree.segment.rsc',
-    '.segments/_tree.segment',
-    '.segments/!KHNob3Ap/products/$d$slug/__PAGE__.segment',
-    '.segments/_full.segment.rsc',
-    '.segments/!KHNob3Ap.segment.rsc',
-    '.segments/!KHNob3Ap/products/$d$slug/__PAGE__.segment.rsc',
-  ]
 
   it.each(TRANSPORT_SUFFIXES)('passes a known slug in the %s transport form through', async (suffix) => {
     known.mockResolvedValue(true)
@@ -148,9 +159,142 @@ describe('proxy', () => {
   })
 })
 
+// Blog (ADR-0012, Task 13 M3): the slug is checked against the static registry only. No database, no timer, no log,
+// so the answer is the same with the database down and an unknown slug never reaches the page (K3: 200 + cache entry).
+describe('proxy: blog', () => {
+  beforeEach(() => {
+    known.mockRejectedValue(new Error('db down'))
+  })
+
+  it('lets a known blog post through without touching the database', async () => {
+    vi.useFakeTimers()
+    const response = await call(KNOWN_POST)
+    expect(isPassThrough(response)).toBe(true)
+    expect(postCheck).toHaveBeenCalledWith('chao-mung-den-next-store')
+    expect(known).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    '/blog/khong-ton-tai',
+    '/blog/Chao-Mung-Den-Next-Store',
+    '/blog/CHAO-MUNG-DEN-NEXT-STORE',
+    '/blog/chao%2Dmung-den-next-store',
+    '/blog/chao%2Dmung%2Dden%2Dnext%2Dstore',
+    '/blog/chao-mung-den-next-store%00',
+    '/blog/chao_mung',
+    '/blog/constructor',
+    '/blog/__proto__',
+    '/blog/toString',
+    '/blog/hasOwnProperty',
+    '/blog/chao-mung-den-next-store.json',
+    '/blog/chao-mung-den-next-store.rsc.rsc',
+    '/blog/chao-mung-den-next-store.segment.rsc',
+    '/blog/chao-mung-den-next-store.segments/_tree',
+    `/blog/${'a'.repeat(81)}`,
+  ])('rewrites an unknown blog slug to the not-found path without touching the database (%s)', async (path) => {
+    vi.useFakeTimers()
+    const response = await call(path)
+    expect(isNotFound(response)).toBe(true)
+    expect(known).not.toHaveBeenCalled()
+    expect(vi.getTimerCount()).toBe(0)
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  it.each(TRANSPORT_SUFFIXES)('lets the %s transport form of a known post through', async (suffix) => {
+    const response = await call(`${KNOWN_POST}${suffix}`)
+    expect(isPassThrough(response)).toBe(true)
+    expect(postCheck).toHaveBeenCalledWith('chao-mung-den-next-store')
+    expect(known).not.toHaveBeenCalled()
+  })
+
+  it.each(TRANSPORT_SUFFIXES)('rewrites the %s transport form of an unknown post to not-found', async (suffix) => {
+    const response = await call(`/blog/khong-ton-tai${suffix}`)
+    expect(isNotFound(response)).toBe(true)
+    expect(known).not.toHaveBeenCalled()
+  })
+
+  it('never treats a product slug as a post, or a post slug as a product', async () => {
+    known.mockResolvedValue(true)
+    expect(isNotFound(await call('/blog/ao-git-push-force'))).toBe(true)
+    expect(known).not.toHaveBeenCalled()
+    known.mockResolvedValue(false)
+    expect(isNotFound(await call('/products/chao-mung-den-next-store'))).toBe(true)
+    expect(known).toHaveBeenCalledWith('chao-mung-den-next-store')
+  })
+})
+
+// Open Graph image routes (K10): inside a route group the file gets a hash suffix (`opengraph-image-16g1u1`); without
+// the proxy an unknown slug answers a 200 image and leaves a new cache entry. The suffix-less form is covered too: it is
+// the route's own name, and Vercel or a later Next.js may serve it.
+describe('proxy: open graph image paths', () => {
+  const IMAGE_SUFFIXES = ['/opengraph-image-16g1u1', '/opengraph-image-11vtts', '/opengraph-image']
+
+  beforeEach(() => {
+    known.mockImplementation(async (slug: string) => slug === 'ao-git-push-force')
+  })
+
+  it.each(IMAGE_SUFFIXES)('lets the image %s of a known post and a known product through', async (image) => {
+    expect(isPassThrough(await call(`${KNOWN_POST}${image}`))).toBe(true)
+    expect(isPassThrough(await call(`${KNOWN_PRODUCT}${image}`))).toBe(true)
+    expect(known).toHaveBeenCalledTimes(1)
+    expect(known).toHaveBeenCalledWith('ao-git-push-force')
+  })
+
+  it.each(IMAGE_SUFFIXES)('rewrites the open graph image %s of an unknown slug', async (image) => {
+    expect(isNotFound(await call(`/blog/khong-ton-tai${image}`))).toBe(true)
+    expect(known).not.toHaveBeenCalled()
+    expect(isNotFound(await call(`/products/khong-ton-tai${image}`))).toBe(true)
+    expect(known).toHaveBeenCalledWith('khong-ton-tai')
+  })
+
+  it.each([
+    [`${KNOWN_POST}/opengraph-image-11vtts`, false],
+    ['/blog/khong-ton-tai/opengraph-image-11vtts', true],
+    ['/blog/Chao-Mung-Den-Next-Store/opengraph-image-11vtts', true],
+    ['/blog/constructor/opengraph-image-11vtts', true],
+    [`${KNOWN_PRODUCT}/opengraph-image-16g1u1`, false],
+    [`${KNOWN_PRODUCT}/opengraph-image`, false],
+    ['/products/khong-ton-tai/opengraph-image-16g1u1', true],
+    ['/products/AO-GIT-PUSH-FORCE/opengraph-image-16g1u1', true],
+    ['/products/ao%2Dgit%2Dpush%2Dforce/opengraph-image-16g1u1', true],
+    [`${KNOWN_PRODUCT}/khac`, true],
+    [`${KNOWN_PRODUCT}/opengraph-image-`, true],
+    [`${KNOWN_PRODUCT}/opengraph-image-16G1U1`, true],
+    [`${KNOWN_PRODUCT}/opengraph-image.png`, true],
+    [`${KNOWN_PRODUCT}/twitter-image-16g1u1`, true],
+    [`${KNOWN_POST}/opengraph-image-11vtts/them`, true],
+  ])('open graph image path %s → rewritten: %s', async (path, rewritten) => {
+    const response = await call(path)
+    expect(isNotFound(response)).toBe(rewritten)
+    expect(isPassThrough(response)).toBe(!rewritten)
+  })
+
+  it('still fails open for a product image when the lookup throws', async () => {
+    known.mockRejectedValue(new Error('db down'))
+    expect(isPassThrough(await call(`${KNOWN_PRODUCT}/opengraph-image-16g1u1`))).toBe(true)
+    expect(log).toHaveBeenCalledTimes(1)
+  })
+
+  it(`still fails open for a product image within ${LOOKUP_BOUND_MS} ms when the lookup never settles`, async () => {
+    vi.useFakeTimers()
+    known.mockReturnValue(new Promise<boolean>(() => {}))
+    let settled: Response | undefined
+    void call('/products/chua-ai-mo/opengraph-image-16g1u1').then((response) => {
+      settled = response
+    })
+    await vi.advanceTimersByTimeAsync(LOOKUP_BOUND_MS)
+    expect(settled && isPassThrough(settled)).toBe(true)
+    expect(log).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('config.matcher', () => {
-  it('is the constant /products/:slug, so Next.js can analyse it statically', () => {
-    expect(config).toEqual({ matcher: '/products/:slug' })
+  it('is a constant list, so Next.js can analyse it statically', () => {
+    expect(config).toEqual({
+      matcher: ['/products/:slug', '/products/:slug/:image', '/blog/:slug', '/blog/:slug/:image'],
+    })
   })
 
   it.each([
@@ -161,6 +305,16 @@ describe('config.matcher', () => {
     '/products/ao-git-push-force.segments/!KHNob3Ap/products/$d$slug/__PAGE__.segment.rsc',
     '/products/KHONG-TON-TAI',
     '/products/khong%2Dton%2Dtai',
+    '/products/x/opengraph-image-16g1u1',
+    '/products/x/opengraph-image',
+    '/products/a/b',
+    '/blog/x',
+    '/blog/x.rsc',
+    '/blog/x.segments/_tree.segment.rsc',
+    '/blog/x/opengraph-image-11vtts',
+    '/blog/x/opengraph-image-11vtts?a7b8c9',
+    '/blog/KHONG-TON-TAI',
+    '/blog/constructor',
   ])('runs the proxy for %s', (url) => {
     expect(unstable_doesMiddlewareMatch({ config, url })).toBe(true)
   })
@@ -169,8 +323,15 @@ describe('config.matcher', () => {
     '/',
     '/products',
     '/products?category=ao-thun&page=2',
-    '/products/a/b',
+    '/products.rsc',
+    '/blog',
+    '/blog.rsc',
+    '/opengraph-image',
+    '/opengraph-image?a1b2c3',
+    '/sitemap.xml',
+    '/robots.txt',
     '/khong-ton-tai',
+    '/_next/static/x.js',
     '/_next/static/chunks/main.js',
     '/_next/image?url=%2Fimages%2Fao-thun.svg&w=640&q=75',
     '/images/ao-thun.svg',

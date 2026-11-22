@@ -128,7 +128,7 @@ Luồng này không phụ thuộc provider cụ thể; xem ADR-0004.
 
 ### Admin
 - Đăng nhập bằng `ADMIN_PASSWORD` → cookie phiên ký HMAC (Web Crypto) bằng `SESSION_SECRET`.
-- `proxy.ts` chặn `/admin/*` (trừ `/admin/login`) nếu cookie không hợp lệ (M5); mọi Server Action của admin kiểm tra lại phiên (không dựa riêng vào proxy). Cùng file này, từ M2, đã trả 404 cho `/products/<slug>` không tồn tại ([ADR-0009](./adr/0009-product-404-in-proxy.md)); M5 mở rộng `matcher`.
+- `proxy.ts` chặn `/admin/*` (trừ `/admin/login`) nếu cookie không hợp lệ (M5); mọi Server Action của admin kiểm tra lại phiên (không dựa riêng vào proxy). Cùng file này, từ M2, đã trả 404 cho `/products/<slug>` không tồn tại ([ADR-0009](./adr/0009-product-404-in-proxy.md)); từ M3 cả `/blog/<slug>` không tồn tại (đối chiếu registry tĩnh, không chạm DB) và đường dẫn ảnh Open Graph `/products|blog/<slug>/opengraph-image[-<băm>]` của slug lạ ([ADR-0012](./adr/0012-blog-static-registry.md)). `matcher` là `['/products/:slug', '/products/:slug/:image', '/blog/:slug', '/blog/:slug/:image']`; `/blog`, `/products`, `/opengraph-image`, sitemap, robots, `/_next/*` không qua proxy. M5 mở rộng `matcher`.
 - Trang admin có `robots: noindex`.
 - Sửa sản phẩm → Server Action cập nhật DB, gọi `updateTag`.
 
@@ -145,9 +145,9 @@ Lưu ý trên Vercel: cache của `"use cache"` nằm trong bộ nhớ từng in
 | Danh mục, danh sách sản phẩm | Danh mục; danh sách không có từ khoá: `"use cache"`, `cacheLife('hours')`, `cacheTag('products')`, khoá gồm danh mục / sắp xếp / trang đã chuẩn hoá. Tìm theo `q`: không cache ([ADR-0008](./adr/0008-listing-cache-keys.md)) |
 | Chi tiết sản phẩm (gồm tồn kho) | `"use cache"`, `cacheTag('product:<slug>')`; làm mới bằng `updateTag` khi admin sửa (Server Action), `revalidateTag` khi webhook trừ kho (Route Handler); `generateStaticParams` để prerender |
 | Số lượng trong giỏ, nút thêm vào giỏ | Đọc cookie → động, bọc `<Suspense>`; vỏ trang vẫn tĩnh |
-| Kiểm slug sản phẩm trong `proxy.ts` | Không cache được (`cacheTag` lỗi ngoài `"use cache"`); truy vấn theo khoá unique, nhớ slug có thật trong bộ nhớ instance, slug lạ truy vấn mỗi lần; quá 400 ms hoặc lỗi → cho đi tiếp ([ADR-0009](./adr/0009-product-404-in-proxy.md)) |
+| Kiểm slug sản phẩm trong `proxy.ts` | Không cache được (`cacheTag` lỗi ngoài `"use cache"`); truy vấn theo khoá unique, nhớ slug có thật trong bộ nhớ instance, slug lạ truy vấn mỗi lần; quá 400 ms hoặc lỗi → cho đi tiếp ([ADR-0009](./adr/0009-product-404-in-proxy.md)). Áp cho cả ảnh OG của sản phẩm |
 | Mọi truy vấn runtime | Qua `dbQuery` của `@/db`: lỗi thay bằng thông điệp cố định (tên truy vấn + SQLSTATE / errno), quá **5 giây** (`DB_QUERY_TIMEOUT_MS`, 100 → 10000) thì ném lỗi để trang lỗi hiện thay vì chờ `connect_timeout` 10 giây ([ADR-0011](./adr/0011-db-query-wrapper.md)); hết giờ thì dựng lại client Postgres để kết nối bị mạng nuốt gói không giữ pool ([ADR-0013](./adr/0013-db-client-recycle.md)) |
-| Blog | Tĩnh: nội dung MDX biên dịch lúc build, registry `posts.ts` trong repo; `/blog` và mọi `/blog/<slug>` prerender (`generateStaticParams`), không `"use cache"`, không tag — bài chỉ đổi khi deploy. Slug lạ: `proxy.ts` đối chiếu danh sách slug tĩnh, không chạm DB ([ADR-0012](./adr/0012-blog-static-registry.md)) |
+| Blog | Tĩnh: nội dung MDX biên dịch lúc build, registry `posts.ts` trong repo; `/blog` và mọi `/blog/<slug>` prerender (`generateStaticParams`), không `"use cache"`, không tag — bài chỉ đổi khi deploy. Slug lạ: `proxy.ts` đối chiếu danh sách slug tĩnh, không chạm DB, nên không tạo entry route cache nào cho slug bịa ra — cả trang lẫn ảnh OG ([ADR-0012](./adr/0012-blog-static-registry.md)) |
 | `sitemap.xml`, `robots.txt` | Sitemap: sản phẩm đọc qua `getProductSitemapEntries` (`"use cache"`, `cacheTag('products')`, `cacheLife('hours')`), bài từ registry; route `○ /sitemap.xml  1h  1d`. `robots.txt` tĩnh (`Disallow: /` ngoài production, §7). Cả hai prerender lúc build: URL tuyệt đối lấy từ `getSiteUrl()` với biến môi trường **lúc build** |
 | Trang admin, giỏ hàng, checkout | Động hoàn toàn |
 
