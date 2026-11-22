@@ -4,6 +4,7 @@ Nguồn: Designer, ticket NS-24 — **chủ dự án duyệt 2026-11-19**. Bản
 - Design system: https://claude.ai/artifact/GmucdqjNPKDzHFY4FWZCUj
 - Màn hình trang chủ (390 / 1280 px, sáng / tối / trống): https://claude.ai/artifact/Tjc6tnwX3q96CPSxDk2c2r
 - Màn hình M2 (danh sách, chi tiết, 404, lỗi; 390 / 1280 px, sáng / tối) và đặc tả component M2: https://claude.ai/artifact/MzW3An6ebYKxUjEMT7tuEU — **chủ dự án duyệt 2026-11-20** (Cổng 2, NS-46)
+- Màn hình M3 (blog, bài viết, "Bài viết mới" trên trang chủ, header có "Blog"; 390 / 1280 px, sáng / tối), ảnh Open Graph và nội dung 4 bài: https://claude.ai/artifact/N5Gkua8mA1whwo5PxeHfcX — **chủ dự án duyệt 2026-11-22** (Cổng 2, Task 6 M3)
 
 Brand gốc: bộ nhận diện **Gin Pham — Smile G** (Ink #0C0F12, Deep Cyan #08959A, Signal Cyan #2EE6EA, Paper #E8EEF0, Slate; font Lexend). File này là bản chép để code đọc; khi lệch nhau, artifact là bản gốc.
 
@@ -63,6 +64,9 @@ Hai giá trị cần thành class riêng trong `globals.css` (không dùng giá 
 Chữ thấp nhất 4,68:1 (link trên surface, theme tối). Sáng: foreground trên background 17,98; muted 6,98; link 4,79. Tối: foreground 16,40; muted 7,45; link 5,29. Footer: Paper trên Ink 16,40; muted 7,45. Không phải chữ: khối accent trên background 3,40 (sáng) / 12,47 (tối); ring ≥ 4,68; border-strong ≥ 4,04.
 
 Bổ sung M2, cặp mới (sáng / tối): chữ background trên muted-foreground (primary hover) 6,98 / 7,45; foreground trên surface-muted (hover) 16,45 / 12,08; muted trên surface-muted (dòng phụ empty state) 6,38 / 5,49; muted trên surface (placeholder) 7,46 / 6,60; link trên background (breadcrumb) 4,79 / 5,29. Không phải chữ: border-strong trên background 4,44 / 4,04, trên surface 4,75 / 3,58; ring trên surface-muted 4,39 / 3,89. Không dùng: link trên surface-muted 4,39 / 3,89 (dưới 4,5).
+
+Bổ sung M3, cặp mới (sáng / tối): chữ trong code trong dòng (foreground trên surface-muted) 16,45 / 12,08; chữ trong khối code (foreground trên surface) 19,22 / 14,53; ngày, mô tả, trích dẫn (muted trên background) 6,98 / 7,45; link trong bài (link trên background) 4,79 / 5,29. Không phải chữ: vạch trích dẫn border-strong trên background 4,44 / 4,04; vòng focus của khối code (ring trên background) 4,79 / 5,29. Ảnh Open Graph (một theme, dải đảo): inverse-foreground trên inverse 16,40; inverse-muted trên inverse 7,45; khối con trỏ inverse-accent trên inverse 12,47.
+Link trong bài **chỉ** đặt trên `background` (thân bài không có nền riêng). Không đặt link trong khối code hay trong trích dẫn có nền.
 
 ## 2. Component
 
@@ -125,6 +129,33 @@ Bổ sung M2, cặp mới (sáng / tối): chữ background trên muted-foregrou
   - Tồn kho: `<p className="font-medium">Còn {stock} sản phẩm</p>`, hoặc `<p><Badge variant="sold-out">Hết hàng</Badge></p>` khi `stock === 0`. Không màu cảnh báo khi còn ít.
   - Chỗ cho M4: nút "Thêm vào giỏ" đặt dưới mô tả trong cột thông tin (`w-full md:w-auto`, Button primary; hết hàng → `disabled`). M2 không render gì ở đó.
   - Skeleton: thay toàn bộ (breadcrumb `h-5 w-52` trong hàng `min-h-11`, ảnh, 2 dòng tiêu đề `h-9`, giá `h-8 w-32`, tồn kho `h-6 w-36`, 3 dòng mô tả `h-4`).
+
+### Component M3
+
+- **Thời gian bài viết** (`<time>`): `<time dateTime="YYYY-MM-DD">{formatDate(publishedAt)}</time>` (ví dụ `16 tháng 11, 2026`), `text-sm text-muted-foreground`; ở trang bài `text-sm md:text-base`. Không icon, không chữ "Đăng ngày". Giá trị không đổi theo thời điểm build (chỉ đọc chuỗi trong registry, `timeZone: 'UTC'`).
+
+- **Prose** (`@/components/ui/prose`): `Prose` = `<div className="flex max-w-xl flex-col gap-6 text-base md:gap-8 md:text-lg">`. `max-w-xl` (576 px) giữ dòng ở ~67 ký tự tiếng Việt với chữ 18 px (đo bằng metric của Lexend: trung bình 0,476 em / ký tự), ~47 ký tự ở 390 px. Khoảng cách dọc chỉ do `gap` của khối bọc, phần tử con không có margin (trừ `hr`). `PROSE_COMPONENTS`:
+
+  | Phần tử | Lớp | Ghi chú |
+  |---|---|---|
+  | `h2` (và `h1` → `h2`) | `pt-6 text-2xl font-bold tracking-tight text-balance md:pt-4 md:text-3xl` | Trên h2 luôn 48 px (24 + 24 / 32 + 16) |
+  | `h3` | `pt-2 text-xl font-semibold text-balance md:pt-0 md:text-2xl` | Trên h3 luôn 32 px |
+  | `p` | `text-pretty` | |
+  | `a` | `text-link underline underline-offset-4 hover:decoration-2` | `href` bắt đầu bằng `/` → `next/link`; còn lại `<a rel="noopener noreferrer">`, không `target="_blank"`. Link trong dòng được miễn vùng chạm 24 px (WCAG 2.5.8 ngoại lệ inline) |
+  | `strong` | `font-semibold text-foreground` | `text-foreground` để vẫn đậm màu khi nằm trong trích dẫn muted |
+  | `em` | `italic` | Lexend không có bản nghiêng: trình duyệt tự nghiêng, đã kiểm dấu tiếng Việt vẫn đúng |
+  | `ul` | `flex list-disc flex-col gap-2 pl-6 marker:text-muted-foreground` | Bài chỉ dùng danh sách "chặt" (không dòng trống giữa các mục) để `li` không bọc `<p>` |
+  | `ol` | `flex list-decimal flex-col gap-2 pl-6 marker:text-muted-foreground` | |
+  | `li` | (không lớp) | |
+  | `blockquote` | `flex flex-col gap-4 border-l-4 border-border-strong pl-4 text-muted-foreground md:pl-6` | Không nền (link trên surface-muted không đạt 4,5:1), không nghiêng |
+  | `code` trong dòng (không có `className`) | `rounded-sm bg-surface-muted px-1 font-mono text-sm break-words md:text-base` | `break-words` để `--force-with-lease` không tràn ở 390 px |
+  | `code` trong khối (`className="language-…"`) | chỉ giữ `className`, không thêm lớp | Kế thừa từ `pre`. **Mọi khối code rào trong bài phải ghi ngôn ngữ** (```` ```bash ````) — đó là cách duy nhất `code` phân biệt khối với trong dòng |
+  | `pre` | `overflow-x-auto rounded-md border border-border bg-surface p-4 font-mono text-sm md:p-6` + `tabIndex={0}` | Vùng cuộn ngang focus được bằng bàn phím; focus ring là `:focus-visible` toàn cục (2 px `ring`, offset 2). Không `aria-label` (vai trò generic không được đặt tên). Không tô màu cú pháp |
+  | `hr` | `my-4 border-border` | |
+
+  Tiêu đề trong bài không có `id` / anchor (không có mục lục — ngoài phạm vi M3).
+
+  Quy tắc "mọi khối code rào ghi ngôn ngữ" được kiểm tự động: Vitest `every fenced code block in a post names its language` (`src/features/blog/posts.test.ts`).
 
 ## 3. Tài nguyên
 

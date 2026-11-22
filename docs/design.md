@@ -40,7 +40,7 @@ next-store/
 │  ├─ agents/                    # Định nghĩa vai của các agent (process.md)
 │  ├─ adr/                       # Quyết định kiến trúc
 │  └─ plans/                     # Plan chi tiết từng mốc
-├─ content/blog/*.mdx
+├─ content/blog/*.mdx            # Thân bài; tiêu đề / mô tả / ngày ở src/features/blog/posts.ts (ADR-0012)
 ├─ e2e/                          # Test Playwright, đặt tên theo user story
 ├─ public/images/
 ├─ scripts/
@@ -53,9 +53,9 @@ next-store/
 │  │  │  ├─ page.tsx             → /
 │  │  │  ├─ products/page.tsx    → /products
 │  │  │  ├─ products/[slug]/     → /products/:slug
+│  │  │  ├─ blog/                → /blog, /blog/:slug (trong `(shop)`: chung header, footer, trang lỗi — ADR-0012)
 │  │  │  ├─ cart/                → /cart
 │  │  │  └─ checkout/            → /checkout/success, /checkout/test
-│  │  ├─ blog/                   → /blog, /blog/:slug
 │  │  ├─ admin/                  → /admin/login, /admin/products, /admin/orders
 │  │  ├─ api/webhooks/payment/route.ts
 │  │  ├─ layout.tsx
@@ -66,6 +66,7 @@ next-store/
 │  ├─ db/                        # schema.ts, client.ts, migrate.ts, seed.ts
 │  ├─ components/ui/             # Component giao diện dùng chung (theo design system)
 │  ├─ lib/                       # Tiện ích không gắn nghiệp vụ
+│  ├─ mdx-components.tsx         # Bắt buộc với @next/mdx; trả PROSE_COMPONENTS của components/ui/prose
 │  └─ proxy.ts
 ├─ drizzle/                      # Migration SQL sinh bởi drizzle-kit
 ├─ .dependency-cruiser.cjs
@@ -145,7 +146,7 @@ Lưu ý trên Vercel: cache của `"use cache"` nằm trong bộ nhớ từng in
 | Chi tiết sản phẩm (gồm tồn kho) | `"use cache"`, `cacheTag('product:<slug>')`; làm mới bằng `updateTag` khi admin sửa (Server Action), `revalidateTag` khi webhook trừ kho (Route Handler); `generateStaticParams` để prerender |
 | Số lượng trong giỏ, nút thêm vào giỏ | Đọc cookie → động, bọc `<Suspense>`; vỏ trang vẫn tĩnh |
 | Kiểm slug sản phẩm trong `proxy.ts` | Không cache được (`cacheTag` lỗi ngoài `"use cache"`); truy vấn theo khoá unique, nhớ slug có thật trong bộ nhớ instance, slug lạ truy vấn mỗi lần; quá 400 ms hoặc lỗi → cho đi tiếp ([ADR-0009](./adr/0009-product-404-in-proxy.md)) |
-| Blog | Tĩnh |
+| Blog | Tĩnh: nội dung MDX biên dịch lúc build, registry `posts.ts` trong repo; `/blog` và mọi `/blog/<slug>` prerender (`generateStaticParams`), không `"use cache"`, không tag — bài chỉ đổi khi deploy. Slug lạ: `proxy.ts` đối chiếu danh sách slug tĩnh, không chạm DB ([ADR-0012](./adr/0012-blog-static-registry.md)) |
 | Trang admin, giỏ hàng, checkout | Động hoàn toàn |
 
 ## 7. Môi trường

@@ -1,3 +1,4 @@
+import createMDX from "@next/mdx";
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
@@ -18,4 +19,8 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+// No `pageExtensions` change: posts are imported by src/features/blog/content.ts, so an .mdx file never becomes a
+// route of its own (M3 K1). No remark / rehype plugins (owner decision 5): posts are CommonMark only.
+const withMDX = createMDX({});
+
+export default withMDX(nextConfig);
