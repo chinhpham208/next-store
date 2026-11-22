@@ -121,7 +121,7 @@ Chi tiết và lý do: [ADR-0006](./adr/0006-branch-strategy.md).
   - `DELETE FROM` và `UPDATE` không có `WHERE` của chính câu đó (kể cả trong CTE, khi bảng có alias hoặc `ONLY`). `WHERE` nằm trong subquery không tính.
   - `EXECUTE` SQL động (trừ `EXECUTE FUNCTION` / `PROCEDURE` của trigger): không đọc được lúc kiểm nên coi là contract.
   - File migration phải có dòng `-- contract: NS-<số>` ghi ticket của bước expand tương ứng. Một dòng cho cả file: Auditor kiểm từng câu lệnh contract trong file khớp ticket đó.
-- `src/db/migrations.test.ts` chỉ là lưới thứ hai: nó dò bằng regex trên SQL đã bỏ comment và chuỗi, nên không hiểu hết cú pháp (ví dụ chuỗi dollar-quote được đọc như code). Auditor vẫn đọc từng câu của mọi `drizzle/*.sql`, test xanh không thay việc đó.
+- `src/db/migrations.test.ts` chỉ là lưới thứ hai: nó dò bằng regex trên SQL đã bỏ comment và chuỗi, nên không hiểu hết cú pháp và có thể lọt câu contract, không chỉ báo nhầm. Thân dollar-quote dừng ở đúng tag đóng của nó. Nếu thân đó đọc được như code thì các câu bên trong được kiểm, nên `$$TRUNCATE$$` bị báo nhầm. Nếu không đọc được thì coi là chuỗi. Chuỗi, tên, comment hay dollar-quote chưa đóng khi hết file thì được báo là contract (`unterminated …`). Auditor vẫn đọc từng câu của mọi `drizzle/*.sql`, test xanh không thay việc đó.
 - `CREATE INDEX` (không `CONCURRENTLY`) và `ADD CONSTRAINT` khoá bảng khi chạy; không nằm trong danh sách trên nhưng Auditor đánh giá riêng với `orders` và `cart_items` trước khi merge.
 - Backfill dữ liệu là migration riêng, chạy lại được, không nằm chung file với đổi schema.
 - Không sửa hay xoá file `drizzle/*.sql` đã merge; sai thì viết migration mới.

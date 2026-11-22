@@ -80,16 +80,23 @@ const isContractStatement = (statement: string) =>
 // Reads SQL the way Postgres tokenizes it, so a keyword, `;` or `--` inside a literal is not code:
 // - string literals become `''` and quoted names become `"_"` (`E'…'` strings honour backslash escapes);
 // - comments become a space, and block comments nest as in Postgres, so `DROP /* x */ TABLE` is still one statement;
-// - a dollar-quote tag becomes a space and its body is read as code, because DO blocks and function bodies hold
-//   statements. A dollar-quoted plain string is therefore checked too, which errs on the side of flagging.
+// - a dollar-quoted body ends at its own closing tag, whatever it holds. It is read twice (audit PR #46 M1): as code,
+//   because DO blocks and function bodies hold statements, and as a plain string. When it does not read as code
+//   (`$$customer's table$$`, an opener of a string or comment that never closes inside the tags) it is a string and
+//   becomes `''`. Otherwise its statements are checked, so a plain string such as `$$TRUNCATE$$` is flagged too.
+// A string, quoted name, block comment or dollar quote still open at the end of the input is reported in
+// `unterminated`: Postgres would reject the file, and what follows the opener cannot be read.
+type ReadSql = { text: string; unterminated?: string }
+
 const DOLLAR_TAG = /\$(?:[A-Za-z_]\w*)?\$/y
 
-const normalizeSql = (sql: string) => {
+const readSql = (sql: string): ReadSql => {
   let out = ''
   let index = 0
   while (index < sql.length) {
     DOLLAR_TAG.lastIndex = index
-    const dollarTag = DOLLAR_TAG.exec(sql)
+    // A `$` right after a name character continues the name (`a$b$`), as in Postgres.
+    const dollarTag = /[\w$]/.test(sql[index - 1] ?? '') ? null : DOLLAR_TAG.exec(sql)
     if (sql.startsWith('--', index)) {
       const end = sql.indexOf('\n', index)
       index = end === -1 ? sql.length : end
@@ -104,6 +111,7 @@ const normalizeSql = (sql: string) => {
           index += 2
         } else index++
       } while (depth > 0 && index < sql.length)
+      if (depth > 0) return { text: out, unterminated: 'block comment' }
       out += ' '
     } else if (sql[index] === "'" || sql[index] === '"') {
       const quote = sql[index]
@@ -115,24 +123,32 @@ const normalizeSql = (sql: string) => {
         else if (sql[index] === quote) break
         else index++
       }
+      if (index >= sql.length) return { text: out, unterminated: quote === "'" ? 'string' : 'quoted name' }
       index++
       out += quote === "'" ? "''" : '"_"'
     } else if (dollarTag) {
-      index += dollarTag[0].length
-      out += ' '
+      const tag = dollarTag[0]
+      const close = sql.indexOf(tag, index + tag.length)
+      if (close === -1) return { text: out, unterminated: 'dollar quote' }
+      const body = readSql(sql.slice(index + tag.length, close))
+      out += body.unterminated ? " '' " : ` ${body.text} `
+      index = close + tag.length
     } else {
       out += sql[index]
       index++
     }
   }
-  return out
+  return { text: out }
 }
 
-const findContractStatements = (sql: string): string[] =>
-  normalizeSql(sql)
+const findContractStatements = (sql: string): string[] => {
+  const { text, unterminated } = readSql(sql)
+  const statements = text
     .split(';')
     .map((statement) => statement.trim())
     .filter((statement) => statement.length > 0 && isContractStatement(statement))
+  return unterminated ? [...statements, `unterminated ${unterminated}`] : statements
+}
 
 const readMigrations = () =>
   readdirSync('drizzle', { recursive: true, encoding: 'utf8' })
@@ -221,10 +237,37 @@ it.each([
   ["ALTER TABLE products ADD COLUMN status text DEFAULT 'RENAME';", 0],
   ['ALTER TABLE products ADD COLUMN "rename" text;', 0],
   ["INSERT INTO notes (body) VALUES (E'it\\'s DELETE FROM carts');", 0],
+  ["INSERT INTO notes (body) VALUES ('''a;'); DROP TABLE b;", 1],
+  ['CREATE TABLE "a""" (id integer); DROP TABLE b;', 1],
   ['/* outer /* inner */ DROP TABLE x; */ CREATE TABLE y (id integer);', 0],
   ['CREATE TABLE a (id integer); -- DROP TABLE old;', 0],
 ])('reads string literals, quoted names and comments as SQL does in %j', (sql, count) => {
   expect(findContractStatements(sql)).toHaveLength(count)
+})
+
+// Audit PR #46 M1: a dollar-quoted body may be a plain string, so a quote or comment opener inside it must not run
+// past its closing tag and hide the statements after it.
+it.each([
+  ["COMMENT ON TABLE t IS $$customer's table$$;\nDROP TABLE b;\nALTER TABLE c DROP COLUMN d;", 2],
+  ['COMMENT ON TABLE t IS $c$see /* note$c$;\nDROP TABLE b;\nTRUNCATE c;', 2],
+  ['COMMENT ON TABLE t IS $$a -- b$$; DROP TABLE b;', 1],
+  ['COMMENT ON TABLE t IS $$say "hi$$; DROP TABLE b;', 1],
+  ['COMMENT ON TABLE t IS $x$ends $$ here$x$; DROP TABLE b;', 1],
+  ["DO $f$ BEGIN RAISE NOTICE $m$can't$m$; DELETE FROM carts; RAISE NOTICE 'ok'; END $f$;", 1],
+  ["COMMENT ON TABLE t IS $$customer's table$$;", 0],
+  ["DO $f$ BEGIN RAISE NOTICE $m$can't$m$; END $f$;", 0],
+])('keeps a dollar-quoted body inside its tags in %j', (sql, count) => {
+  expect(findContractStatements(sql)).toHaveLength(count)
+})
+
+// Postgres would reject such a file, and whatever follows the opener cannot be read: fail closed.
+it.each([
+  ["INSERT INTO t VALUES ('open);\nDROP TABLE b;"],
+  ['CREATE TABLE "open (id integer);'],
+  ['CREATE TABLE a (id integer); /* never closed'],
+  ['DO $$ BEGIN NULL; END;'],
+])('reports an unterminated string, name, comment or dollar quote in %j', (sql) => {
+  expect(findContractStatements(sql)).toContainEqual(expect.stringMatching(/^unterminated /))
 })
 
 it.each([
