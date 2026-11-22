@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './test'
 import { expectNoSeriousA11yViolations } from './axe'
 
 const PRICE = /^\d{1,3}(\.\d{3})*\s₫$/
