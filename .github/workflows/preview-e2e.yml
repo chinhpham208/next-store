@@ -97,6 +97,9 @@ jobs:
         env:
           BASE_URL: ${{ steps.url.outputs.base_url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          # Owner decision 15 fallback (plan M3, NS-65): Dev has no X-Robots-Tag, so robots.txt must block crawling
+          # on every deployment this job sees. Never Production: this job does not run there.
+          SMOKE_ROBOTS: disallow
         run: npm run smoke
 
       - name: install Playwright Chromium

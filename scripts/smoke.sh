@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Smoke test: trang chủ trả 200 và có SMOKE_TEXT; một đường dẫn không tồn tại trả 404 với trang tiếng Việt;
 # một trang chi tiết sản phẩm trả 200 và có tên sản phẩm; /products trả 200 và có lưới sản phẩm, kể cả với
-# tham số không hợp lệ; /blog và một bài blog trả 200 và có nội dung; slug sản phẩm không tồn tại trả 404 ngay lần đầu.
+# tham số không hợp lệ; /blog và một bài blog trả 200 và có nội dung; slug sản phẩm không tồn tại trả 404 ngay lần
+# đầu; /sitemap.xml và /robots.txt trả 200, cùng một origin tuyệt đối, robots.txt chặn hay cho crawl đúng môi trường;
+# trang chủ có og:site_name.
 #
 #   npm run smoke                                   # chạy `next start` từ bản build hiện có (.next/), kiểm rồi tắt
 #   BASE_URL=https://<deploy>.vercel.app npm run smoke   # kiểm một URL đã deploy
@@ -11,6 +13,9 @@
 #   SMOKE_TEXT                       chuỗi phải có trong HTML trang chủ (mặc định: tên một sản phẩm nổi bật trong
 #                                    src/db/seed-data.ts, chứng minh trang đọc được dữ liệu, không chỉ render khung)
 #   SMOKE_PORT                       cổng cho `next start` khi không có BASE_URL (mặc định: 3100); cổng phải trống
+#   SMOKE_ROBOTS                     disallow = robots.txt phải `Disallow: /` (Preview / Dev; workflow e2e-preview đặt),
+#                                    allow = phải `Allow: /` (Production). Bỏ trống: chấp nhận một trong hai, in ra
+#                                    (next start: build ngoài Vercel là disallow). Header X-Robots-Tag luôn chỉ được in
 #   VERCEL_AUTOMATION_BYPASS_SECRET  có thì gửi header x-vercel-protection-bypass (vượt Deployment Protection),
 #                                    chỉ khi BASE_URL là https://
 set -euo pipefail
@@ -94,6 +99,7 @@ validate_input() {
   local http_re='^http://(localhost|127\.0\.0\.1)(:[0-9]{1,5})?/?$'
   [[ $SMOKE_PORT =~ ^[0-9]{1,5}$ ]] && [ "$((10#$SMOKE_PORT))" -ge 1 ] && [ "$((10#$SMOKE_PORT))" -le 65535 ] ||
     fail "SMOKE_PORT không hợp lệ: cần số nguyên 1–65535."
+  case ${SMOKE_ROBOTS:-} in ''|allow|disallow) ;; *) fail "SMOKE_ROBOTS không hợp lệ: cần allow, disallow hoặc bỏ trống." ;; esac
   SCHEME=http
   if [ -n "${BASE_URL:-}" ]; then
     if [[ $BASE_URL =~ $https_re ]]; then SCHEME=https
@@ -127,7 +133,7 @@ else
 fi
 echo "smoke: $BASE"
 
-status=$(fetch "$BASE/" "$TMP/home.html") || fail "không kết nối được $BASE/"
+status=$(fetch "$BASE/" "$TMP/home.html" '' "$TMP/home.headers") || fail "không kết nối được $BASE/"
 # Protection answers 401 (login page) or redirects to vercel.com; say so instead of a bare "expected 200".
 if [ "$status" = 401 ] || [ "$status" = 403 ] || { [ "$status" != 200 ] && grep -q 'vercel\.com/\(sso\|login\)' "$TMP/home.html"; }; then
   [ -n "$SEND_BYPASS" ] && fail "GET / trả $status: Vercel Deployment Protection từ chối bypass secret."
@@ -136,6 +142,54 @@ fi
 [ "$status" = 200 ] || fail "GET / trả $status, cần 200"
 grep -qF -- "$SMOKE_TEXT" "$TMP/home.html" || fail "HTML trang chủ không có \"$SMOKE_TEXT\""
 echo "smoke: GET / → 200, có \"$SMOKE_TEXT\""
+
+# Owner decision 15 (plan M3) relied on Vercel's `X-Robots-Tag: noindex` on Preview / Dev; NS-65 found Dev without
+# it, so robots.txt now says Disallow: / outside production (checked below). The header is still printed, right after
+# /, so every run records what Vercel sends. Third-party text: reduced to a safe set before it is printed.
+report_robots_tag() { # report_robots_tag <path> <response-headers-file>
+  local value
+  value=$(tr -d '\r' < "$2" | sed -n 's/^[Xx]-[Rr][Oo][Bb][Oo][Tt][Ss]-[Tt][Aa][Gg]: *//p' | head -n 1 | tr -cd 'A-Za-z0-9 ,:_-')
+  echo "smoke: GET $1 → x-robots-tag: ${value:-<không có>}"
+}
+report_robots_tag / "$TMP/home.headers"
+status=$(fetch "$BASE/robots.txt" "$TMP/robots.txt" '' "$TMP/robots.headers") || fail "không kết nối được $BASE/robots.txt"
+report_robots_tag /robots.txt "$TMP/robots.headers"
+status_sitemap=$(fetch "$BASE/sitemap.xml" "$TMP/sitemap.xml" '' "$TMP/sitemap.headers") ||
+  fail "không kết nối được $BASE/sitemap.xml"
+report_robots_tag /sitemap.xml "$TMP/sitemap.headers"
+
+# US-11 / NFR SEO: every <loc> is absolute on one origin; on a deployment that origin is https and not localhost
+# (no metadataBase / SITE_URL read at build → localhost, K6, K12). robots.txt points at the sitemap on that origin.
+[ "$status" = 200 ] || fail "GET /robots.txt trả $status, cần 200"
+[ "$status_sitemap" = 200 ] || fail "GET /sitemap.xml trả $status_sitemap, cần 200"
+for SITEMAP_LOC in /products/ao-404-not-found /blog/chao-mung-den-next-store; do
+  grep -qF -- "$SITEMAP_LOC</loc>" "$TMP/sitemap.xml" || fail "/sitemap.xml không có $SITEMAP_LOC</loc>"
+done
+SITEMAP_ORIGINS=$(grep -o '<loc>[^<]*</loc>' "$TMP/sitemap.xml" | sed -E 's#^<loc>([a-z]+://[^/<]+).*#\1#' | sort -u)
+[ "$(printf '%s\n' "$SITEMAP_ORIGINS" | grep -c .)" = 1 ] || fail "/sitemap.xml có <loc> trên nhiều origin hoặc không có <loc> nào"
+[[ $SITEMAP_ORIGINS =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] || fail "/sitemap.xml có <loc> không phải URL tuyệt đối"
+if [ "$SCHEME" = https ] && [[ ! $SITEMAP_ORIGINS =~ ^https:// || $SITEMAP_ORIGINS =~ ^https?://(localhost|127\.0\.0\.1)(:|$) ]]; then
+  fail "/sitemap.xml dùng origin $SITEMAP_ORIGINS trên deployment: cần https và không phải localhost"
+fi
+echo "smoke: GET /sitemap.xml → 200, mọi <loc> trên $SITEMAP_ORIGINS"
+ROBOTS_POLICY=
+if tr -d '\r' < "$TMP/robots.txt" | grep -qx 'Allow: /'; then ROBOTS_POLICY=allow; fi
+if tr -d '\r' < "$TMP/robots.txt" | grep -qx 'Disallow: /'; then
+  if [ -n "$ROBOTS_POLICY" ]; then ROBOTS_POLICY=both; else ROBOTS_POLICY=disallow; fi
+fi
+case $ROBOTS_POLICY in
+  allow|disallow) ;;
+  both) fail "/robots.txt có cả \"Allow: /\" lẫn \"Disallow: /\"" ;;
+  *) fail "/robots.txt không có \"Allow: /\" hay \"Disallow: /\"" ;;
+esac
+if [ -n "${SMOKE_ROBOTS:-}" ] && [ "$ROBOTS_POLICY" != "$SMOKE_ROBOTS" ]; then
+  fail "/robots.txt là $ROBOTS_POLICY, cần $SMOKE_ROBOTS (SMOKE_ROBOTS; ngoài production phải Disallow: /, quyết định 15 plan M3)"
+fi
+tr -d '\r' < "$TMP/robots.txt" | grep -qxF "Sitemap: $SITEMAP_ORIGINS/sitemap.xml" ||
+  fail "/robots.txt không có dòng \"Sitemap: $SITEMAP_ORIGINS/sitemap.xml\""
+echo "smoke: GET /robots.txt → 200, $ROBOTS_POLICY /, Sitemap: $SITEMAP_ORIGINS/sitemap.xml"
+grep -qF -- 'property="og:site_name" content="next-store"' "$TMP/home.html" || fail "HTML trang chủ không có og:site_name"
+echo "smoke: trang chủ có og:site_name"
 
 status=$(fetch "$BASE/khong-ton-tai" "$TMP/404.html") || fail "không kết nối được $BASE/khong-ton-tai"
 [ "$status" = 404 ] || fail "GET /khong-ton-tai trả $status, cần 404"

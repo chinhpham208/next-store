@@ -87,13 +87,36 @@ export const getProductBySlug = async (slug: string): Promise<ProductDetail | nu
   return getCachedProductBySlug(slug)
 }
 
-// Not cached: it runs at build time in generateStaticParams (and for the sitemap in M3), never per request.
+// Not cached: it runs at build time in generateStaticParams, never per request.
 export const getAllProductSlugs = async (): Promise<string[]> => {
   const rows = await dbQuery({
     name: 'products.slugs',
     run: (db) => db.select({ slug: products.slug }).from(products).orderBy(asc(products.id)),
   })
   return rows.map((row) => row.slug)
+}
+
+export type ProductSitemapEntry = { slug: string; updatedAt: string }
+
+// Cached, unlike getAllProductSlugs: /sitemap.xml is served at request time once its entry expires, and an uncached
+// query would make it dynamic and hit the database on every crawl (K12). Same tag as the listings, so an admin edit
+// (M5) refreshes it. A stock change invalidates only product:<slug> (ADR-0003); lastmod then lags by up to the
+// cache lifetime, which a crawler tolerates.
+export const getProductSitemapEntries = async (): Promise<ProductSitemapEntry[]> => {
+  'use cache'
+  cacheTag('products')
+  cacheLife('hours')
+
+  const rows = await dbQuery({
+    name: 'products.sitemap',
+    run: (db) =>
+      db.select({ slug: products.slug, updatedAt: products.updatedAt }).from(products).orderBy(asc(products.id)),
+  })
+  // The sitemap writes <loc> without escaping; a slug that is not a valid URL segment would also 404 in the proxy.
+  // ISO string, not Date: the value returned from a 'use cache' function must be serializable.
+  return rows
+    .filter((row) => isProductSlug(row.slug))
+    .map((row) => ({ slug: row.slug, updatedAt: row.updatedAt.toISOString() }))
 }
 
 type CategoryRow = CategoryOption & { id: number }

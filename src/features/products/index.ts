@@ -3,7 +3,9 @@ export {
   getCategories,
   getFeaturedProducts,
   getProductBySlug,
+  getProductSitemapEntries,
   listProducts,
+  type ProductSitemapEntry,
 } from '@/features/products/queries'
 export { getProductMetadata } from '@/features/products/metadata'
 export { isKnownProductSlug } from '@/features/products/slug-guard'
