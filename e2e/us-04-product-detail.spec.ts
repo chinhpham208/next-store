@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, test } from './test'
 import { PRODUCT_SEEDS } from '@/db/seed-data'
 import { expectNoSeriousA11yViolations } from './axe'
 

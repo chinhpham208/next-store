@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test'
+import { expect, test } from './test'
 import { expectNoSeriousA11yViolations } from './axe'
 import { PRODUCT_SEEDS } from '@/db/seed-data'
 import {

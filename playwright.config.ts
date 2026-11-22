@@ -1,7 +1,9 @@
 import { defineConfig, devices } from '@playwright/test'
+import { grepInvertFor, isProductionUrl } from './e2e/production'
 
 const BASE_URL = process.env.BASE_URL
-const BYPASS_SECRET = process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+// Production has no Deployment Protection (custom domain): the bypass secret is never sent there (M3 Task 17).
+const BYPASS_SECRET = isProductionUrl(BASE_URL) ? undefined : process.env.VERCEL_AUTOMATION_BYPASS_SECRET
 // Only for machines that cannot download Playwright's Chromium (e.g. PW_CHANNEL=chrome); CI uses the bundled one.
 const CHANNEL = process.env.PW_CHANNEL || undefined
 // E2E_PORT moves the four local servers (E2E_PORT … E2E_PORT + 3) off 3100, e.g. when scripts/verify.sh holds it;
@@ -31,6 +33,8 @@ export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
   reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
+  // On Production the tests tagged @ghi (they write data) are left out; e2e/test.ts blocks any write that is left.
+  grepInvert: grepInvertFor(BASE_URL),
   use: {
     baseURL: BASE_URL ?? `http://localhost:${LOCAL_PORT}`,
     channel: CHANNEL,

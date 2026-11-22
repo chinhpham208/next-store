@@ -93,7 +93,7 @@ BASE_URL=https://<url-preview> npm run smoke
 
 URL preview của từng deploy có thể bị Vercel Deployment Protection chặn (trang đăng nhập Vercel); khi đó cần `VERCEL_AUTOMATION_BYPASS_SECRET` (script gửi header `x-vercel-protection-bypass`, không in giá trị). Thiếu secret, smoke báo rõ là bị Deployment Protection chặn. `SMOKE_TEXT` đổi chuỗi cần có trên trang chủ. `SMOKE_ROBOTS=disallow` bắt buộc `robots.txt` có `Disallow: /` (workflow `e2e-preview` luôn đặt), `SMOKE_ROBOTS=allow` bắt buộc `Allow: /` (khi kiểm Production); bỏ trống thì chấp nhận một trong hai và in ra. Header `X-Robots-Tag` của `/`, `/robots.txt`, `/sitemap.xml` luôn được in, không bắt buộc.
 
-E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMATION_BYPASS_SECRET`.
+E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMATION_BYPASS_SECRET` (không gửi header bypass khi `BASE_URL` là Production).
 
 Không có `BASE_URL`, `npm run e2e` tự chạy ba `next start` từ cùng bản build: cổng 3100; cổng 3101 với `DATABASE_URL` trỏ vào cổng đóng (trang lỗi của US-05); cổng 3102 với `DATABASE_URL` trỏ vào một listener TCP im lặng ở cổng 3103 và `DB_QUERY_TIMEOUT_MS=1000` (DB treo, NS-55). Log của hai server DB hỏng ghi vào `.verify/e2e-broken-db.log`, `.verify/e2e-hung-db.log`. Các nhóm test này bỏ qua khi có `BASE_URL`. `E2E_PORT=<n>` dời bốn cổng sang `n` … `n+3`. `scripts/verify.sh` đọc `E2E_PORT` và `SMOKE_PORT`; chỉ đặt một biến thì biến kia lấy cùng giá trị. Nó chỉ tắt tiến trình do chính nó khởi động; cổng bận bởi tiến trình khác thì dừng với lỗi.
 
@@ -117,6 +117,20 @@ gh api repos/chinhpham208/next-store/commits/<sha>/check-runs \
 - Chỉ kiểm URL do Vercel gửi (cả deployment lẫn deployment status đều do `vercel[bot]` tạo), và URL phải là `https://next-store-…-chinhpham208s-projects.vercel.app` hoặc `https://next-store-dev-ginpham.vercel.app`; khác thì job dừng trước khi dùng secret. Production không chạy ở đây.
 - E2E chạy với `--trace off`: trace của Playwright ghi cả header bypass, và report được upload khi bước e2e lỗi.
 - Chạy tay (gỡ lỗi, hoặc khi không có sự kiện): `gh api -X POST repos/chinhpham208/next-store/actions/workflows/preview-e2e.yml/dispatches -f ref=<nhánh> -f 'inputs[base_url]=<URL trong danh sách trên>'`, hoặc nút "Run workflow" trong tab Actions. Test lấy từ `ref`, nên chọn đúng nhánh của deployment.
+
+### Sau release: workflow `Production E2E`
+
+Workflow `Production E2E` (`.github/workflows/production-e2e.yml`, M3 Task 17) chạy smoke (`SMOKE_ROBOTS=allow`: Production phải `Allow: /`) rồi toàn bộ E2E trên `https://next-store-iota-silk.vercel.app`:
+
+- Tự chạy khi Vercel báo một deployment thành công có environment đúng bằng `Production` và `ref` là nhánh `production` (deployment và status đều do `vercel[bot]` tạo); test lấy từ commit đã deploy. Bản preview được "Promote to Production" hay `vercel --prod` từ nhánh khác không kích hoạt workflow; khi đó dispatch tay. Sau release không thấy lần chạy nào (ví dụ Vercel đổi tên environment) cũng dispatch tay. Chạy tay: `gh api -X POST repos/chinhpham208/next-store/actions/workflows/production-e2e.yml/dispatches -f ref=production` (test lấy từ nhánh `production`).
+- URL ghi cứng trong workflow và `e2e/production.ts`, không lấy từ sự kiện. Không dùng secret nào (Production là domain custom, không có Deployment Protection, nên không gửi header bypass), không `DATABASE_URL`, không `npm run build`, không lệnh `db:*`.
+- Chỉ đọc. Khi `BASE_URL` là Production, các fixture của `e2e/test.ts` (`context`, `page`, `request`, `newContext`) làm như sau:
+  - **huỷ** mọi request của trình duyệt không phải `GET` / `HEAD` / `OPTIONS` trong các context đó;
+  - **ném lỗi** khi gọi `post` / `put` / `patch` / `delete`, hay `fetch` với method ghi, trên `request`, `context.request`, `page.request`;
+  - **chỉ ghi nhận, không ngăn được** request ghi đi qua route mà spec tự đăng ký rồi `route.continue()` (route đăng ký sau chạy trước bộ chặn): request đó tới server;
+  - mọi request bị huỷ hay ghi nhận làm test **đỏ ở teardown** ("E2E trên Production chỉ được đọc").
+- Ngoài phạm vi bộ chặn, ESLint cấm trong `e2e/*.spec.ts`: `browser.newContext` / `request.newContext` (dùng fixture `newContext`), `fetch` (kể cả trong `page.evaluate`), import `test` hay `import *` từ `@playwright/test`. `e2e/production-guard.spec.ts` được tạo context và gọi `fetch`, chỉ với server Node local. Test gắn `@ghi` bị bỏ qua (`grepInvert` trong `playwright.config.ts`); đây là lớp phụ thuộc người viết nhớ gắn tag, còn bộ chặn là lớp bắt khi quên.
+- Chạy tại máy: `BASE_URL=https://next-store-iota-silk.vercel.app npm run e2e` có cùng các lớp chặn.
 
 **Rủi ro đã chấp nhận (audit PR #23):**
 

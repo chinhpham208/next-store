@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, test } from './test'
 import { BROKEN_DB_LOG, BROKEN_DB_URL, HUNG_DB_LOG, HUNG_DB_URL } from '../playwright.config'
 import { expectNoSeriousA11yViolations } from './axe'
 import { VIEWPORT_INDEPENDENT } from './catalog'
