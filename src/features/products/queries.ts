@@ -2,7 +2,7 @@ import 'server-only'
 import { and, asc, count, desc, eq, ilike, sql, type SQL } from 'drizzle-orm'
 import { cacheLife, cacheTag } from 'next/cache'
 import { connection } from 'next/server'
-import { categories, db, products } from '@/db'
+import { categories, dbQuery, products, type DbQueryName } from '@/db'
 import { isProductSlug, PAGE_SIZE, parseProductQuery, type ProductQuery, type ProductSort } from '@/features/products/schema'
 import type { CategoryOption, ProductDetail, ProductListing, ProductSummary } from '@/features/products/types'
 
@@ -37,14 +37,18 @@ export const getFeaturedProducts = async (limit: number = FEATURED_LIMIT): Promi
   cacheTag('products')
   cacheLife('hours')
 
-  return db
-    .select(SUMMARY_FIELDS)
-    .from(products)
-    .innerJoin(categories, eq(products.categoryId, categories.id))
-    .where(eq(products.featured, true))
-    // Seed inserts every row in one transaction (same updated_at); id breaks the tie so order is stable.
-    .orderBy(desc(products.updatedAt), asc(products.id))
-    .limit(limit)
+  return dbQuery({
+    name: 'products.featured',
+    run: (db) =>
+      db
+        .select(SUMMARY_FIELDS)
+        .from(products)
+        .innerJoin(categories, eq(products.categoryId, categories.id))
+        .where(eq(products.featured, true))
+        // Seed inserts every row in one transaction (same updated_at); id breaks the tie so order is stable.
+        .orderBy(desc(products.updatedAt), asc(products.id))
+        .limit(limit),
+  })
 }
 
 // The slug is the cache key: only called after isProductSlug, so a malformed URL never becomes an entry.
@@ -55,21 +59,25 @@ const getCachedProductBySlug = async (slug: string): Promise<ProductDetail | nul
   cacheTag(`product:${slug}`)
   cacheLife('hours')
 
-  const [row] = await db
-    .select({
-      slug: products.slug,
-      name: products.name,
-      description: products.description,
-      price: products.price,
-      image: products.image,
-      categorySlug: categories.slug,
-      categoryName: categories.name,
-      stock: products.stock,
-    })
-    .from(products)
-    .innerJoin(categories, eq(products.categoryId, categories.id))
-    .where(eq(products.slug, slug))
-    .limit(1)
+  const [row] = await dbQuery({
+    name: 'products.detail',
+    run: (db) =>
+      db
+        .select({
+          slug: products.slug,
+          name: products.name,
+          description: products.description,
+          price: products.price,
+          image: products.image,
+          categorySlug: categories.slug,
+          categoryName: categories.name,
+          stock: products.stock,
+        })
+        .from(products)
+        .innerJoin(categories, eq(products.categoryId, categories.id))
+        .where(eq(products.slug, slug))
+        .limit(1),
+  })
   return row ?? null
 }
 
@@ -81,7 +89,10 @@ export const getProductBySlug = async (slug: string): Promise<ProductDetail | nu
 
 // Not cached: it runs at build time in generateStaticParams (and for the sitemap in M3), never per request.
 export const getAllProductSlugs = async (): Promise<string[]> => {
-  const rows = await db.select({ slug: products.slug }).from(products).orderBy(asc(products.id))
+  const rows = await dbQuery({
+    name: 'products.slugs',
+    run: (db) => db.select({ slug: products.slug }).from(products).orderBy(asc(products.id)),
+  })
   return rows.map((row) => row.slug)
 }
 
@@ -93,10 +104,14 @@ const getCategoryRows = async (): Promise<CategoryRow[]> => {
   cacheTag('products')
   cacheLife('hours')
 
-  return db
-    .select({ id: categories.id, slug: categories.slug, name: categories.name })
-    .from(categories)
-    .orderBy(asc(categories.id))
+  return dbQuery({
+    name: 'products.categories',
+    run: (db) =>
+      db
+        .select({ id: categories.id, slug: categories.slug, name: categories.name })
+        .from(categories)
+        .orderBy(asc(categories.id)),
+  })
 }
 
 export const getCategories = async (): Promise<CategoryOption[]> =>
@@ -113,22 +128,29 @@ const inCategory = (categoryId: number | null) =>
 const nameContains = (text: string) => ilike(products.name, `%${escapeLikePattern(text)}%`)
 
 // No join: every product has exactly one category (see inCategory), so the count is the same without it.
-const countWhere = async (where: SQL | undefined) => {
-  const [row] = await db.select({ total: count() }).from(products).where(where)
+// The name tells the cached listing (products.count) from the uncached search (products.search-count) in logs.
+type CountSelection = { name: DbQueryName; where: SQL | undefined }
+
+const countWhere = async ({ name, where }: CountSelection) => {
+  const [row] = await dbQuery({ name, run: (db) => db.select({ total: count() }).from(products).where(where) })
   return row?.total ?? 0
 }
 
-type PageSelection = { where: SQL | undefined; sort: ProductSort; page: number }
+type PageSelection = { name: DbQueryName; where: SQL | undefined; sort: ProductSort; page: number }
 
-const selectPage = ({ where, sort, page }: PageSelection): Promise<ProductSummary[]> =>
-  db
-    .select(SUMMARY_FIELDS)
-    .from(products)
-    .innerJoin(categories, eq(products.categoryId, categories.id))
-    .where(where)
-    .orderBy(...ORDER_BY[sort])
-    .limit(PAGE_SIZE)
-    .offset((page - 1) * PAGE_SIZE)
+const selectPage = ({ name, where, sort, page }: PageSelection): Promise<ProductSummary[]> =>
+  dbQuery({
+    name,
+    run: (db) =>
+      db
+        .select(SUMMARY_FIELDS)
+        .from(products)
+        .innerJoin(categories, eq(products.categoryId, categories.id))
+        .where(where)
+        .orderBy(...ORDER_BY[sort])
+        .limit(PAGE_SIZE)
+        .offset((page - 1) * PAGE_SIZE),
+  })
 
 // Arguments of a 'use cache' function are its cache key (ADR-0008). Only callers below may reach these two, and
 // only with a category id confirmed by getCategoryRows and a page already clamped, so the number of entries stays
@@ -138,7 +160,7 @@ const countCatalog = async (categoryId: number | null): Promise<number> => {
   cacheTag('products')
   cacheLife('hours')
 
-  return countWhere(inCategory(categoryId))
+  return countWhere({ name: 'products.count', where: inCategory(categoryId) })
 }
 
 type CatalogPageKey = { categoryId: number | null; sort: ProductSort; page: number }
@@ -148,7 +170,7 @@ const getCatalogPage = async ({ categoryId, sort, page }: CatalogPageKey): Promi
   cacheTag('products')
   cacheLife('hours')
 
-  return selectPage({ where: inCategory(categoryId), sort, page })
+  return selectPage({ name: 'products.page', where: inCategory(categoryId), sort, page })
 }
 
 const toPageCount = (total: number) => Math.max(1, Math.ceil(total / PAGE_SIZE))
@@ -192,40 +214,17 @@ const listCatalog = async ({ categoryId, sort, page: requested }: ListingInput):
   return { items, total, pageCount, page }
 }
 
-const SQLSTATE = /^[0-9A-Z]{5}$/
-
-// Drizzle puts the driver error in `cause`; the SQLSTATE is read from there first, then from the error itself.
-const sqlStateOf = (error: unknown): string | undefined => {
-  for (const candidate of [error instanceof Error ? error.cause : undefined, error]) {
-    const code = candidate instanceof Error && 'code' in candidate ? candidate.code : undefined
-    if (typeof code === 'string' && SQLSTATE.test(code)) return code
-  }
-  return undefined
-}
-
-// Drizzle wraps driver errors as "Failed query: … params: …" with `params` and `cause`, and Next prints the whole
-// object, so the search text would land in the server log. A new Error carries a fixed message and the SQLSTATE
-// only: no cause, no params, no original message. Same idea as withFixedMessage in src/db/client.ts.
-const searchFailed = (error: unknown): Error => {
-  const code = sqlStateOf(error)
-  if (code === undefined) return new Error('product search query failed')
-  return Object.assign(new Error(`product search query failed (SQLSTATE ${code})`), { code })
-}
-
-// User text never becomes a cache key or a tag, and never reaches a log through a query error (ADR-0008).
+// User text never becomes a cache key or a tag (ADR-0008), and never reaches a log through a query error: dbQuery
+// replaces the error, whose Drizzle original carries the bound `%<q>%` in `params` (ADR-0011).
 const searchCatalog = async ({ categoryId, sort, page: requested, text }: ListingInput & { text: string }) => {
   const where = and(inCategory(categoryId), nameContains(text))
-  try {
-    const total = await countWhere(where)
-    // An empty result is the cheapest request to repeat; stop at one query instead of two.
-    if (total === 0) return emptyPage()
-    const pageCount = toPageCount(total)
-    const page = clampPage(requested, pageCount)
-    const items = await selectPage({ where, sort, page })
-    return { items, total, pageCount, page }
-  } catch (error) {
-    throw searchFailed(error)
-  }
+  const total = await countWhere({ name: 'products.search-count', where })
+  // An empty result is the cheapest request to repeat; stop at one query instead of two.
+  if (total === 0) return emptyPage()
+  const pageCount = toPageCount(total)
+  const page = clampPage(requested, pageCount)
+  const items = await selectPage({ name: 'products.search-page', where, sort, page })
+  return { items, total, pageCount, page }
 }
 
 export const listProducts = async (query: ProductQuery): Promise<ProductListing> => {

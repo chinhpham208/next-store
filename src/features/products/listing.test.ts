@@ -5,7 +5,8 @@ import { inArray, sql } from 'drizzle-orm'
 import { cacheLife, cacheTag } from 'next/cache'
 import { connection } from 'next/server'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { categories, db, products } from '@/db'
+import { categories, products } from '@/db'
+import { db } from '@/db/client'
 import { runMigrations } from '@/db/migrate'
 import { seed } from '@/db/seed'
 import { PRODUCT_SORTS, type ProductListing, type ProductQuery, type ProductSort } from '@/features/products'
@@ -194,7 +195,7 @@ describe('search errors never carry the search text (audit M1)', () => {
     try {
       const error = await rejectionOf(listProducts({ ...ALL, q: SECRET_Q }))
       expect(error).toBeInstanceOf(Error)
-      expect(error).toMatchObject({ message: 'product search query failed (SQLSTATE 42703)', code: '42703' })
+      expect(error).toMatchObject({ message: 'database query failed: products.search-count (42703)', code: '42703' })
       expect(error).not.toHaveProperty('cause')
       expect(error).not.toHaveProperty('params')
       expect(error).not.toHaveProperty('query')
@@ -212,9 +213,53 @@ describe('search errors never carry the search text (audit M1)', () => {
     })
     const error = await rejectionOf(listProducts({ ...ALL, q: SECRET_Q }))
     expect(error).toBeInstanceOf(Error)
-    expect(error).toMatchObject({ message: 'product search query failed' })
+    expect(error).toMatchObject({ message: 'database query failed: products.search-count' })
     expect(error).not.toHaveProperty('code')
     expect(inspect(error, { depth: 10, showHidden: true })).not.toContain(SECRET_Q)
+  })
+})
+
+// NS-55: the cached listing path used to throw Drizzle's own error ("Failed query: select … params: …").
+describe('listing and category errors carry neither SQL nor user input (NS-55)', () => {
+  const SECRET_CATEGORY = 'nguyen-van-b-0909765432'
+
+  const expectFixed = (error: unknown, message: string) => {
+    expect(error).toBeInstanceOf(Error)
+    expect(error).toMatchObject({ message, code: '42703' })
+    expect(error).not.toHaveProperty('cause')
+    const printed = inspect(error, { depth: 10, showHidden: true })
+    expect(printed).not.toMatch(/Failed query|select |from "|params/)
+    expect(printed).not.toContain(SECRET_CATEGORY)
+  }
+
+  it('never puts q into the error of a failed listing or category query', async () => {
+    // The count filters on category_id only when a category is chosen; the page query also reads it to join.
+    await db.execute(sql`alter table products rename column category_id to category_id_renamed`)
+    try {
+      expectFixed(
+        await rejectionOf(listProducts({ ...ALL, category: 'sach' })),
+        'database query failed: products.count (42703)',
+      )
+    } finally {
+      await db.execute(sql`alter table products rename column category_id_renamed to category_id`)
+    }
+    // image is read only by the page query, so the count succeeds and the page query is the one that fails.
+    await db.execute(sql`alter table products rename column image to image_renamed`)
+    try {
+      expectFixed(await rejectionOf(listProducts(ALL)), 'database query failed: products.page (42703)')
+    } finally {
+      await db.execute(sql`alter table products rename column image_renamed to image`)
+    }
+    await db.execute(sql`alter table categories rename column slug to slug_renamed`)
+    try {
+      expectFixed(
+        await rejectionOf(listProducts({ ...ALL, category: SECRET_CATEGORY })),
+        'database query failed: products.categories (42703)',
+      )
+      expectFixed(await rejectionOf(getCategories()), 'database query failed: products.categories (42703)')
+    } finally {
+      await db.execute(sql`alter table categories rename column slug_renamed to slug`)
+    }
   })
 })
 

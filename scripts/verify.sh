@@ -13,9 +13,13 @@ cd "$(dirname "$0")/.."
 STATE_DIR=.verify
 mkdir -p "$STATE_DIR"
 WAIT=${VERIFY_WAIT:-160}
-SMOKE_PORT=3100
-# E2E also starts a second server with a dead database on the next port (playwright.config.ts, M2 Task 15).
-BROKEN_DB_PORT=3101
+# Both read from the environment so a second worktree can run alongside another on 3100 (process.md §4);
+# free_port kills whatever holds these ports, so they must never point at someone else's servers.
+export SMOKE_PORT=${SMOKE_PORT:-3100}
+export E2E_PORT=${E2E_PORT:-3100}
+# E2E starts four local processes (playwright.config.ts): the app, a server with a dead database (M2 Task 15),
+# a silent TCP listener and a server whose database hangs on it (NS-55).
+E2E_PORTS=("$E2E_PORT" "$((E2E_PORT + 1))" "$((E2E_PORT + 2))" "$((E2E_PORT + 3))")
 
 has_script() { node -e "process.exit(require('./package.json').scripts?.['$1'] ? 0 : 1)" 2>/dev/null; }
 
@@ -25,7 +29,11 @@ run_step() {
   if "$@"; then echo "::pass $name"; else echo "::fail $name"; return 1; fi
 }
 
-free_port() { (command -v fuser >/dev/null && fuser -k "$SMOKE_PORT/tcp" "$BROKEN_DB_PORT/tcp" >/dev/null 2>&1) || true; }
+free_port() {
+  local port targets=("$SMOKE_PORT/tcp")
+  for port in "${E2E_PORTS[@]}"; do targets+=("$port/tcp"); done
+  (command -v fuser >/dev/null && fuser -k "${targets[@]}" >/dev/null 2>&1) || true
+}
 
 pipeline() {
   local mode=$1

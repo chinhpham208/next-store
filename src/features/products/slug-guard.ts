@@ -1,6 +1,6 @@
 import 'server-only'
 import { eq } from 'drizzle-orm'
-import { db, products } from '@/db'
+import { dbQuery, products } from '@/db'
 import { isProductSlug } from '@/features/products/slug'
 
 // Slugs already seen to exist in this process. Only positive results are remembered: real slugs are a finite set,
@@ -14,7 +14,10 @@ const knownProductSlugs = new Set<string>()
 const pendingLookups = new Map<string, Promise<boolean>>()
 
 const queryProductSlug = async (slug: string) => {
-  const rows = await db.select({ id: products.id }).from(products).where(eq(products.slug, slug)).limit(1)
+  const rows = await dbQuery({
+    name: 'products.slug-guard',
+    run: (db) => db.select({ id: products.id }).from(products).where(eq(products.slug, slug)).limit(1),
+  })
   if (rows.length === 0) return false
   knownProductSlugs.add(slug)
   return true

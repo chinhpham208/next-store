@@ -58,6 +58,15 @@ module.exports = {
       },
     },
     {
+      name: 'db-internals-stay-in-db',
+      severity: 'error',
+      comment:
+        'Outside src/db, queries run only through dbQuery of @/db (ADR-0011): the raw client throws Drizzle errors ' +
+        'that carry the SQL, the params and the host, and has no time limit. Tests may use @/db/client to set up data.',
+      from: { path: '^src/(app|features|lib|components)/|^src/proxy\\.ts$', pathNot: '\\.test\\.ts$' },
+      to: { path: '^src/db/(client|migrate|seed)\\.ts$' },
+    },
+    {
       name: 'feature-public-api-only-cross',
       severity: 'error',
       comment: 'One feature may use another only through its index.ts.',

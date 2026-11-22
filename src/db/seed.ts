@@ -1,7 +1,7 @@
 import 'server-only'
 import { pathToFileURL } from 'node:url'
-import { categories, db, products } from '@/db'
-import { closeConnection, connection, describeError, describeTarget, type DatabaseTarget } from '@/db/client'
+import { categories, products } from '@/db'
+import { closeConnection, connection, db, describeError, describeTarget, type DatabaseTarget } from '@/db/client'
 import { CATEGORY_SEEDS, PRODUCT_SEEDS } from '@/db/seed-data'
 
 type SeedGuardInput = { targetKind: DatabaseTarget['kind']; vercel: string | undefined; vercelEnv: string | undefined }
