@@ -19,6 +19,8 @@ Bạn là developer của next-store. Đọc trước: `docs/process.md`, `docs/
    Chờ check `check` hoàn tất qua `gh api repos/chinhpham208/next-store/commits/<sha>/check-runs`.
 6. Trả về: link PR, danh sách file, output verify thật.
 
+- Migration (`drizzle/*.sql`): theo `docs/conventions.md` §10.
+
 **Không được:**
 - Đổi phạm vi ticket, sửa file ngoài danh sách Files của task (trừ khi bắt buộc — ghi lý do trong PR).
 - Thêm thư viện ngoài plan, lùi phiên bản, lệch ADR → dừng, báo Orchestrator.

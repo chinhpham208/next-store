@@ -105,7 +105,7 @@ Lý do chọn cấu trúc này thay vì đặt component cạnh route: dễ mở
 | `cart_items` | cartId, productId, quantity |
 | `orders` | id (serial — dùng làm mã đơn gửi cổng thanh toán), items (json snapshot), total, status (`pending` \| `paid` \| `needs_refund` \| `cancelled`), provider, paymentRef (unique), createdAt |
 
-Bài blog là file MDX, không nằm trong DB. Schema thay đổi bằng migration của drizzle-kit (file SQL trong `drizzle/`), không sửa DB bằng tay.
+Bài blog là file MDX, không nằm trong DB. Schema thay đổi bằng migration của drizzle-kit (file SQL trong `drizzle/`), không sửa DB bằng tay. Quy tắc expand / contract: [conventions.md](./conventions.md) §10.
 
 ## 5. Các luồng chính
 
