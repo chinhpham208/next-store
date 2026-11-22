@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sql } from 'drizzle-orm'
 import postgres from 'postgres'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   APP_ROLE_NAME,
   APP_ROLE_REQUIRED_ON_VERCEL,
@@ -11,6 +11,7 @@ import {
   buildPostgresOptions,
   isDbLogOn,
   closeConnection,
+  connection as runtimeConnection,
   createConnection,
   createRuntimeConnection,
   type DatabaseTarget,
@@ -38,6 +39,11 @@ const REMOTE = 'postgres://shop:s3cr3t-pass@ep-x-pooler.eu-central-1.aws.neon.te
 const VERIFIED = { rejectUnauthorized: true }
 const UNPOOLED = 'DATABASE_URL_UNPOOLED'
 
+// NS-72: importing @/db/client opened the runtime PGlite, which keeps starting in the background. Waiting here keeps
+// that start in a hook instead of inside the first test that opens a PGlite of its own (the DB_LOG cases).
+beforeAll(async () => {
+  if (runtimeConnection.kind === 'pglite') await runtimeConnection.db.$client.waitReady
+})
 beforeEach(() => postgresFactory.mockClear())
 afterEach(() => vi.unstubAllEnvs())
 
@@ -1073,8 +1079,7 @@ describe('createRuntimeConnection', () => {
     expect(runtime.current).toBe(only)
     expect(openPglite).toHaveBeenCalledOnce()
     return closeConnection(only)
-    // A real PGlite takes seconds to start on a busy machine (NS-72).
-  }, 30_000)
+  })
 
   it('swallows a failure of the retired client while it ends', async () => {
     const unhandled = vi.fn()
