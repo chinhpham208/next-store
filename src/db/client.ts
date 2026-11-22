@@ -210,8 +210,13 @@ const ENDPOINT_NOT_PRODUCTION_MESSAGE =
   'Từ chối kết nối: database của production không nằm trên endpoint khai báo trong NEON_PRODUCTION_ENDPOINT; ' +
   'sửa giá trị biến hoặc DATABASE_URL trên Vercel.'
 
-const withoutPooler = (label: string): string =>
-  label.endsWith(POOLER_SUFFIX) ? label.slice(0, -POOLER_SUFFIX.length) : label
+// Strips every trailing -pooler, not just one (audit PR #35 L2): whether Neon strips once or repeatedly is not
+// verified, so `<prod>-pooler-pooler` must count as production rather than as an unknown endpoint.
+const withoutPooler = (label: string): string => {
+  let id = label
+  while (id.endsWith(POOLER_SUFFIX)) id = id.slice(0, -POOLER_SUFFIX.length)
+  return id
+}
 
 // Neon hostnames are `ep-<id>[-pooler].<region>.aws.neon.tech`; anything else has no endpoint in its host.
 const hostEndpointId = (url: ParsedPostgresUrl): string | undefined => {
@@ -250,7 +255,8 @@ export const assertEndpointAllowed = ({ url, vercelEnv, productionEndpoint }: En
   if (production !== '' && (!NEON_ENDPOINT_ID.test(production) || production.endsWith(POOLER_SUFFIX))) {
     throw new Error(ENDPOINT_MALFORMED_MESSAGE)
   }
-  if (NEON_PASSWORD_ENDPOINT.test(url.password)) throw new Error(ENDPOINT_IN_PASSWORD_MESSAGE)
+  // trimStart (audit PR #35 L2): a leading space must not hide the prefix from us if the proxy ignores it.
+  if (NEON_PASSWORD_ENDPOINT.test(url.password.trimStart())) throw new Error(ENDPOINT_IN_PASSWORD_MESSAGE)
   const ids = neonEndpointIds(url)
   if (NON_PRODUCTION_VERCEL_ENVS.includes(vercelEnv)) {
     if (production === '') throw new Error(ENDPOINT_MISSING_MESSAGE)
@@ -378,25 +384,35 @@ export const buildPostgresOptions = (
 // Fixed text: names the variable only, never the URL or host the refusal is about.
 const DB_LOG_REFUSED_MESSAGE =
   'Từ chối DB_LOG=1: log của Drizzle in mọi câu lệnh kèm tham số (dữ liệu khách hàng), nên chỉ bật được với PGlite, ' +
-  'Postgres trên localhost, hoặc bản preview / development của Vercel; tắt DB_LOG cho database này.'
+  'Postgres trên localhost, hoặc bản preview / development chạy trên Vercel; tắt DB_LOG cho database này.'
 
-type DbLogGuardInput = { dbLog: string | undefined; target: DatabaseTarget; vercelEnv: string | undefined }
+/** The one definition of "DB_LOG is on": the guard and the logger must never disagree (audit PR #35 L3). */
+export const isDbLogOn = (value: string | undefined): boolean => value === '1'
+
+type DbLogGuardInput = {
+  dbLog: string | undefined
+  target: DatabaseTarget
+  vercel: string | undefined
+  vercelEnv: string | undefined
+}
 
 // Allow-list, same spirit as assertSeedAllowed: a remote Postgres counts as production unless Vercel says it is
 // a preview / development deployment. A VPS, a missing or misspelt VERCEL_ENV must never turn on query logging
-// for customer data (ADR-0008).
-export const assertDbLogAllowed = ({ dbLog, target, vercelEnv }: DbLogGuardInput): void => {
-  if (dbLog !== '1') return
+// for customer data (ADR-0008). VERCEL_ENV counts only when VERCEL is set (audit PR #35 M1): only then has
+// resolveDatabaseTarget run the endpoint guard, so off Vercel a hand-set VERCEL_ENV=preview proves nothing.
+export const assertDbLogAllowed = ({ dbLog, target, vercel, vercelEnv }: DbLogGuardInput): void => {
+  if (!isDbLogOn(dbLog)) return
   if (target.kind === 'pglite') return
   if (isLocalHost(parsePostgresUrl(target.url).host)) return
-  if (vercelEnv !== undefined && NON_PRODUCTION_VERCEL_ENVS.includes(vercelEnv)) return
+  if (Boolean(vercel) && vercelEnv !== undefined && NON_PRODUCTION_VERCEL_ENVS.includes(vercelEnv)) return
   throw new Error(DB_LOG_REFUSED_MESSAGE)
 }
 
 export const createConnection = (target: DatabaseTarget, { max = 5, name = 'DATABASE_URL' }: ConnectionOptions = {}) => {
   // Before anything else: no client, and so no logger, may exist for a database that must not be logged.
-  assertDbLogAllowed({ dbLog: process.env.DB_LOG, target, vercelEnv: process.env.VERCEL_ENV })
-  const logger = process.env.DB_LOG === '1'
+  const dbLog = process.env.DB_LOG
+  assertDbLogAllowed({ dbLog, target, vercel: process.env.VERCEL, vercelEnv: process.env.VERCEL_ENV })
+  const logger = isDbLogOn(dbLog)
   if (target.kind === 'postgres') {
     // Our own refusals already carry fixed text; only the driver's constructor errors need wrapping.
     const options = buildPostgresOptions(target.url, { max, name })

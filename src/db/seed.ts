@@ -4,24 +4,27 @@ import { categories, db, products } from '@/db'
 import { closeConnection, connection, describeError, describeTarget, type DatabaseTarget } from '@/db/client'
 import { CATEGORY_SEEDS, PRODUCT_SEEDS } from '@/db/seed-data'
 
-type SeedGuardInput = { targetKind: DatabaseTarget['kind']; vercelEnv: string | undefined }
+type SeedGuardInput = { targetKind: DatabaseTarget['kind']; vercel: string | undefined; vercelEnv: string | undefined }
 
 // Allow-list, not deny-list: a Postgres database is production unless Vercel says it is a preview branch.
 // A VPS, a typo ('prod', 'Production') or a missing variable must never be mistaken for a safe target.
 // There is deliberately no override (NS-36, owner decision 3): production is seeded from generated SQL in the
 // Neon SQL Editor, so nobody needs the production DATABASE_URL on a machine that can run this script.
-export const assertSeedAllowed = ({ targetKind, vercelEnv }: SeedGuardInput): void => {
+// VERCEL_ENV counts only when VERCEL is set (audit PR #35 M1): only then has resolveDatabaseTarget checked the URL
+// against NEON_PRODUCTION_ENDPOINT, so off Vercel a hand-set VERCEL_ENV=preview must not open a way in.
+export const assertSeedAllowed = ({ targetKind, vercel, vercelEnv }: SeedGuardInput): void => {
   if (targetKind === 'pglite') return
-  if (vercelEnv === 'preview') return
+  if (Boolean(vercel) && vercelEnv === 'preview') return
   throw new Error(
-    'Từ chối seed Postgres: chỉ preview (VERCEL_ENV=preview) được seed tự động, mọi trường hợp khác coi là production. ' +
+    'Từ chối seed Postgres: chỉ preview trên Vercel (VERCEL có giá trị, VERCEL_ENV=preview) được seed tự động, ' +
+      'mọi trường hợp khác coi là production. ' +
       'Seed production: npm run -s db:seed:sql rồi chạy SQL đó trong Neon SQL Editor (README, mục Seed production).',
   )
 }
 
 export const seed = async (): Promise<void> => {
   // Guard first: no statement may reach a production database before this check.
-  assertSeedAllowed({ targetKind: connection.kind, vercelEnv: process.env.VERCEL_ENV })
+  assertSeedAllowed({ targetKind: connection.kind, vercel: process.env.VERCEL, vercelEnv: process.env.VERCEL_ENV })
 
   await db.transaction(async (tx) => {
     await tx.insert(categories).values(CATEGORY_SEEDS).onConflictDoNothing({ target: categories.slug })

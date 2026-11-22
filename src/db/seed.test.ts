@@ -22,21 +22,33 @@ describe('assertSeedAllowed', () => {
   it.each([undefined, '', 'production', 'Production', 'production ', 'prod', 'development', 'preview '])(
     'refuses Postgres when VERCEL_ENV=%j',
     (vercelEnv) => {
-      expect(() => assertSeedAllowed({ targetKind: 'postgres', vercelEnv })).toThrow(/production/)
+      expect(() => assertSeedAllowed({ targetKind: 'postgres', vercel: '1', vercelEnv })).toThrow(/production/)
     },
   )
+  // Audit PR #35 M1: off Vercel the endpoint guard never ran, so a hand-set VERCEL_ENV=preview proves nothing.
+  it.each([
+    ['unset', undefined],
+    ['empty', ''],
+  ])('refuses Postgres with VERCEL_ENV=preview or development when VERCEL is %s', (_label, vercel) => {
+    for (const vercelEnv of ['preview', 'development']) {
+      expect(() => assertSeedAllowed({ targetKind: 'postgres', vercel, vercelEnv })).toThrow(/db:seed:sql/)
+    }
+  })
+  it('still seeds PGlite without VERCEL', () => {
+    expect(() => assertSeedAllowed({ targetKind: 'pglite', vercel: undefined, vercelEnv: undefined })).not.toThrow()
+  })
   it('allows Postgres on a Vercel preview', () => {
-    expect(() => assertSeedAllowed({ targetKind: 'postgres', vercelEnv: 'preview' })).not.toThrow()
+    expect(() => assertSeedAllowed({ targetKind: 'postgres', vercel: '1', vercelEnv: 'preview' })).not.toThrow()
   })
   it('has no production override left', () => {
-    expect(() => assertSeedAllowed({ targetKind: 'postgres', vercelEnv: 'production' })).toThrow(/db:seed:sql/)
+    expect(() => assertSeedAllowed({ targetKind: 'postgres', vercel: '1', vercelEnv: 'production' })).toThrow(/db:seed:sql/)
     expect(readFileSync('src/db/seed.ts', 'utf8')).not.toMatch(/allow-?production/i)
   })
   it('points to the Neon SQL Editor route in the refusal', () => {
-    expect(() => assertSeedAllowed({ targetKind: 'postgres', vercelEnv: undefined })).toThrow(/Neon SQL Editor/)
+    expect(() => assertSeedAllowed({ targetKind: 'postgres', vercel: undefined, vercelEnv: undefined })).toThrow(/Neon SQL Editor/)
   })
   it('always allows PGlite, even with VERCEL_ENV=production', () => {
-    expect(() => assertSeedAllowed({ targetKind: 'pglite', vercelEnv: 'production' })).not.toThrow()
+    expect(() => assertSeedAllowed({ targetKind: 'pglite', vercel: '1', vercelEnv: 'production' })).not.toThrow()
   })
 })
 
@@ -51,7 +63,14 @@ describe('seed on a Postgres target', () => {
     await expect(seed()).rejects.toThrow(/production/)
     expect(fake.transaction).not.toHaveBeenCalled()
   })
+  it('refuses before any statement when VERCEL_ENV=preview is set by hand off Vercel', async () => {
+    vi.stubEnv('VERCEL', '')
+    vi.stubEnv('VERCEL_ENV', 'preview')
+    await expect(seed()).rejects.toThrow(/db:seed:sql/)
+    expect(fake.transaction).not.toHaveBeenCalled()
+  })
   it('seeds a Vercel preview', async () => {
+    vi.stubEnv('VERCEL', '1')
     vi.stubEnv('VERCEL_ENV', 'preview')
     await seed()
     expect(fake.transaction).toHaveBeenCalledOnce()
