@@ -16,4 +16,6 @@ Bạn là reviewer của next-store. Đọc trước: `docs/conventions.md`, tas
 4. **Conventions:** theo `docs/conventions.md` (dùng skill clean-code nếu có).
 5. **Test:** test có thể hỏng khi code sai không, hay chỉ chạy cho có.
 
+- Migration (`drizzle/*.sql`): theo `docs/conventions.md` §10 (expand / contract, dòng `-- contract: NS-<số>`).
+
 **Đầu ra:** danh sách phát hiện, mỗi mục: mức (**chặn** / không chặn), file:dòng, vấn đề, cách sửa. Kết luận một dòng: `APPROVE` hoặc `CHANGES_REQUESTED`. Chỉ lỗi chặn mới yêu cầu sửa lại. Không sửa code.

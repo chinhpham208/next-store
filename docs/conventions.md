@@ -105,3 +105,13 @@ Chi tiết và lý do: [ADR-0006](./adr/0006-branch-strategy.md).
 - Quyết định kiến trúc mới → ADR mới trong `docs/adr/` (đánh số tăng dần, không sửa ADR cũ; thay đổi thì viết ADR mới "thay thế ADR-xxxx").
 - Mỗi mốc có `docs/plans/M<n>.md`, viết và được duyệt trước khi code.
 - Comment trong code giải thích **vì sao**, không giải thích code làm gì.
+
+## 10. Migration
+
+- `db:migrate` chạy trong bước build của **mọi** deploy, trước khi code mới nhận request. Trong lúc đó và khi rollback, **code cũ vẫn chạy trên schema mới**. Hai build cùng lúc có thể cùng migrate.
+- **Expand** (làm cùng release với code dùng nó): thêm bảng, thêm cột nullable hoặc có `DEFAULT`, thêm index, thêm ràng buộc mà dữ liệu hiện có đã thoả.
+- **Contract** (chỉ ở release **sau** release cuối cùng còn code đọc / ghi đối tượng đó): `DROP TABLE`, `DROP COLUMN`, `RENAME`, đổi kiểu cột, thêm `NOT NULL` không có `DEFAULT`, `TRUNCATE`, `DELETE` không `WHERE`. File migration phải có dòng `-- contract: NS-<số>` ghi ticket của bước expand tương ứng.
+- Backfill dữ liệu là migration riêng, chạy lại được, không nằm chung file với đổi schema.
+- Không sửa hay xoá file `drizzle/*.sql` đã merge; sai thì viết migration mới.
+- PR có `drizzle/*.sql`: Auditor bắt buộc; mô tả PR ghi từng câu lệnh thuộc expand hay contract và code nào đang chạy còn dùng đối tượng bị đổi. Migration chỉ lên production qua release PR.
+- Bảng mới tự có quyền cho role app nhờ `ALTER DEFAULT PRIVILEGES`; migration không tự `GRANT`.
