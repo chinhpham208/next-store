@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Smoke test: trang chủ trả 200 và có SMOKE_TEXT; một đường dẫn không tồn tại trả 404 với trang tiếng Việt;
 # một trang chi tiết sản phẩm trả 200 và có tên sản phẩm; /products trả 200 và có lưới sản phẩm, kể cả với
-# tham số không hợp lệ; slug sản phẩm không tồn tại trả 404 ngay lần đầu; /sitemap.xml và /robots.txt trả 200, cùng
-# một origin tuyệt đối, robots.txt chặn hay cho crawl đúng môi trường; trang chủ có og:site_name.
+# tham số không hợp lệ; /blog và một bài blog trả 200 và có nội dung; slug sản phẩm không tồn tại trả 404 ngay lần
+# đầu; /sitemap.xml và /robots.txt trả 200, cùng một origin tuyệt đối, robots.txt chặn hay cho crawl đúng môi trường;
+# trang chủ có og:site_name.
 #
 #   npm run smoke                                   # chạy `next start` từ bản build hiện có (.next/), kiểm rồi tắt
 #   BASE_URL=https://<deploy>.vercel.app npm run smoke   # kiểm một URL đã deploy
@@ -215,6 +216,21 @@ for LISTING_PATH in /products '/products?page=abc&sort=xyz'; do
   if grep -qF -- 'Đã có lỗi xảy ra' "$TMP/listing.html"; then fail "HTML $LISTING_PATH là trang lỗi"; fi
   echo "smoke: GET $LISTING_PATH → 200, có lưới sản phẩm"
 done
+
+# US-10: /blog lists the posts from the registry and a prerendered post renders its MDX under its h1. The unknown
+# blog slug is not checked here yet: notFound() in the page answers 200 on the first hit until src/proxy.ts covers
+# /blog/<slug> (M3 Task 13).
+BLOG_TEXT='Chào mừng đến next-store'
+status=$(fetch "$BASE/blog" "$TMP/blog.html") || fail "không kết nối được $BASE/blog"
+[ "$status" = 200 ] || fail "GET /blog trả $status, cần 200"
+grep -qF -- "$BLOG_TEXT" "$TMP/blog.html" || fail "HTML /blog không có \"$BLOG_TEXT\""
+echo "smoke: GET /blog → 200, có \"$BLOG_TEXT\""
+POST_PATH=/blog/chao-mung-den-next-store
+status=$(fetch "$BASE$POST_PATH" "$TMP/post.html") || fail "không kết nối được $BASE$POST_PATH"
+[ "$status" = 200 ] || fail "GET $POST_PATH trả $status, cần 200"
+grep -qF -- '<h1' "$TMP/post.html" || fail "HTML $POST_PATH không có <h1"
+grep -qF -- '<article' "$TMP/post.html" || fail "HTML $POST_PATH không có <article"
+echo "smoke: GET $POST_PATH → 200, có <h1 và <article"
 
 # US-05 (ADR-0009): src/proxy.ts answers an unknown product slug with a real 404 on the very first request, before
 # render; a page-level notFound() would send a 200 shell first (K3). Fresh slugs each run, so no earlier request

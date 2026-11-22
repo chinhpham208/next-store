@@ -1,6 +1,6 @@
 import Image from 'next/image'
-import Link from 'next/link'
 import { notFound } from 'next/navigation'
+import { Breadcrumb, type BreadcrumbItem } from '@/components/layout/breadcrumb'
 import { Badge } from '@/components/ui/badge'
 import { Container } from '@/components/ui/container'
 import { Price } from '@/components/ui/price'
@@ -22,31 +22,6 @@ const SHELL_CLASS = 'flex flex-col gap-4 pt-4 pb-16 md:gap-6 md:pt-6 md:pb-24'
 const BODY_CLASS = 'grid gap-8 md:grid-cols-2 md:items-start md:gap-16'
 const IMAGE_FRAME_CLASS =
   'aspect-square overflow-hidden rounded-md bg-surface-muted outline outline-1 -outline-offset-1 outline-border'
-const CRUMB_LINK_CLASS = 'inline-flex min-h-11 items-center text-link underline underline-offset-4 hover:decoration-2'
-
-type Crumb = { href: string; label: string }
-
-const Separator = () => (
-  <span aria-hidden="true" className="text-muted-foreground">
-    /
-  </span>
-)
-
-// The product name is the h1 right below, so the trail stops at the category (design-system §2).
-const Breadcrumb = ({ crumbs }: { crumbs: Crumb[] }) => (
-  <nav aria-label="Đường dẫn">
-    <ol className="flex flex-wrap items-center gap-x-2 text-sm">
-      {crumbs.map((crumb, index) => (
-        <li key={crumb.href} className="flex items-center gap-x-2">
-          {index > 0 ? <Separator /> : null}
-          <Link href={crumb.href} className={CRUMB_LINK_CLASS}>
-            {crumb.label}
-          </Link>
-        </li>
-      ))}
-    </ol>
-  </nav>
-)
 
 // One template string, not "Còn {stock} sản phẩm": separate text nodes would stream as "Còn <!-- -->12…" and the
 // element would no longer contain exactly "Còn N sản phẩm".
@@ -61,7 +36,8 @@ const Stock = ({ stock }: { stock: number }) =>
 
 export const ProductDetailView = ({ product }: ProductDetailViewProps) => {
   const inStock = product.stock > 0
-  const crumbs: Crumb[] = [
+  // The product name is the h1 right below, so the trail stops at the category (design-system §2).
+  const crumbs: BreadcrumbItem[] = [
     { href: '/', label: 'Trang chủ' },
     { href: '/products', label: 'Sản phẩm' },
     { href: buildProductsHref({ category: product.categorySlug }), label: product.categoryName },
