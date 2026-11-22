@@ -118,8 +118,10 @@ Chi tiết và lý do: [ADR-0006](./adr/0006-branch-strategy.md).
   - `DROP TABLE`, `DROP COLUMN` (kể cả `ALTER TABLE t DROP c` không có từ `COLUMN`), `RENAME`, đổi kiểu cột (`ALTER COLUMN … TYPE`), `TRUNCATE`.
   - `ALTER COLUMN … SET NOT NULL`; `ALTER TABLE … ADD [COLUMN] … NOT NULL` không có `DEFAULT`, `GENERATED` hoặc kiểu serial.
   - `ALTER COLUMN … DROP DEFAULT`, `DROP INDEX`, `DROP CONSTRAINT`, `DROP TYPE / SCHEMA / VIEW / SEQUENCE`, `SET SCHEMA`, `REVOKE`.
-  - `DELETE FROM` và `UPDATE` không có `WHERE` (kể cả trong CTE).
+  - `DELETE FROM` và `UPDATE` không có `WHERE` của chính câu đó (kể cả trong CTE, khi bảng có alias hoặc `ONLY`). `WHERE` nằm trong subquery không tính.
+  - `EXECUTE` SQL động (trừ `EXECUTE FUNCTION` / `PROCEDURE` của trigger): không đọc được lúc kiểm nên coi là contract.
   - File migration phải có dòng `-- contract: NS-<số>` ghi ticket của bước expand tương ứng. Một dòng cho cả file: Auditor kiểm từng câu lệnh contract trong file khớp ticket đó.
+- `src/db/migrations.test.ts` chỉ là lưới thứ hai: nó dò bằng regex trên SQL đã bỏ comment và chuỗi, nên không hiểu hết cú pháp (ví dụ chuỗi dollar-quote được đọc như code). Auditor vẫn đọc từng câu của mọi `drizzle/*.sql`, test xanh không thay việc đó.
 - `CREATE INDEX` (không `CONCURRENTLY`) và `ADD CONSTRAINT` khoá bảng khi chạy; không nằm trong danh sách trên nhưng Auditor đánh giá riêng với `orders` và `cart_items` trước khi merge.
 - Backfill dữ liệu là migration riêng, chạy lại được, không nằm chung file với đổi schema.
 - Không sửa hay xoá file `drizzle/*.sql` đã merge; sai thì viết migration mới.
