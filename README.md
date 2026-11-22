@@ -59,9 +59,18 @@ Biến môi trường của database trên Vercel:
 | Biến | Ai đặt | Production | Preview / Dev | Local, CI |
 |---|---|---|---|---|
 | `DATABASE_URL`, `DATABASE_URL_UNPOOLED` | tích hợp Neon | Neon nhánh chính | Neon branch của nhánh git | trống (PGlite) |
-| `NEON_PRODUCTION_ENDPOINT` | chủ dự án (Vercel → Environment Variables, cả ba environment, không bí mật) | không bắt buộc; có thì phải khớp endpoint của `DATABASE_URL` | **bắt buộc**; phải khác endpoint của `DATABASE_URL` | bỏ trống, không kiểm |
+| `NEON_PRODUCTION_ENDPOINT` | chủ dự án (Vercel → Environment Variables, **một** mục chọn cả ba environment, không bí mật) | không bắt buộc; có thì phải khớp endpoint của `DATABASE_URL` | **bắt buộc**; phải khác endpoint của `DATABASE_URL` | bỏ trống, không kiểm |
+| `DB_LOG` | người gỡ lỗi | **bị từ chối** (`1` làm kết nối dừng ngay) | được bật | được bật với PGlite / `localhost`; Postgres ở xa ngoài Vercel bị từ chối |
 
-Chặn preview chạm database production (NS-36): giá trị là endpoint id của Neon branch production (`ep-…`, không có `-pooler`, không có tên miền). Khi `VERCEL` có giá trị, mọi kết nối (runtime, `db:migrate` với cả URL unpooled, `db:seed`) đều bị kiểm trước khi mở socket: preview / Dev từ chối nếu biến thiếu hoặc nếu host (bỏ `-pooler`, không phân biệt hoa thường) hay tham số `options=endpoint=` trùng endpoint production; production từ chối nếu biến có mặt mà host không phải endpoint đó. Thông báo lỗi chỉ nêu tên biến, không in URL, host hay mật khẩu.
+Chặn preview chạm database production (NS-36): giá trị là endpoint id của Neon branch production (`ep-…`, **viết thường**, không có `-pooler`, không có tên miền); sai dạng thì mọi environment trên Vercel, kể cả production, đều từ chối kết nối. Khi `VERCEL` có giá trị, mọi kết nối (runtime, `db:migrate` với cả URL unpooled, `db:seed`) đều bị kiểm trước khi mở socket:
+
+- preview / Dev từ chối nếu biến thiếu; nếu host (bỏ `-pooler`, không phân biệt hoa thường) hay tham số `options=endpoint=` trùng endpoint production; hoặc nếu host là của Neon (`….neon.tech`) mà không mang endpoint id `ep-…`;
+- production từ chối nếu biến có mặt mà host không phải endpoint đó, hoặc `options=endpoint=` trỏ tới endpoint khác;
+- mọi environment từ chối mật khẩu bắt đầu bằng `endpoint=` hoặc `project=` (cách Neon định tuyến client không có SNI, có thể dẫn tới endpoint khác với host đã kiểm).
+
+Biến chỉ nhận **một** endpoint: đặt nó là một mục duy nhất chọn cả Production, Preview, Development (hai mục lệch giá trị thì preview mất bảo vệ mà không có tín hiệu). Thêm read replica cho branch production thì phải mở rộng lớp chặn thành danh sách trước khi bật replica. Ngoài Vercel (local, CI, VPS) lớp này không chạy. Thông báo lỗi chỉ nêu tên biến, không in URL, host hay mật khẩu.
+
+`DB_LOG=1` in mọi câu lệnh kèm tham số (dữ liệu khách hàng) nên chỉ được bật với PGlite, Postgres trên `localhost` / `127.0.0.1` / `::1`, hoặc khi `VERCEL_ENV` là `preview` / `development`; mọi trường hợp khác (production, `VERCEL_ENV` thiếu hoặc sai chính tả, VPS) bị từ chối trước khi dựng client.
 
 ## Smoke test và E2E trên URL thật
 
@@ -108,7 +117,7 @@ gh api repos/chinhpham208/next-store/commits/<sha>/check-runs \
 
 - `db:seed` với Postgres chỉ tự chạy khi `VERCEL_ENV=preview`. Mọi trường hợp khác (production, biến thiếu hoặc sai chính tả, VPS) bị coi là production và bị từ chối trước mọi câu lệnh DB.
 - `build:vercel` không gọi seed khi `VERCEL_ENV=production`.
-- `db:seed` bị từ chối trên production. Đường **duy nhất** được hỗ trợ để seed production là chạy SQL sinh từ `src/db/seed-data.ts` trong Neon SQL Editor, branch `main`; không ai cầm mật khẩu hay `DATABASE_URL` production trên máy.
+- `db:seed` bị từ chối trên production và không có cờ hay biến nào để vượt qua. Đường **duy nhất** được hỗ trợ để seed production là chạy SQL sinh từ `src/db/seed-data.ts` trong Neon SQL Editor, branch `main`; không ai cầm mật khẩu hay `DATABASE_URL` production trên máy.
 
 ```bash
 SEED_SQL="$(mktemp -t seed-sql.XXXXXX)"

@@ -21,7 +21,10 @@ type DatabaseEnv = {
 export type DatabaseTarget = { kind: 'postgres'; url: string } | { kind: 'pglite'; dataDir: string }
 
 const DEFAULT_PGLITE_DATA_DIR = '.data/pglite'
-const VERCEL_ENVS = ['production', 'preview', 'development']
+// One source for both lists, so a new Vercel environment cannot be valid for resolveDatabaseTarget yet unknown to
+// the endpoint and DB_LOG guards (which treat anything not listed here as production).
+const NON_PRODUCTION_VERCEL_ENVS = ['preview', 'development']
+const VERCEL_ENVS = ['production', ...NON_PRODUCTION_VERCEL_ENVS]
 // Compared after `new URL`, which serialises `[0:0:0:0:0:0:0:1]` as `[::1]`; the brackets are stripped below.
 const LOCAL_HOSTS = ['localhost', '127.0.0.1', '::1']
 const DEFAULT_PORT = 5432
@@ -184,7 +187,8 @@ export const resolveSsl = (url: ParsedPostgresUrl, name = 'DATABASE_URL'): SslPo
 
 const POOLER_SUFFIX = '-pooler'
 const NEON_ENDPOINT_ID = /^ep-[a-z0-9]+(?:-[a-z0-9]+)*$/
-const NON_PRODUCTION_VERCEL_ENVS = ['preview', 'development']
+// Neon's fallback for clients without SNI: `endpoint=<id>;<password>` or `project=<id>$<password>`.
+const NEON_PASSWORD_ENDPOINT = /^(?:endpoint|project)=/i
 
 // Fixed text: the endpoint id, host and URL never appear, so a refusal in a public build log reveals nothing.
 const ENDPOINT_MALFORMED_MESSAGE =
@@ -196,6 +200,12 @@ const ENDPOINT_MISSING_MESSAGE =
 const ENDPOINT_IS_PRODUCTION_MESSAGE =
   'Từ chối kết nối: database của bản preview / development trỏ tới endpoint production ' +
   '(trùng NEON_PRODUCTION_ENDPOINT); kiểm tra Neon branch mà tích hợp Neon gán cho nhánh git này.'
+const ENDPOINT_IN_PASSWORD_MESSAGE =
+  'Từ chối kết nối: mật khẩu trong URL database bắt đầu bằng endpoint= hoặc project=, tức Neon có thể định tuyến ' +
+  'tới endpoint khác với host đã kiểm theo NEON_PRODUCTION_ENDPOINT; dùng URL do tích hợp Neon cấp.'
+const ENDPOINT_UNKNOWN_NEON_HOST_MESSAGE =
+  'Từ chối kết nối: host Neon của bản preview / development không mang endpoint id (ep-…), nên không so được với ' +
+  'NEON_PRODUCTION_ENDPOINT; dùng URL do tích hợp Neon cấp.'
 const ENDPOINT_NOT_PRODUCTION_MESSAGE =
   'Từ chối kết nối: database của production không nằm trên endpoint khai báo trong NEON_PRODUCTION_ENDPOINT; ' +
   'sửa giá trị biến hoặc DATABASE_URL trên Vercel.'
@@ -217,20 +227,34 @@ export const neonEndpointIds = (url: ParsedPostgresUrl): string[] => {
   return [...new Set([fromHost, fromOptions].filter((id) => id !== undefined))]
 }
 
+// A trailing dot is the same DNS name, so `api.….neon.tech.` must not slip past the suffix check.
+const isNeonHost = (host: string): boolean => {
+  const name = host.toLowerCase().replace(/\.+$/, '')
+  return name === 'neon.tech' || name.endsWith('.neon.tech')
+}
+
 type EndpointGuardInput = { url: ParsedPostgresUrl; vercelEnv: string; productionEndpoint: string | undefined }
 
 // Why a missing variable is fatal on preview / development but not on production: preview builds run
 // migrate and seed, so silently losing the guard there is exactly the accident we prevent (fail closed).
 // Production must keep deploying while the variable is being rolled out; once it is set, a wrong value
 // stops production right away, which also verifies what the owner typed.
+// The variable holds exactly one endpoint id (audit PR #15 L2). A read replica on the production branch is a
+// second compute with its own id: before enabling one, widen this to a list, otherwise production refuses the
+// replica and a preview pointed at it is not recognised as production.
+// Password and host checks (audit PR #15 L1): Neon routes clients without SNI by an `endpoint=` / `project=`
+// prefix in the password, and a Neon host without an `ep-` label names no endpoint, so in both cases the host we
+// compared is not necessarily where the connection lands.
 export const assertEndpointAllowed = ({ url, vercelEnv, productionEndpoint }: EndpointGuardInput): void => {
   const production = productionEndpoint?.trim() ?? ''
   if (production !== '' && (!NEON_ENDPOINT_ID.test(production) || production.endsWith(POOLER_SUFFIX))) {
     throw new Error(ENDPOINT_MALFORMED_MESSAGE)
   }
+  if (NEON_PASSWORD_ENDPOINT.test(url.password)) throw new Error(ENDPOINT_IN_PASSWORD_MESSAGE)
   const ids = neonEndpointIds(url)
   if (NON_PRODUCTION_VERCEL_ENVS.includes(vercelEnv)) {
     if (production === '') throw new Error(ENDPOINT_MISSING_MESSAGE)
+    if (isNeonHost(url.host) && hostEndpointId(url) === undefined) throw new Error(ENDPOINT_UNKNOWN_NEON_HOST_MESSAGE)
     if (ids.includes(production)) throw new Error(ENDPOINT_IS_PRODUCTION_MESSAGE)
     return
   }
@@ -261,7 +285,11 @@ export const resolveDatabaseTarget = (env: DatabaseEnv): DatabaseTarget => {
     // One choke point for runtime, db:migrate and db:seed. Off Vercel (local, CI, VPS) there is no preview
     // concept to protect, so the check would only add configuration.
     if (onVercel) {
-      assertEndpointAllowed({ url: parsed, vercelEnv: env.VERCEL_ENV ?? '', productionEndpoint: env.NEON_PRODUCTION_ENDPOINT })
+      assertEndpointAllowed({
+        url: parsed,
+        vercelEnv: env.VERCEL_ENV ?? '',
+        productionEndpoint: env.NEON_PRODUCTION_ENDPOINT,
+      })
     }
     return { kind: 'postgres', url }
   }
@@ -347,7 +375,27 @@ export const buildPostgresOptions = (
   }
 }
 
+// Fixed text: names the variable only, never the URL or host the refusal is about.
+const DB_LOG_REFUSED_MESSAGE =
+  'Từ chối DB_LOG=1: log của Drizzle in mọi câu lệnh kèm tham số (dữ liệu khách hàng), nên chỉ bật được với PGlite, ' +
+  'Postgres trên localhost, hoặc bản preview / development của Vercel; tắt DB_LOG cho database này.'
+
+type DbLogGuardInput = { dbLog: string | undefined; target: DatabaseTarget; vercelEnv: string | undefined }
+
+// Allow-list, same spirit as assertSeedAllowed: a remote Postgres counts as production unless Vercel says it is
+// a preview / development deployment. A VPS, a missing or misspelt VERCEL_ENV must never turn on query logging
+// for customer data (ADR-0008).
+export const assertDbLogAllowed = ({ dbLog, target, vercelEnv }: DbLogGuardInput): void => {
+  if (dbLog !== '1') return
+  if (target.kind === 'pglite') return
+  if (isLocalHost(parsePostgresUrl(target.url).host)) return
+  if (vercelEnv !== undefined && NON_PRODUCTION_VERCEL_ENVS.includes(vercelEnv)) return
+  throw new Error(DB_LOG_REFUSED_MESSAGE)
+}
+
 export const createConnection = (target: DatabaseTarget, { max = 5, name = 'DATABASE_URL' }: ConnectionOptions = {}) => {
+  // Before anything else: no client, and so no logger, may exist for a database that must not be logged.
+  assertDbLogAllowed({ dbLog: process.env.DB_LOG, target, vercelEnv: process.env.VERCEL_ENV })
   const logger = process.env.DB_LOG === '1'
   if (target.kind === 'postgres') {
     // Our own refusals already carry fixed text; only the driver's constructor errors need wrapping.

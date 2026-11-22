@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { assertSeedAllowed, seed } from '@/db/seed'
 
@@ -21,23 +22,21 @@ describe('assertSeedAllowed', () => {
   it.each([undefined, '', 'production', 'Production', 'production ', 'prod', 'development', 'preview '])(
     'refuses Postgres when VERCEL_ENV=%j',
     (vercelEnv) => {
-      expect(() => assertSeedAllowed({ targetKind: 'postgres', vercelEnv, allowProduction: false })).toThrow(
-        /production/,
-      )
+      expect(() => assertSeedAllowed({ targetKind: 'postgres', vercelEnv })).toThrow(/production/)
     },
   )
   it('allows Postgres on a Vercel preview', () => {
-    expect(() =>
-      assertSeedAllowed({ targetKind: 'postgres', vercelEnv: 'preview', allowProduction: false }),
-    ).not.toThrow()
+    expect(() => assertSeedAllowed({ targetKind: 'postgres', vercelEnv: 'preview' })).not.toThrow()
   })
-  it('allows Postgres with allowProduction', () => {
-    expect(() => assertSeedAllowed({ targetKind: 'postgres', vercelEnv: undefined, allowProduction: true })).not.toThrow()
+  it('has no production override left', () => {
+    expect(() => assertSeedAllowed({ targetKind: 'postgres', vercelEnv: 'production' })).toThrow(/db:seed:sql/)
+    expect(readFileSync('src/db/seed.ts', 'utf8')).not.toMatch(/allow-?production/i)
+  })
+  it('points to the Neon SQL Editor route in the refusal', () => {
+    expect(() => assertSeedAllowed({ targetKind: 'postgres', vercelEnv: undefined })).toThrow(/Neon SQL Editor/)
   })
   it('always allows PGlite, even with VERCEL_ENV=production', () => {
-    expect(() =>
-      assertSeedAllowed({ targetKind: 'pglite', vercelEnv: 'production', allowProduction: false }),
-    ).not.toThrow()
+    expect(() => assertSeedAllowed({ targetKind: 'pglite', vercelEnv: 'production' })).not.toThrow()
   })
 })
 
@@ -55,11 +54,6 @@ describe('seed on a Postgres target', () => {
   it('seeds a Vercel preview', async () => {
     vi.stubEnv('VERCEL_ENV', 'preview')
     await seed()
-    expect(fake.transaction).toHaveBeenCalledOnce()
-  })
-  it('seeds production when allowProduction is set', async () => {
-    vi.stubEnv('VERCEL_ENV', 'production')
-    await seed({ allowProduction: true })
     expect(fake.transaction).toHaveBeenCalledOnce()
   })
 })
