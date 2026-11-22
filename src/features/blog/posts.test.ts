@@ -91,11 +91,26 @@ describe('blog post registry', () => {
   })
 
   it('getPostMetadata returns title and description, and a not-found title for an unknown slug', () => {
-    expect(getPostMetadata('chao-mung-den-next-store')).toEqual({
+    expect(getPostMetadata('chao-mung-den-next-store')).toMatchObject({
       title: 'Chào mừng đến next-store',
       description: POSTS.find((post) => post.slug === 'chao-mung-den-next-store')?.description,
     })
     expect(getPostMetadata('khong-ton-tai')).toEqual({ title: 'Không tìm thấy trang' })
+  })
+
+  // The segment has its own opengraph-image, so declaring openGraph here keeps og:image (M3 K5); the page must then
+  // restate site name and locale, which a child openGraph no longer inherits from the root layout.
+  it('US-11: getPostMetadata declares an article with its publish date', () => {
+    const post = POSTS.find((entry) => entry.slug === 'chao-mung-den-next-store')
+    expect(getPostMetadata('chao-mung-den-next-store').openGraph).toEqual({
+      type: 'article',
+      title: 'Chào mừng đến next-store',
+      description: post?.description,
+      publishedTime: '2026-10-26',
+      siteName: 'next-store',
+      locale: 'vi_VN',
+      url: '/blog/chao-mung-den-next-store',
+    })
   })
 
   it('posts.ts imports nothing, so the proxy can use it', () => {

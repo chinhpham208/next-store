@@ -11,10 +11,13 @@ const sourceFiles = (...roots: string[]): string[] =>
   )
 
 // M3 K5: a page or layout that declares openGraph (or twitter) drops the inherited og:image, og:site_name and the
-// summary_large_image card, while still showing og:title — easy to miss by eye. Task 12 adds the one exception.
+// summary_large_image card, while still showing og:title — easy to miss by eye. The one exception is the blog post
+// metadata: /blog/[slug] has its own opengraph-image in the same segment, so its image survives (Task 12).
+const OPEN_GRAPH_ALLOWED = ['src/app/layout.tsx', 'src/features/blog/metadata.ts']
+
 it('no page or layout below the root declares openGraph or twitter', () => {
   const offenders = sourceFiles('src/app', 'src/features')
-    .filter((file) => file !== 'src/app/layout.tsx')
+    .filter((file) => !OPEN_GRAPH_ALLOWED.includes(file))
     .filter((file) => /\b(openGraph|twitter)\s*:/.test(readFileSync(file, 'utf8')))
   expect(offenders).toEqual([])
 })
