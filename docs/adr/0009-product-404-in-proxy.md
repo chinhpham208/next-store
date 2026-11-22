@@ -1,6 +1,6 @@
 # ADR-0009: 404 thật cho sản phẩm không tồn tại bằng proxy
 
-- Trạng thái: Đã chấp nhận
+- Trạng thái: Đã chấp nhận; bổ sung bởi [ADR-0012](./0012-blog-static-registry.md) (proxy thêm `/blog/<slug>` và đường dẫn ảnh Open Graph, M3 Task 13)
 - Ngày: 2026-11-21
 - Quyết định của chủ dự án: 2026-11-20 (plan M2, quyết định 1, phương án A)
 - Liên quan: [ADR-0003](./0003-cache-strategy.md), ticket NS-49 (M2 Task 12), audit PR #20
