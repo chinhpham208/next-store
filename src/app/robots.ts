@@ -1,9 +1,11 @@
 import type { MetadataRoute } from "next";
-import { absoluteUrl } from "@/lib/site-url";
+import { absoluteUrl, isProductionDeployment } from "@/lib/site-url";
 
-// The same file in every environment (owner decision 15, plan M3): Preview and Dev are behind Deployment Protection
-// and Vercel adds `X-Robots-Tag: noindex` there; smoke checks that header on every non-production deployment
-// (SMOKE_EXPECT_NOINDEX). No Disallow for /admin (M5): a blocked page is never fetched, so its noindex is never read.
+// Owner decision 15 (plan M3) relied on Vercel's `X-Robots-Tag: noindex` for Preview / Dev; NS-65 found Dev answers
+// without it, so the decision's fallback applies: only a Vercel production build may be crawled, everything else
+// (Preview, Dev, local, any host off Vercel) says Disallow: /. Prerendered, so this is the environment at build time.
+// No Disallow for /admin (M5): a blocked page is never fetched, so its noindex would never be read.
 export default function robots(): MetadataRoute.Robots {
-  return { rules: { userAgent: "*", allow: "/" }, sitemap: absoluteUrl("/sitemap.xml") };
+  const rules = isProductionDeployment() ? { userAgent: "*", allow: "/" } : { userAgent: "*", disallow: "/" };
+  return { rules, sitemap: absoluteUrl("/sitemap.xml") };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { absoluteUrl, getSiteUrl } from '@/lib/site-url'
+import { absoluteUrl, getSiteUrl, isProductionDeployment } from '@/lib/site-url'
 
 describe('getSiteUrl', () => {
   it.each([
@@ -98,4 +98,19 @@ describe('absoluteUrl', () => {
       expect(() => absoluteUrl(path, { SITE_URL: 'https://shop.example.com' })).toThrow()
     },
   )
+})
+
+// Owner decision 15 fallback (plan M3): Dev answered without X-Robots-Tag (NS-65), so robots.txt blocks crawling
+// everywhere except a Vercel production build. VERCEL_ENV is only trusted when VERCEL is set, as in src/db.
+describe('isProductionDeployment', () => {
+  it.each([
+    [{ VERCEL: '1', VERCEL_ENV: 'production' }, true],
+    [{ VERCEL: '1', VERCEL_ENV: 'preview' }, false],
+    [{ VERCEL: '1', VERCEL_ENV: 'development' }, false],
+    [{ VERCEL: '1', VERCEL_ENV: 'Production' }, false],
+    [{ VERCEL: '1' }, false],
+    [{ VERCEL_ENV: 'production' }, false],
+    [{ VERCEL: '', VERCEL_ENV: 'production' }, false],
+    [{}, false],
+  ])('%j → %s', (env, expected) => expect(isProductionDeployment(env)).toBe(expected))
 })

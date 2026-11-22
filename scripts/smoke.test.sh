@@ -48,25 +48,25 @@ chmod +x "$TMP/bin/curl"
 # a page-level notFound() under Cache Components (K3) or a proxy that failed open; URLs matching <hard-404-regex>
 # answer 404 with the proxy's rewrite header even when they are a known product's. /sitemap.xml and /robots.txt
 # answer like the app on <sitemap-origin> (default https://shop.example.test); <robots-tag>, when set, is sent as
-# X-Robots-Tag on every response, like Vercel on a preview deployment.
+# X-Robots-Tag on every response; <robots-rule> (default `Allow: /`) is the rule line of robots.txt.
 start_server() {
-  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} ready="$TMP/ready-$1"
+  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ready="$TMP/ready-$1"
   node -e '
-    const [port, headers, ready, status, body, soft, hard, robotsTag, origin] = process.argv.slice(1)
+    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule] = process.argv.slice(1)
     const fs = require("node:fs")
     require("node:http").createServer((req, res) => {
       fs.appendFileSync(headers, JSON.stringify(req.headers) + "\n")
       if (robotsTag) res.setHeader("x-robots-tag", robotsTag)
       const locs = ["/", "/products/ao-404-not-found", "/blog/chao-mung-den-next-store"]
       if (req.url === "/sitemap.xml") { res.writeHead(200, { "content-type": "application/xml" }); res.end(`<urlset>${locs.map((p) => `<url>\n<loc>${p === "/" ? "https://shop.example.test" : origin}${p}</loc>\n</url>`).join("\n")}</urlset>`); return }
-      if (req.url === "/robots.txt") { res.writeHead(200, { "content-type": "text/plain" }); res.end(`User-Agent: *\nAllow: /\n\nSitemap: https://shop.example.test/sitemap.xml\n`); return }
+      if (req.url === "/robots.txt") { res.writeHead(200, { "content-type": "text/plain" }); res.end(`User-Agent: *\n${robotsRule}\n\nSitemap: https://shop.example.test/sitemap.xml\n`); return }
       if (hard && new RegExp(hard).test(req.url)) { res.writeHead(404, { "content-type": "text/html; charset=utf-8", "x-middleware-rewrite": "/_khong-tim-thay" }); res.end(body) }
       else if (req.url === "/" || ["/products/ao-404-not-found", "/products/ao-404-not-found?_rsc", "/products/ao-404-not-found.rsc", "/products/ao-404-not-found.segments/_tree.segment.rsc"].includes(req.url)) { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<meta property=\"og:site_name\" content=\"next-store\"/><h1>Áo thun 404 Not Found</h1>") }
       else if (req.url === "/products" || req.url === "/products?page=abc&sort=xyz") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<ul aria-label=\"Danh sách sản phẩm\"></ul>") }
       else if (soft && new RegExp(soft).test(req.url)) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
       else { res.writeHead(404, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
     }).listen(Number(port), "127.0.0.1", () => fs.writeFileSync(ready, ""))
-  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" &
+  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" &
   PIDS+=($!)
   local i
   for i in $(seq 1 50); do [ -f "$ready" ] && return 0; sleep 0.1; done
@@ -81,7 +81,7 @@ run() {
   rm -f "$TMP/curl-calls"
   : > "$TMP/curl-calls"
   set +e
-  env -u BASE_URL -u VERCEL_AUTOMATION_BYPASS_SECRET -u SMOKE_PORT -u SMOKE_EXPECT_NOINDEX PATH="$TMP/bin:$PATH" "${envs[@]}" "$@" > "$TMP/out" 2>&1
+  env -u BASE_URL -u VERCEL_AUTOMATION_BYPASS_SECRET -u SMOKE_PORT -u SMOKE_ROBOTS PATH="$TMP/bin:$PATH" "${envs[@]}" "$@" > "$TMP/out" 2>&1
   CODE=$?
   set -e
 }
@@ -203,31 +203,30 @@ run BASE_URL="http://127.0.0.1:$SEG_PORT" -- bash scripts/smoke.sh
 grep -qF '(segment prefetch dạng đường dẫn) bị proxy rewrite sang not-found' "$TMP/out" || fail known-segment-404 "thông báo không nêu segment prefetch"
 echo "ok known-segment-404"
 
-# noindex-missing (owner decision 15, plan M3): with SMOKE_EXPECT_NOINDEX=1 a deployment without X-Robots-Tag fails,
-# naming the switch to Disallow; without the flag the missing header is only reported.
-run BASE_URL="http://127.0.0.1:$PORT" SMOKE_EXPECT_NOINDEX=1 -- bash scripts/smoke.sh
-[ "$CODE" = 1 ] || fail noindex-missing "thoát $CODE, cần 1"
-grep -qF 'GET / không có header X-Robots-Tag: noindex' "$TMP/out" || fail noindex-missing "thông báo không nêu header thiếu"
-grep -qF 'Disallow: / ngoài production' "$TMP/out" || fail noindex-missing "thông báo không nêu cách sửa"
+# robots-policy (owner decision 15 fallback, NS-65): SMOKE_ROBOTS=disallow fails on `Allow: /` and passes on
+# `Disallow: /`; unset accepts either and prints it; X-Robots-Tag is only reported, present or not.
+run BASE_URL="http://127.0.0.1:$PORT" SMOKE_ROBOTS=disallow -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail robots-policy "Allow với SMOKE_ROBOTS=disallow: thoát $CODE, cần 1"
+grep -qF '/robots.txt là allow, cần disallow' "$TMP/out" || fail robots-policy "thông báo không nêu chính sách robots"
 run BASE_URL="http://127.0.0.1:$PORT" -- bash scripts/smoke.sh
-[ "$CODE" = 0 ] || fail noindex-missing "không có cờ: thoát $CODE, cần 0"
-grep -qF 'GET / → x-robots-tag: <không có> (không bắt buộc)' "$TMP/out" || fail noindex-missing "không in kết quả header"
-echo "ok noindex-missing"
-
-# noindex-present: Vercel's header on /, /robots.txt and /sitemap.xml passes and is printed.
-start_server "$NOINDEX_PORT" "$TMP/noindex-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "noindex"
-run BASE_URL="http://127.0.0.1:$NOINDEX_PORT" SMOKE_EXPECT_NOINDEX=1 -- bash scripts/smoke.sh
-[ "$CODE" = 0 ] || fail noindex-present "thoát $CODE, cần 0"
+[ "$CODE" = 0 ] || fail robots-policy "không có cờ: thoát $CODE, cần 0"
+grep -qF 'GET / → x-robots-tag: <không có>' "$TMP/out" || fail robots-policy "không in header thiếu"
+grep -qF 'GET /robots.txt → 200, allow /' "$TMP/out" || fail robots-policy "không in chính sách robots"
+start_server "$NOINDEX_PORT" "$TMP/noindex-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "noindex" "" "Disallow: /"
+run BASE_URL="http://127.0.0.1:$NOINDEX_PORT" SMOKE_ROBOTS=disallow -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail robots-policy "Disallow với SMOKE_ROBOTS=disallow: thoát $CODE, cần 0"
 for path in / /robots.txt /sitemap.xml; do
-  grep -qF "GET $path → x-robots-tag: noindex" "$TMP/out" || fail noindex-present "không in header của $path"
+  grep -qF "GET $path → x-robots-tag: noindex" "$TMP/out" || fail robots-policy "không in header của $path"
 done
-echo "ok noindex-present"
+run BASE_URL="http://127.0.0.1:$NOINDEX_PORT" SMOKE_ROBOTS=allow -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail robots-policy "Disallow với SMOKE_ROBOTS=allow: thoát $CODE, cần 1"
+echo "ok robots-policy"
 
-# bad-noindex-flag: SMOKE_EXPECT_NOINDEX is 1, 0 or empty; refused before any request.
-run SMOKE_EXPECT_NOINDEX=yes -- bash scripts/smoke.sh
-[ "$CODE" = 1 ] || fail bad-noindex-flag "thoát $CODE, cần 1"
-[ ! -s "$TMP/curl-calls" ] || fail bad-noindex-flag "curl đã được gọi"
-echo "ok bad-noindex-flag"
+# bad-robots-flag: SMOKE_ROBOTS is allow, disallow or empty; refused before any request.
+run SMOKE_ROBOTS=yes -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail bad-robots-flag "thoát $CODE, cần 1"
+[ ! -s "$TMP/curl-calls" ] || fail bad-robots-flag "curl đã được gọi"
+echo "ok bad-robots-flag"
 
 # sitemap-two-origins (US-11, K6): a sitemap whose <loc> mix two hosts (e.g. a page left on localhost) fails smoke.
 start_server "$SITEMAP_PORT" "$TMP/sitemap-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" "http://localhost:3000"

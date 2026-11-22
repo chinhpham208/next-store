@@ -64,6 +64,17 @@ it('dates each listing page by its newest item, and home by the newest of both',
   expect(at('/')).toBe([newestProduct, '2026-11-16'].sort().at(-1))
 })
 
-it('robots allows everything and points to the sitemap on the site origin', () => {
+it('robots allows everything on a Vercel production build and points to the sitemap', () => {
+  vi.stubEnv('VERCEL', '1')
+  vi.stubEnv('VERCEL_ENV', 'production')
   expect(robots()).toEqual({ rules: { userAgent: '*', allow: '/' }, sitemap: `${SITE}/sitemap.xml` })
+})
+
+// Dev had no X-Robots-Tag (NS-65), so decision 15's fallback: nothing but production may be crawled.
+it.each([
+  ['a preview build', { VERCEL: '1', VERCEL_ENV: 'preview' }],
+  ['a build off Vercel', { VERCEL: '', VERCEL_ENV: 'production' }],
+])('robots disallows everything on %s', (_label, env) => {
+  for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
+  expect(robots()).toEqual({ rules: { userAgent: '*', disallow: '/' }, sitemap: `${SITE}/sitemap.xml` })
 })

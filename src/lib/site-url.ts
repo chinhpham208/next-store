@@ -1,5 +1,6 @@
 export type SiteUrlEnv = {
   SITE_URL?: string
+  VERCEL?: string
   VERCEL_ENV?: string
   VERCEL_PROJECT_PRODUCTION_URL?: string
   VERCEL_BRANCH_URL?: string
@@ -59,9 +60,10 @@ const vercelHost = (name: VercelHostVariable, env: SiteUrlEnv): URL | undefined 
  * Next.js's own fallback for social images (lib/metadata/resolvers/resolve-url.js). Robots and the sitemap are
  * prerendered, so on Vercel this is the value at build time (K12).
  */
-// Named reads, not `process.env` as a whole: the type has no index signature, and only these five ever matter.
+// Named reads, not `process.env` as a whole: the type has no index signature, and only these ever matter.
 const processEnv = (): SiteUrlEnv => ({
   SITE_URL: process.env.SITE_URL,
+  VERCEL: process.env.VERCEL,
   VERCEL_ENV: process.env.VERCEL_ENV,
   VERCEL_PROJECT_PRODUCTION_URL: process.env.VERCEL_PROJECT_PRODUCTION_URL,
   VERCEL_BRANCH_URL: process.env.VERCEL_BRANCH_URL,
@@ -86,3 +88,10 @@ export const absoluteUrl = (path: string, env?: SiteUrlEnv): string => {
   if (url.origin !== base.origin) throw new Error('absoluteUrl: path must stay on the site origin')
   return url.toString()
 }
+
+/**
+ * A Vercel production build. VERCEL_ENV is trusted only when VERCEL is set (same rule as src/db): off Vercel anyone
+ * can set it, and the answer decides whether search engines may crawl the site (robots.txt).
+ */
+export const isProductionDeployment = (env: SiteUrlEnv = processEnv()): boolean =>
+  Boolean(env.VERCEL?.trim()) && env.VERCEL_ENV === 'production'

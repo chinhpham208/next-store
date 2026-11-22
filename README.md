@@ -78,6 +78,8 @@ Biến SEO (`src/lib/site-url.ts`, design.md §7):
 |---|---|---|---|---|
 | `SITE_URL` | chủ dự án, **tuỳ chọn** (domain riêng, chạy ngoài Vercel) | bỏ trống: `https://` + `VERCEL_PROJECT_PRODUCTION_URL`; có thì phải là `https://<host>[:cổng]` | bỏ trống: `VERCEL_BRANCH_URL`, rồi `VERCEL_URL` | bỏ trống: `http://localhost:3000` |
 
+`robots.txt` chỉ `Allow: /` trên build production của Vercel (`VERCEL` có giá trị và `VERCEL_ENV=production`); mọi nơi khác (Preview, Dev, local, host ngoài Vercel) là `Disallow: /` — Dev không có header `X-Robots-Tag: noindex` của Vercel (kiểm ngày 2026-11-22, NS-65), nên không dựa vào header đó được.
+
 `SITE_URL` được đọc **lúc build** (`sitemap.xml`, `robots.txt` prerender; `metadataBase` ở root layout): đổi giá trị thì phải deploy lại. Sai dạng (có đường dẫn, query, user, `http://` tới host không phải local) thì build dừng; thông báo chỉ nêu tên biến.
 
 ## Smoke test và E2E trên URL thật
@@ -88,7 +90,7 @@ BASE_URL=https://next-store-dev-ginpham.vercel.app npm run smoke
 BASE_URL=https://<url-preview> npm run smoke
 ```
 
-URL preview của từng deploy có thể bị Vercel Deployment Protection chặn (trang đăng nhập Vercel); khi đó cần `VERCEL_AUTOMATION_BYPASS_SECRET` (script gửi header `x-vercel-protection-bypass`, không in giá trị). Thiếu secret, smoke báo rõ là bị Deployment Protection chặn. `SMOKE_TEXT` đổi chuỗi cần có trên trang chủ. `SMOKE_EXPECT_NOINDEX=1` bắt buộc header `X-Robots-Tag: noindex` trên `/`, `/robots.txt`, `/sitemap.xml` (workflow `e2e-preview` luôn đặt; không đặt khi kiểm Production) — không đặt thì smoke chỉ in giá trị header.
+URL preview của từng deploy có thể bị Vercel Deployment Protection chặn (trang đăng nhập Vercel); khi đó cần `VERCEL_AUTOMATION_BYPASS_SECRET` (script gửi header `x-vercel-protection-bypass`, không in giá trị). Thiếu secret, smoke báo rõ là bị Deployment Protection chặn. `SMOKE_TEXT` đổi chuỗi cần có trên trang chủ. `SMOKE_ROBOTS=disallow` bắt buộc `robots.txt` có `Disallow: /` (workflow `e2e-preview` luôn đặt), `SMOKE_ROBOTS=allow` bắt buộc `Allow: /` (khi kiểm Production); bỏ trống thì chấp nhận một trong hai và in ra. Header `X-Robots-Tag` của `/`, `/robots.txt`, `/sitemap.xml` luôn được in, không bắt buộc.
 
 E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMATION_BYPASS_SECRET`.
 
