@@ -89,6 +89,11 @@ SELECT
          AND privilege_type IN ('USAGE', 'SELECT')) = 2) AS missing_default_privileges,
   -- ALTER ROLE … SET statement_timeout = '6s' in app-role.sql; Postgres stores the value as written.
   NOT EXISTS (SELECT 1 FROM settings WHERE setting = 'statement_timeout=6s') AS statement_timeout_not_6s,
+  -- Audit PR #39 L-A: any setting of the role for one database (it outranks the role-wide value, and the app role can
+  -- set it on itself), or a role-wide setting other than exactly statement_timeout=6s. Rows of every database count.
+  EXISTS (SELECT 1 FROM pg_db_role_setting WHERE setrole = (SELECT oid FROM app) AND setdatabase <> 0)
+    OR (SELECT setconfig FROM pg_db_role_setting WHERE setrole = (SELECT oid FROM app) AND setdatabase = 0)
+      IS DISTINCT FROM ARRAY['statement_timeout=6s']::text[] AS role_settings_not_exact,
   -- True only when there is at least one table, every table has all four DML rights and every sequence USAGE and
   -- SELECT. False on a branch without tables (the parent of resource 2), which is expected there.
   EXISTS (SELECT 1 FROM tables)

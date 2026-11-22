@@ -88,6 +88,24 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO ne
 
 -- A query the app never finishes must not hold locks or a pooled connection forever. Just above the 5 s limit of
 -- dbQuery (NS-55 / NS-73), so dbQuery normally reports first and this only catches a path that bypasses it.
+-- Start from no setting at all (audit PR #39 L-A): the app role can run ALTER ROLE … SET on itself, both role-wide
+-- and IN DATABASE, and a per-database value outranks the role-wide one (e.g. statement_timeout = 0). The database
+-- name is only known at run time; every database with a setting of the role is cleared (pg_db_role_setting is shared
+-- by the whole cluster, so app-role-check.sql sees rows of other databases too).
+DO $$
+DECLARE
+  db text;
+BEGIN
+  FOR db IN
+    SELECT d.datname FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase
+    WHERE s.setrole = 'next_store_app'::regrole
+    UNION SELECT current_database()
+  LOOP
+    EXECUTE format('ALTER ROLE next_store_app IN DATABASE %I RESET ALL', db);
+  END LOOP;
+END
+$$;
+ALTER ROLE next_store_app RESET ALL;
 ALTER ROLE next_store_app SET statement_timeout = '6s';
 
 -- Post-conditions (audit PR #39 L1): rights that reach the app role through PUBLIC cannot be revoked from the role

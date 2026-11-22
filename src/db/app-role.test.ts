@@ -81,6 +81,7 @@ const DML_ONLY = {
   default_grants_too_much: false,
   missing_default_privileges: false,
   statement_timeout_not_6s: false,
+  role_settings_not_exact: false,
   can_dml: true,
 }
 
@@ -220,6 +221,26 @@ describe('scripts/sql/app-role.sql on a migrated database (NS-60)', () => {
     expect(await check(client)).toEqual(DML_ONLY)
   })
 
+  // Audit PR #39 L-A (NS-74): a per-database setting of the role outranks the role-wide one, and the app role may
+  // set both on itself.
+  it('reports and removes a per-database setting the app role made on itself', async () => {
+    const db = (await client.query<{ db: string }>('SELECT current_database() AS db')).rows[0]?.db ?? ''
+    await asApp(client, () => client.exec(`ALTER ROLE next_store_app IN DATABASE "${db}" SET statement_timeout = 0`))
+    expect(await check(client)).toMatchObject({ statement_timeout_not_6s: false, role_settings_not_exact: true })
+    await applyAppRole(client)
+    expect(await check(client)).toEqual(DML_ONLY)
+    const { rows } = await client.query(
+      "SELECT setdatabase FROM pg_db_role_setting WHERE setrole = 'next_store_app'::regrole AND setdatabase <> 0",
+    )
+    expect(rows).toEqual([])
+  })
+  it('reports and removes another role-wide setting the app role made on itself', async () => {
+    await asApp(client, () => client.exec('ALTER ROLE next_store_app SET search_path = pg_temp, public'))
+    expect(await check(client)).toMatchObject({ statement_timeout_not_6s: false, role_settings_not_exact: true })
+    await applyAppRole(client)
+    expect(await check(client)).toEqual(DML_ONLY)
+  })
+
   // Audit PR #39 L2: grant options, MAINTAIN (Postgres 17+; PGlite is 18) and global default privileges.
   it('removes grant options and MAINTAIN that were granted by hand', async () => {
     await client.exec('GRANT SELECT ON products TO next_store_app WITH GRANT OPTION')
@@ -343,7 +364,11 @@ describe('scripts/sql/app-role.sql run by the wrong role on a database without t
       } finally {
         await client.exec('RESET ROLE')
       }
-      expect(await check(client)).toMatchObject({ missing_default_privileges: true, statement_timeout_not_6s: true })
+      expect(await check(client)).toMatchObject({
+        missing_default_privileges: true,
+        statement_timeout_not_6s: true,
+        role_settings_not_exact: true,
+      })
     } finally {
       await closeConnection(connection)
     }
