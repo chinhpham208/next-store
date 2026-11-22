@@ -122,9 +122,14 @@ gh api repos/chinhpham208/next-store/commits/<sha>/check-runs \
 
 Workflow `Production E2E` (`.github/workflows/production-e2e.yml`, M3 Task 17) chạy smoke (`SMOKE_ROBOTS=allow`: Production phải `Allow: /`) rồi toàn bộ E2E trên `https://next-store-iota-silk.vercel.app`:
 
-- Tự chạy khi Vercel báo một deployment **Production** thành công (deployment và status đều do `vercel[bot]` tạo); test lấy từ commit đã deploy. Chạy tay: `gh api -X POST repos/chinhpham208/next-store/actions/workflows/production-e2e.yml/dispatches -f ref=production` (test lấy từ nhánh `production`).
+- Tự chạy khi Vercel báo một deployment thành công có environment đúng bằng `Production` và `ref` là nhánh `production` (deployment và status đều do `vercel[bot]` tạo); test lấy từ commit đã deploy. Bản preview được "Promote to Production" hay `vercel --prod` từ nhánh khác không kích hoạt workflow; khi đó dispatch tay. Sau release không thấy lần chạy nào (ví dụ Vercel đổi tên environment) cũng dispatch tay. Chạy tay: `gh api -X POST repos/chinhpham208/next-store/actions/workflows/production-e2e.yml/dispatches -f ref=production` (test lấy từ nhánh `production`).
 - URL ghi cứng trong workflow và `e2e/production.ts`, không lấy từ sự kiện. Không dùng secret nào (Production là domain custom, không có Deployment Protection, nên không gửi header bypass), không `DATABASE_URL`, không `npm run build`, không lệnh `db:*`.
-- Chỉ đọc: `e2e/test.ts` huỷ mọi request của trình duyệt không phải `GET` / `HEAD` / `OPTIONS` và đánh test thất bại; fixture `request` từ chối `post` / `put` / `patch` / `delete`; test gắn `@ghi` bị bỏ qua (`grepInvert` trong `playwright.config.ts`).
+- Chỉ đọc. Khi `BASE_URL` là Production, các fixture của `e2e/test.ts` (`context`, `page`, `request`, `newContext`) làm như sau:
+  - **huỷ** mọi request của trình duyệt không phải `GET` / `HEAD` / `OPTIONS` trong các context đó;
+  - **ném lỗi** khi gọi `post` / `put` / `patch` / `delete`, hay `fetch` với method ghi, trên `request`, `context.request`, `page.request`;
+  - **chỉ ghi nhận, không ngăn được** request ghi đi qua route mà spec tự đăng ký rồi `route.continue()` (route đăng ký sau chạy trước bộ chặn): request đó tới server;
+  - mọi request bị huỷ hay ghi nhận làm test **đỏ ở teardown** ("E2E trên Production chỉ được đọc").
+- Ngoài phạm vi bộ chặn, ESLint cấm trong `e2e/*.spec.ts`: `browser.newContext` / `request.newContext` (dùng fixture `newContext`), `fetch` (kể cả trong `page.evaluate`), import `test` hay `import *` từ `@playwright/test`. `e2e/production-guard.spec.ts` được tạo context và gọi `fetch`, chỉ với server Node local. Test gắn `@ghi` bị bỏ qua (`grepInvert` trong `playwright.config.ts`); đây là lớp phụ thuộc người viết nhớ gắn tag, còn bộ chặn là lớp bắt khi quên.
 - Chạy tại máy: `BASE_URL=https://next-store-iota-silk.vercel.app npm run e2e` có cùng các lớp chặn.
 
 **Rủi ro đã chấp nhận (audit PR #23):**

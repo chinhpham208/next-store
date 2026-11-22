@@ -2,10 +2,34 @@ import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
 
+// e2e/*.spec.ts (M3 Task 17): ways around the read-only fixtures of e2e/test.ts.
+const PLAYWRIGHT = "[source.value='@playwright/test']";
+const E2E_NAMESPACE_IMPORTS = [
+  {
+    selector: `ImportDeclaration${PLAYWRIGHT} > ImportNamespaceSpecifier`,
+    message: "Không import * từ '@playwright/test' trong spec: lấy test từ './test'.",
+  },
+  {
+    selector: `ImportExpression${PLAYWRIGHT}`,
+    message: "Không import() '@playwright/test' trong spec: lấy test từ './test'.",
+  },
+];
+const E2E_UNGUARDED_CLIENTS = [
+  {
+    selector: "MemberExpression[property.name='newContext']",
+    message: "Không gọi browser.newContext / request.newContext trong spec: dùng fixture newContext hoặc request của './test'.",
+  },
+  {
+    selector: "CallExpression[callee.name='fetch'], MemberExpression[object.name=/^(globalThis|window|self)$/][property.name='fetch']",
+    message: "Không gọi fetch trong spec (kể cả trong page.evaluate): dùng page.goto, page.request hoặc fixture request.",
+  },
+];
+
 const eslintConfig = defineConfig([
   ...nextVitals,
   ...nextTs,
-  // M3 Task 17: specs take `test` from e2e/test.ts, whose fixtures keep a run on Production read-only.
+  // M3 Task 17: specs take `test` from e2e/test.ts, whose fixtures keep a run on Production read-only, and get a
+  // context or an HTTP client of their own only through those fixtures (`newContext`, `request`).
   {
     files: ["e2e/**/*.spec.ts"],
     rules: {
@@ -21,7 +45,13 @@ const eslintConfig = defineConfig([
           ],
         },
       ],
+      "no-restricted-syntax": ["error", ...E2E_NAMESPACE_IMPORTS, ...E2E_UNGUARDED_CLIENTS],
     },
+  },
+  // The guard's own spec builds contexts and calls fetch in the page on purpose, against a local server.
+  {
+    files: ["e2e/production-guard.spec.ts"],
+    rules: { "no-restricted-syntax": ["error", ...E2E_NAMESPACE_IMPORTS] },
   },
   // Override default ignores of eslint-config-next.
   globalIgnores([

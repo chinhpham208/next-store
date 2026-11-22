@@ -77,7 +77,7 @@
 
 - Vitest cho logic thuần và truy vấn DB (PGlite `memory://`).
 - Playwright cho E2E trong `e2e/`, mỗi file một user story (`e2e/us-02-filter.spec.ts`), có kiểm tra a11y bằng axe.
-- Spec import `test` và `expect` từ `./test` (`e2e/test.ts`), không lấy `test` từ `@playwright/test` (ESLint chặn). Fixture ở đó giữ lần chạy trên Production chỉ đọc: request của trình duyệt không phải `GET` / `HEAD` / `OPTIONS` bị huỷ và test thất bại, `request.post` / `put` / `patch` / `delete` ném lỗi.
+- Spec import `test` và `expect` từ `./test` (`e2e/test.ts`). Context riêng lấy từ fixture `newContext`, HTTP từ fixture `request` hay `page.request`. ESLint cấm trong spec: import `test` hay `import *` từ `@playwright/test`, `browser.newContext` / `request.newContext`, `fetch`. Trên Production, fixture huỷ request ghi của trình duyệt, ném lỗi ở `post` / `put` / `patch` / `delete` của `request` / `context.request` / `page.request`, và cho test đỏ ở teardown. Request ghi đi qua `route.continue()` của chính spec thì **chỉ bị ghi nhận, vẫn tới server**: không dùng `route.continue()` cho request ghi.
 - Test ghi dữ liệu (thêm vào giỏ, đặt hàng, sửa sản phẩm — từ M4) gắn `{ tag: '@ghi' }`; trên Production chúng bị bỏ qua (`grepInvert`). Domain production của bộ test chỉ ghi ở `e2e/production.ts` và `.github/workflows/production-e2e.yml`.
 - Test đặt cạnh file được test, tên `*.test.ts`.
 - Tên test mô tả hành vi: `it('rejects quantity above stock')`.

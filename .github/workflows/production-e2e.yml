@@ -8,7 +8,7 @@ name: Production E2E
 # The URL is fixed below, never taken from the event: only https://next-store-iota-silk.vercel.app is tested (the
 # same origin as PRODUCTION_ORIGINS in e2e/production.ts — change both together). No secret, no DATABASE_URL, no
 # `npm run build` (its prebuild runs db:setup), no db:* command: the job only sends HTTP requests to Production,
-# and e2e/test.ts aborts any that is not GET / HEAD / OPTIONS.
+# and the fixtures of e2e/test.ts keep it read-only (README, "Sau release: workflow `Production E2E`").
 on:
   deployment_status:
   workflow_dispatch:
@@ -21,12 +21,16 @@ env:
 
 jobs:
   production-e2e:
-    # contains() is case-insensitive: matches "Production" and "Production – next-store". Both the deployment and its
-    # status must come from Vercel: anyone with write access can add a status to a deployment.
+    # The environment must be exactly Vercel's "Production" (contains() would also match a future Custom Environment
+    # such as "pre-production"; == ignores case). The deployment must be of the `production` branch: a preview
+    # promoted to Production, or `vercel --prod` from another branch, would otherwise run this workflow and
+    # e2e/test.ts (the write guard) from an unreviewed commit. Both the deployment and its status must come from
+    # Vercel: anyone with write access can add a status to a deployment.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.deployment_status.state == 'success' &&
-       contains(github.event.deployment.environment, 'production') &&
+       github.event.deployment.environment == 'Production' &&
+       github.event.deployment.ref == 'production' &&
        github.event.deployment.creator.login == 'vercel[bot]' &&
        github.event.deployment_status.creator.login == 'vercel[bot]')
     runs-on: ubuntu-latest
