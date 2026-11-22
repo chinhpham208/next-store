@@ -139,14 +139,41 @@ Câu lệnh dùng `on conflict (slug) do nothing`: chỉ thêm dòng còn thiế
 Runtime, prerender và `db:seed` đăng nhập bằng role `next_store_app`, chỉ có `SELECT / INSERT / UPDATE / DELETE` trên bảng và `USAGE / SELECT` trên sequence của schema `public` ([ADR-0010](./docs/adr/0010-app-role-and-preview-data.md), quyết định A). Host, cổng, database, TLS và `options` vẫn lấy từ `DATABASE_URL` do tích hợp Neon inject, nên mọi lớp chặn ở trên giữ nguyên; chỉ user và mật khẩu lấy từ `DATABASE_APP_USER` / `DATABASE_APP_PASSWORD`. `db:migrate` vẫn dùng role chủ của URL (DDL và default privileges thuộc role chủ). Dòng log cho biết role thật: `db:migrate: … user=neondb_owner`, `db:seed: … user=next_store_app`.
 
 - Hai biến cùng trống: dùng role của `DATABASE_URL` (hành vi trước NS-60). Đây là bước expand; M3 Task 5 đổi `APP_ROLE_REQUIRED_ON_VERCEL` trong `src/db/client.ts` thành `true`, từ đó thiếu biến trên Vercel (mọi `VERCEL_ENV`) là lỗi build.
-- Chỉ một biến có giá trị, user không phải tên role viết thường (`a-z`, `0-9`, `_`, tối đa 63 ký tự), user trùng user của `DATABASE_URL`, hay mật khẩu có ký tự điều khiển hoặc bắt đầu bằng `endpoint=` / `project=`: từ chối trước khi mở socket, thông báo chỉ nêu tên biến.
-- Role này chặn `DROP`, `ALTER`, `TRUNCATE`, tạo bảng / schema / role, `setval`, đọc bảng theo dõi migration và leo quyền; **không** chặn đọc / sửa / xoá hàng loạt bằng DML (ADR-0010, audit M7).
+- Chỉ một biến có giá trị, `DATABASE_APP_USER` khác đúng `next_store_app` (tên mà hai script SQL cấp quyền và kiểm), user trùng user của `DATABASE_URL`, hay mật khẩu có ký tự điều khiển hoặc bắt đầu bằng `endpoint=` / `project=`: từ chối trước khi mở socket, thông báo chỉ nêu tên biến.
+- Role này chặn `DROP`, `ALTER`, `TRUNCATE`, tạo bảng / schema / role, `setval`, đọc bảng theo dõi migration và leo quyền; **không** chặn đọc / sửa / xoá hàng loạt bằng DML (ADR-0010, audit M7). Mỗi câu lệnh của role bị cắt sau 6 giây (`statement_timeout`, ngay trên giới hạn 5 giây của `dbQuery`).
+- **Role app tự đổi được mật khẩu của chính nó** (`ALTER ROLE next_store_app PASSWORD …` chạy bằng role app; Postgres không cho thu hồi quyền này, audit PR #39 L6). Một lỗ SQL injection chạy được câu lệnh xếp chồng có thể đặt mật khẩu mới rồi kết nối thẳng tới Neon từ ngoài. Phát hiện: ứng dụng bỗng không đăng nhập được (mật khẩu trên Vercel không còn khớp). Xử lý: chủ dự án đặt lại mật khẩu theo mục "Đổi mật khẩu" dưới đây trên mọi nhánh có role, rồi tìm lỗ injection.
 
-Thứ tự áp dụng trên Neon / Vercel thuộc M3 Task 5 (ADR-0010, mục "Thứ tự áp dụng"). Trên mỗi nhánh Neon cần role (`main` của resource 1; nhánh mặc định của resource 2, trước khi nối resource 2 vào Preview), **chủ dự án** làm trong Neon SQL Editor, đăng nhập bằng role chủ (role mà `db:migrate` dùng):
+### Tạo role và cấp quyền
 
-1. Tạo role bằng SQL: `CREATE ROLE next_store_app LOGIN PASSWORD '…';` với mật khẩu tự đặt (không dán vào chat, ticket hay PR). Role tạo trong màn hình Roles của Neon console có thể là thành viên `neon_superuser`; `app-role.sql` sẽ từ chối role đó, và role chủ không gỡ được (thuộc tính `SUPERUSER` chỉ superuser đổi được; `REVOKE` một membership do role khác cấp chỉ báo WARNING). Câu lệnh có mật khẩu có thể nằm lại trong lịch sử của SQL Editor: xoá mục đó sau khi chạy nếu editor có lưu.
-2. Chạy toàn bộ [`scripts/sql/app-role.sql`](./scripts/sql/app-role.sql): kiểm role (tồn tại, không thuộc tính đặc biệt, không là thành viên role nào, không sở hữu gì, role đang chạy là chủ database và chủ mọi bảng), rồi cấp quyền DML trên bảng hiện có và đặt default privileges cho bảng / sequence migration tạo sau này. Chạy lại được; một kiểm tra hỏng thì cả script rollback. Trên nhánh chưa có bảng (nhánh cha của resource 2) chỉ default privileges có tác dụng; nhánh `preview/*` fork từ đó tự migrate và bảng mới tự có quyền.
-3. Trên nhánh **đã migrate** (`main`, `preview/develop` của resource 2; không chạy trên nhánh cha) chạy [`scripts/sql/app-role-check.sql`](./scripts/sql/app-role-check.sql): một dòng, mọi cột `false`, riêng `can_dml` `true`.
-4. Đặt `DATABASE_APP_USER=next_store_app` và `DATABASE_APP_PASSWORD` (Sensitive) trên Vercel ở đúng phạm vi (Production cho resource 1, Preview cho resource 2), rồi redeploy.
+Thứ tự áp dụng trên Neon / Vercel thuộc M3 Task 5 (ADR-0010, mục "Thứ tự áp dụng"). Trên mỗi nhánh Neon cần role (`main` của resource 1; nhánh mặc định của resource 2, trước khi nối resource 2 vào Preview), **chủ dự án** làm. Không agent nào thấy mật khẩu.
 
-Đổi mật khẩu: `ALTER ROLE next_store_app PASSWORD '…';` trên **từng** nhánh có role, cập nhật `DATABASE_APP_PASSWORD`, redeploy ngay (ADR-0010, Hệ quả). Rollback trước Task 5: xoá hai biến trên Vercel và redeploy là quay về role chủ.
+1. **Trên máy mình**, sinh mật khẩu ngẫu nhiên 40 ký tự chữ và số, lưu thẳng vào trình quản lý mật khẩu. Chỉ dùng ký tự ASCII (script dưới không chạy SASLprep và từ chối ký tự khác).
+2. **Tính verifier SCRAM**, mật khẩu đi qua stdin (không nằm trong tham số lệnh hay lịch sử shell; script không in mật khẩu):
+   ```bash
+   pbpaste | node scripts/scram-verifier.mjs   # macOS, mật khẩu đang ở clipboard
+   node scripts/scram-verifier.mjs             # hoặc gõ / dán (không hiện), Enter
+   ```
+   Kết quả là một dòng `SCRAM-SHA-256$4096:<salt>$<StoredKey>:<ServerKey>`. Verifier không phải mật khẩu, nhưng ai có nó thì dò mật khẩu ngoại tuyến được: chỉ dán vào SQL Editor, không dán vào chat, ticket hay PR.
+3. **Neon SQL Editor**, đăng nhập bằng role chủ (role mà `db:migrate` dùng): `CREATE ROLE next_store_app LOGIN PASSWORD 'SCRAM-SHA-256$4096:…';`. Server lưu nguyên verifier, nên log câu lệnh, `pg_stat_statements` và lịch sử SQL Editor chỉ có verifier, không có mật khẩu.
+   - **Lần đầu, thử trên một nhánh Neon tạm** (tạo từ `main`, xoá ngay sau đó): tạo role bằng verifier, rồi kiểm đăng nhập bằng mật khẩu gốc (ví dụ một bản preview dùng nhánh đó, hoặc nút "Connect" của console với role đó). Chỉ làm trên `main` khi nhánh tạm đăng nhập được.
+   - **Nếu Neon từ chối verifier** (lỗi khi tạo role, hoặc nhánh tạm không đăng nhập được): dùng `PASSWORD '<mật khẩu rõ>'` trong SQL Editor, rồi xoá mục đó khỏi lịch sử của editor, không lưu query, và chạy `SELECT pg_stat_statements_reset();` nếu extension `pg_stat_statements` đã cài. Ghi vào ticket là đã dùng đường dự phòng.
+   - **Không tạo role ở màn hình Roles của console**: role đó có thể là thành viên `neon_superuser`; `app-role.sql` sẽ từ chối, và role chủ không gỡ hay xoá được nó bằng SQL (thuộc tính `SUPERUSER` chỉ superuser đổi được; `REVOKE` một membership do role khác cấp chỉ báo WARNING). Không dùng `psql \password` (phải chép chuỗi kết nối role chủ của production về máy).
+4. Chạy toàn bộ [`scripts/sql/app-role.sql`](./scripts/sql/app-role.sql), cùng role chủ. Trước khi cấp quyền, script kiểm:
+   - role tồn tại, không có thuộc tính đặc biệt, không là thành viên role nào, không sở hữu gì;
+   - role đang chạy là chủ database và chủ mọi bảng / sequence trong `public` (đối tượng của extension được bỏ qua; đối tượng lạ được nêu tên).
+
+   Sau đó script gỡ mọi quyền cũ của role app (kể cả `WITH GRANT OPTION`, `MAINTAIN`, default privileges toàn cục) rồi cấp lại đúng DML trên bảng hiện có, default privileges cho bảng / sequence migration tạo sau này, và `statement_timeout = '6s'`. Cuối cùng script dừng nếu role app vẫn còn `CREATE` trên schema / database hay `TRUNCATE` / `MAINTAIN` / … qua `PUBLIC`.
+
+   Script chạy lại được; một kiểm tra hỏng thì cả script rollback. WARNING `no privileges could be revoked / were granted for "pg_stat_statements…"` là bình thường khi extension nằm trong `public`. Trên nhánh chưa có bảng (nhánh cha của resource 2) chỉ default privileges có tác dụng; nhánh `preview/*` fork từ đó tự migrate và bảng mới tự có quyền.
+5. Chạy [`scripts/sql/app-role-check.sql`](./scripts/sql/app-role-check.sql), cùng role chủ. Kết quả là một dòng:
+   - nhánh **đã migrate** (`main`, `preview/develop` của resource 2): mọi cột `false`, riêng `can_dml` `true`;
+   - **nhánh cha** của resource 2 (chưa có bảng): **mọi** cột `false`, kể cả `can_dml`. `missing_default_privileges = false` ở đây cho biết bảng tạo sau sẽ có quyền.
+6. Đặt `DATABASE_APP_USER=next_store_app` và `DATABASE_APP_PASSWORD` (Sensitive, dán từ trình quản lý mật khẩu) trên Vercel ở đúng phạm vi (Production cho resource 1, Preview cho resource 2), rồi redeploy. Nếu mật khẩu không khớp verifier thì đăng nhập hỏng: build dừng ở prerender, bản đang chạy giữ nguyên.
+
+### Đổi mật khẩu
+
+Sinh mật khẩu mới và verifier như bước 1–2, rồi `ALTER ROLE next_store_app PASSWORD 'SCRAM-SHA-256$4096:…';` trên **từng** nhánh có role (cùng một verifier). Sau đó cập nhật `DATABASE_APP_PASSWORD` và redeploy ngay (ADR-0010, Hệ quả: có gián đoạn ngắn).
+
+Mọi thao tác đặt lại trong console (ví dụ "Reset password", hay "Rotate Secrets" của tích hợp) đều có thể đổi role. Sau mỗi lần như vậy, chạy lại `app-role-check.sql` ngay. Chưa xác minh được console có cho reset role tạo bằng SQL hay không.
+
+Rollback trước Task 5: xoá hai biến trên Vercel và redeploy là quay về role chủ.

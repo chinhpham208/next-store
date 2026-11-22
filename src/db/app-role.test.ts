@@ -65,9 +65,11 @@ const DML_ONLY = {
   can_truncate: false,
   can_reference: false,
   can_trigger: false,
+  can_maintain: false,
   can_setval: false,
   can_create_in_public: false,
   can_create_schema: false,
+  has_grant_option: false,
   rolsuper: false,
   rolcreatedb: false,
   rolcreaterole: false,
@@ -77,7 +79,19 @@ const DML_ONLY = {
   is_neon_superuser: false,
   member_of_any_role: false,
   default_grants_too_much: false,
+  missing_default_privileges: false,
+  statement_timeout_not_6s: false,
   can_dml: true,
+}
+
+// A table created by the runner after the script: what a future migration gets from the default privileges.
+const futureTablePrivileges = async (client: PGlite) => {
+  await client.exec('CREATE TABLE future_t (id serial PRIMARY KEY)')
+  try {
+    return (await explicitGrants(client, 'future_t')).sort()
+  } finally {
+    await client.exec('DROP TABLE future_t')
+  }
 }
 
 describe('scripts/sql/app-role.sql on a migrated database (NS-60)', () => {
@@ -195,6 +209,86 @@ describe('scripts/sql/app-role.sql on a migrated database (NS-60)', () => {
     expect(await check(client)).toEqual(DML_ONLY)
   })
 
+  it('sets a statement timeout just above the dbQuery limit and restores it when changed by hand', async () => {
+    const { rows } = await client.query<{ setconfig: string[] }>(
+      "SELECT setconfig FROM pg_db_role_setting WHERE setrole = 'next_store_app'::regrole AND setdatabase = 0",
+    )
+    expect(rows).toEqual([{ setconfig: ['statement_timeout=6s'] }])
+    await client.exec("ALTER ROLE next_store_app SET statement_timeout = '0'")
+    expect(await check(client)).toMatchObject({ statement_timeout_not_6s: true })
+    await applyAppRole(client)
+    expect(await check(client)).toEqual(DML_ONLY)
+  })
+
+  // Audit PR #39 L2: grant options, MAINTAIN (Postgres 17+; PGlite is 18) and global default privileges.
+  it('removes grant options and MAINTAIN that were granted by hand', async () => {
+    await client.exec('GRANT SELECT ON products TO next_store_app WITH GRANT OPTION')
+    await client.exec('GRANT MAINTAIN ON products TO next_store_app')
+    await client.exec('GRANT USAGE ON SCHEMA public TO next_store_app WITH GRANT OPTION')
+    expect(await check(client)).toMatchObject({ has_grant_option: true, can_maintain: true })
+    await applyAppRole(client)
+    expect(await check(client)).toEqual(DML_ONLY)
+    expect((await explicitGrants(client, 'products')).sort()).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE'])
+  })
+  it('reports and removes global default privileges of the runner', async () => {
+    await client.exec('ALTER DEFAULT PRIVILEGES GRANT ALL ON TABLES TO next_store_app')
+    expect(await check(client)).toMatchObject({ default_grants_too_much: true })
+    expect(await futureTablePrivileges(client)).toContain('TRUNCATE')
+    await applyAppRole(client)
+    expect(await check(client)).toEqual(DML_ONLY)
+    expect(await futureTablePrivileges(client)).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE'])
+  })
+  it('reports default privileges granted with grant option', async () => {
+    await client.exec('ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT ON TABLES TO next_store_app WITH GRANT OPTION')
+    expect(await check(client)).toMatchObject({ has_grant_option: true })
+    await applyAppRole(client)
+    expect(await check(client)).toEqual(DML_ONLY)
+  })
+
+  // Audit PR #39 L1: rights through PUBLIC survive every REVOKE … FROM next_store_app.
+  it.each([
+    ['CREATE on schema public', 'GRANT CREATE ON SCHEMA public TO PUBLIC', 'REVOKE CREATE ON SCHEMA public FROM PUBLIC', /CREATE trên schema public/],
+    ['CREATE on the database', 'GRANT CREATE ON DATABASE {db} TO PUBLIC', 'REVOKE CREATE ON DATABASE {db} FROM PUBLIC', /CREATE trên database/],
+    ['TRUNCATE on a table', 'GRANT TRUNCATE ON products TO PUBLIC', 'REVOKE TRUNCATE ON products FROM PUBLIC', /TRUNCATE/],
+    ['MAINTAIN on a table', 'GRANT MAINTAIN ON products TO PUBLIC', 'REVOKE MAINTAIN ON products FROM PUBLIC', /MAINTAIN/],
+    ['UPDATE on a sequence', 'GRANT UPDATE ON SEQUENCE products_id_seq TO PUBLIC', 'REVOKE UPDATE ON SEQUENCE products_id_seq FROM PUBLIC', /sequence/],
+  ])('stops when the app role still has %s through PUBLIC', async (_label, grant, revoke, message) => {
+    const db = (await client.query<{ db: string }>('SELECT current_database() AS db')).rows[0]?.db ?? ''
+    const named = (statement: string) => statement.replace('{db}', `"${db}"`)
+    await client.exec(named(grant))
+    try {
+      await expect(applyAppRole(client)).rejects.toThrow(message)
+    } finally {
+      await client.exec(named(revoke))
+    }
+    await applyAppRole(client)
+    expect(await check(client)).toEqual(DML_ONLY)
+  })
+
+  // Audit PR #39 L4: objects of an extension are owned by whoever installed it, not by the migration role.
+  it('ignores objects that belong to an extension when checking ownership', async () => {
+    await client.exec(`
+      CREATE ROLE ext_owner NOLOGIN;
+      CREATE TABLE ext_t (id int);
+      ALTER TABLE ext_t OWNER TO ext_owner;
+      ALTER EXTENSION plpgsql ADD TABLE ext_t;
+    `)
+    try {
+      await applyAppRole(client)
+      expect(await check(client)).toEqual(DML_ONLY)
+    } finally {
+      await client.exec('ALTER EXTENSION plpgsql DROP TABLE ext_t; DROP TABLE ext_t; DROP ROLE ext_owner')
+    }
+  })
+  it('names the object that belongs to another role', async () => {
+    await client.exec('CREATE ROLE other_owner NOLOGIN; CREATE TABLE foreign_t (id int); ALTER TABLE foreign_t OWNER TO other_owner')
+    try {
+      await expect(applyAppRole(client)).rejects.toThrow(/public\.foreign_t không thuộc role đang chạy/)
+    } finally {
+      await client.exec('DROP TABLE foreign_t; DROP ROLE other_owner')
+    }
+  })
+
   it('refuses to run as a role other than the one db:migrate uses', async () => {
     await client.exec('CREATE ROLE other_role NOLOGIN; GRANT ALL ON SCHEMA public TO other_role')
     await client.exec('SET ROLE other_role')
@@ -225,10 +319,31 @@ describe('scripts/sql/app-role.sql on a parent branch without tables (NS-60)', (
     const { connection, client } = await openDatabase()
     try {
       await applyAppRole(client)
+      // Every column false, can_dml included (no tables yet); missing_default_privileges false is what matters here.
       expect(await check(client)).toEqual({ ...DML_ONLY, can_dml: false })
+      expect(Object.values(await check(client)).every((value) => value === false)).toBe(true)
       await runMigrations(connection)
       expect(await check(client)).toEqual(DML_ONLY)
       await asApp(client, () => client.exec("INSERT INTO categories (slug, name) VALUES ('x', 'X')"))
+    } finally {
+      await closeConnection(connection)
+    }
+  })
+})
+
+// Audit PR #39 L3: without tables the database owner check is the only guard against the wrong runner.
+describe('scripts/sql/app-role.sql run by the wrong role on a database without tables (NS-60)', () => {
+  it('refuses with the database owner message', async () => {
+    const { connection, client } = await openDatabase()
+    try {
+      await client.exec('CREATE ROLE other_runner NOLOGIN; GRANT CREATE, USAGE ON SCHEMA public TO other_runner')
+      await client.exec('SET ROLE other_runner')
+      try {
+        await expect(applyAppRole(client)).rejects.toThrow(/không phải chủ database/)
+      } finally {
+        await client.exec('RESET ROLE')
+      }
+      expect(await check(client)).toMatchObject({ missing_default_privileges: true, statement_timeout_not_6s: true })
     } finally {
       await closeConnection(connection)
     }

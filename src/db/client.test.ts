@@ -1,10 +1,11 @@
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { sql } from 'drizzle-orm'
 import postgres from 'postgres'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  APP_ROLE_NAME,
   APP_ROLE_REQUIRED_ON_VERCEL,
   assertDbLogAllowed,
   buildPostgresOptions,
@@ -768,7 +769,21 @@ describe('app role (NS-60)', () => {
     )
     expect(() => resolveAppRole({ env: { DATABASE_APP_PASSWORD: 'x' }, url })).toThrow(/^DATABASE_APP_USER/)
   })
-  it.each(['neondb_owner', 'NEONDB_OWNER', 'Next_Store_App', 'app role', 'a;b', '1app', 'app-role', ''.padEnd(64, 'a')])(
+  it.each([
+    'neondb_owner',
+    'NEONDB_OWNER',
+    'Next_Store_App',
+    'NEXT_STORE_APP',
+    'next_store_app2',
+    'next_store',
+    'other_app',
+    'next_store_app;x',
+    'app role',
+    'a;b',
+    '1app',
+    'app-role',
+    ''.padEnd(64, 'a'),
+  ])(
     'refuses the user name %j',
     (user) => {
       expect(() => resolveAppRole({ env: { DATABASE_APP_USER: user, DATABASE_APP_PASSWORD: 'x' }, url })).toThrow(
@@ -776,9 +791,20 @@ describe('app role (NS-60)', () => {
       )
     },
   )
-  it('accepts a 63-character role name, the Postgres limit', () => {
-    const user = ''.padEnd(63, 'a')
-    expect(resolveAppRole({ env: { DATABASE_APP_USER: user, DATABASE_APP_PASSWORD: 'x' }, url })?.username).toBe(user)
+  // Audit PR #39 L7: a valid name of another role (possibly with wider rights) must not be accepted.
+  it('accepts exactly next_store_app, the role the SQL scripts grant to', () => {
+    expect(APP_ROLE_NAME).toBe('next_store_app')
+    expect(readFileSync('scripts/sql/app-role.sql', 'utf8')).toContain(`TO ${APP_ROLE_NAME};`)
+    expect(readFileSync('scripts/sql/app-role-check.sql', 'utf8')).toContain(`rolname = '${APP_ROLE_NAME}'`)
+    expect(resolveAppRole({ env: { DATABASE_APP_USER: 'next_store_app', DATABASE_APP_PASSWORD: 'x' }, url })?.username).toBe(
+      'next_store_app',
+    )
+  })
+  it('refuses next_store_app when it is also the user of DATABASE_URL', () => {
+    const own = parsePostgresUrl(neon(BRANCH).replace('neondb_owner', 'next_store_app'))
+    expect(() => resolveAppRole({ env: { DATABASE_APP_USER: 'next_store_app', DATABASE_APP_PASSWORD: 'x' }, url: own })).toThrow(
+      /^DATABASE_APP_USER/,
+    )
   })
   it.each(['a\u0000b', 'a\u001bb', 'a\u007fb', 'endpoint=ep-x;y', 'project=ep-x$y', 'ENDPOINT=ep-x;y', ' endpoint=ep-x;y'])(
     'refuses the password %j without echoing it',

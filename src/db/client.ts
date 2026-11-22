@@ -313,9 +313,9 @@ export type RoleCredentials = { username: string; password: string }
  */
 export const APP_ROLE_REQUIRED_ON_VERCEL: boolean = false
 
-// Unquoted Postgres identifier, lower case, at most 63 bytes: what `CREATE ROLE next_store_app` produces. Anything
-// else would be case-folded or truncated differently by the server than by a human reading the variable.
-const APP_ROLE_NAME = /^[a-z_][a-z0-9_]{0,62}$/
+// The only role the SQL scripts grant to and check (scripts/sql/app-role*.sql). Any other name, even a valid one,
+// could be a role with wider rights that nothing has checked (audit PR #39 L7).
+export const APP_ROLE_NAME = 'next_store_app'
 
 // Fixed text: the variable names only, never the user name, password or URL.
 const APP_ROLE_MISSING_MESSAGE =
@@ -326,8 +326,8 @@ const APP_USER_MISSING_MESSAGE =
 const APP_PASSWORD_MISSING_MESSAGE =
   'DATABASE_APP_PASSWORD is empty while DATABASE_APP_USER is set; set both (app role) or neither (owner role).'
 const APP_USER_INVALID_MESSAGE =
-  'DATABASE_APP_USER is refused: expected a lower-case role name (a-z, 0-9, _; not starting with a digit; at most ' +
-  '63 characters) different from the user in DATABASE_URL, otherwise the app would still run as the owner.'
+  `DATABASE_APP_USER is refused: it must be exactly ${APP_ROLE_NAME}, the role scripts/sql/app-role.sql grants to ` +
+  'and app-role-check.sql checks, and differ from the user in DATABASE_URL.'
 const APP_PASSWORD_INVALID_MESSAGE =
   'DATABASE_APP_PASSWORD is refused: it must not contain control characters or start with endpoint= / project= ' +
   '(Neon would route by it instead of by the checked host).'
@@ -351,7 +351,8 @@ export const resolveAppRole = ({
   }
   if (username === '') throw new Error(APP_USER_MISSING_MESSAGE)
   if (password === '') throw new Error(APP_PASSWORD_MISSING_MESSAGE)
-  if (!APP_ROLE_NAME.test(username) || username === url.username.toLowerCase()) {
+  // The owner check still matters if the integration ever injected next_store_app itself as the URL user.
+  if (username !== APP_ROLE_NAME || username === url.username.toLowerCase()) {
     throw new Error(APP_USER_INVALID_MESSAGE)
   }
   if (DECODED_FORBIDDEN_CHARS.test(password) || NEON_PASSWORD_ENDPOINT.test(password)) {
