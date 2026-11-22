@@ -33,12 +33,22 @@ describe('scramVerifier (NS-60, audit PR #39 M1)', () => {
     ['a password with a tab', 'abcdefghij\t0123456789klmnop', PASSWORD_ERRORS.nonAscii],
     ['a password with a NUL', 'abcdefghij\u00000123456789klmnop', PASSWORD_ERRORS.nonAscii],
     ['a short password', 'Short-but-ascii-1', PASSWORD_ERRORS.tooShort],
+    // Audit PR #39 L-B (NS-74): client.ts trims DATABASE_APP_PASSWORD, so such a verifier would never match.
+    ['a leading space', ' abc', PASSWORD_ERRORS.edgeWhitespace],
+    ['a trailing space', 'abc ', PASSWORD_ERRORS.edgeWhitespace],
+    ['a long password with a leading space', ` ${PASSWORD}`, PASSWORD_ERRORS.edgeWhitespace],
+    ['a long password with a trailing space', `${PASSWORD} `, PASSWORD_ERRORS.edgeWhitespace],
     ['an endpoint= password', 'endpoint=ep-x;0123456789abcdefghij', PASSWORD_ERRORS.endpoint],
     ['a project= password', 'Project=p$0123456789abcdefghijkl', PASSWORD_ERRORS.endpoint],
   ])('refuses %s with a fixed message', (_label, password, message) => {
     const run = () => scramVerifier(password)
+    // toThrow(undefined) accepts any error, so a missing PASSWORD_ERRORS key must fail here.
+    expect(message).toMatch(/^scram-verifier: /)
     expect(run).toThrow(message)
     if (password !== '') expect(run).not.toThrow(password)
+  })
+  it('keeps spaces inside the password', () => {
+    expect(scramVerifier(`${PASSWORD} x`)).toMatch(FORMAT)
   })
   it('strips exactly one trailing line break from stdin', () => {
     expect(passwordFromInput(`${PASSWORD}\n`)).toBe(PASSWORD)
@@ -62,6 +72,7 @@ describe('node scripts/scram-verifier.mjs', () => {
   it.each([
     ['non-ASCII', 'mật-khẩu-có-dấu-0123456789abcdef\n', PASSWORD_ERRORS.nonAscii],
     ['empty', '', PASSWORD_ERRORS.empty],
+    ['trailing space', `${PASSWORD} \n`, PASSWORD_ERRORS.edgeWhitespace],
   ])('exits 1 with a clear message on %s input and prints no verifier', (_label, input, message) => {
     const result = runCli(input)
     expect(result.status).toBe(1)

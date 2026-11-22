@@ -157,7 +157,7 @@ Runtime, prerender và `db:seed` đăng nhập bằng role `next_store_app`, ch�
 
 Thứ tự áp dụng trên Neon / Vercel thuộc M3 Task 5 (ADR-0010, mục "Thứ tự áp dụng"). Trên mỗi nhánh Neon cần role (`main` của resource 1; nhánh mặc định của resource 2, trước khi nối resource 2 vào Preview), **chủ dự án** làm. Không agent nào thấy mật khẩu.
 
-1. **Trên máy mình**, sinh mật khẩu ngẫu nhiên 40 ký tự chữ và số, lưu thẳng vào trình quản lý mật khẩu. Chỉ dùng ký tự ASCII (script dưới không chạy SASLprep và từ chối ký tự khác).
+1. **Trên máy mình**, sinh mật khẩu ngẫu nhiên 40 ký tự chữ và số, lưu thẳng vào trình quản lý mật khẩu. Chỉ dùng ký tự ASCII (script dưới không chạy SASLprep và từ chối ký tự khác), không có khoảng trắng ở đầu / cuối (ứng dụng `trim()` mật khẩu, nên script cũng từ chối).
 2. **Tính verifier SCRAM**, mật khẩu đi qua stdin (không nằm trong tham số lệnh hay lịch sử shell; script không in mật khẩu):
    ```bash
    pbpaste | node scripts/scram-verifier.mjs   # macOS, mật khẩu đang ở clipboard
@@ -172,12 +172,13 @@ Thứ tự áp dụng trên Neon / Vercel thuộc M3 Task 5 (ADR-0010, mục "Th
    - role tồn tại, không có thuộc tính đặc biệt, không là thành viên role nào, không sở hữu gì;
    - role đang chạy là chủ database và chủ mọi bảng / sequence trong `public` (đối tượng của extension được bỏ qua; đối tượng lạ được nêu tên).
 
-   Sau đó script gỡ mọi quyền cũ của role app (kể cả `WITH GRANT OPTION`, `MAINTAIN`, default privileges toàn cục) rồi cấp lại đúng DML trên bảng hiện có, default privileges cho bảng / sequence migration tạo sau này, và `statement_timeout = '6s'`. Cuối cùng script dừng nếu role app vẫn còn `CREATE` trên schema / database hay `TRUNCATE` / `MAINTAIN` / … qua `PUBLIC`.
+   Sau đó script gỡ mọi quyền cũ của role app (kể cả `WITH GRANT OPTION`, `MAINTAIN`, default privileges toàn cục) rồi cấp lại đúng DML trên bảng hiện có, default privileges cho bảng / sequence migration tạo sau này, và `statement_timeout = '6s'`. Trước khi đặt timeout, script xoá mọi cấu hình riêng của role: cấu hình toàn cục (`ALTER ROLE next_store_app RESET ALL`) và cấu hình theo từng database (`… IN DATABASE <db> RESET ALL`). Role app tự đặt được cả hai cho chính nó, và giá trị theo database được ưu tiên hơn giá trị toàn cục (audit PR #39 L-A). Cuối cùng script dừng nếu role app vẫn còn `CREATE` trên schema / database hay `TRUNCATE` / `MAINTAIN` / … qua `PUBLIC`.
 
    Script chạy lại được; một kiểm tra hỏng thì cả script rollback. WARNING `no privileges could be revoked / were granted for "pg_stat_statements…"` là bình thường khi extension nằm trong `public`. Trên nhánh chưa có bảng (nhánh cha của resource 2) chỉ default privileges có tác dụng; nhánh `preview/*` fork từ đó tự migrate và bảng mới tự có quyền.
 5. Chạy [`scripts/sql/app-role-check.sql`](./scripts/sql/app-role-check.sql), cùng role chủ. Kết quả là một dòng:
    - nhánh **đã migrate** (`main`, `preview/develop` của resource 2): mọi cột `false`, riêng `can_dml` `true`;
    - **nhánh cha** của resource 2 (chưa có bảng): **mọi** cột `false`, kể cả `can_dml`. `missing_default_privileges = false` ở đây cho biết bảng tạo sau sẽ có quyền.
+   - `role_settings_not_exact = true`: role app có cấu hình theo một database nào đó, hoặc cấu hình toàn cục khác đúng `{statement_timeout=6s}`, ví dụ do chính role app tự chạy `ALTER ROLE … IN DATABASE … SET statement_timeout = 0`. Chạy lại `app-role.sql` để gỡ, rồi tìm nguyên nhân như với đổi mật khẩu ngoài ý muốn (mục trên).
 6. Đặt `DATABASE_APP_USER=next_store_app` và `DATABASE_APP_PASSWORD` (Sensitive, dán từ trình quản lý mật khẩu) trên Vercel ở đúng phạm vi (Production cho resource 1, Preview cho resource 2), rồi redeploy. Nếu mật khẩu không khớp verifier thì đăng nhập hỏng: build dừng ở prerender, bản đang chạy giữ nguyên.
 
 ### Đổi mật khẩu

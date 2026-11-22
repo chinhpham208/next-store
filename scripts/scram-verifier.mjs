@@ -29,6 +29,9 @@ export const PASSWORD_ERRORS = {
   nonAscii:
     'scram-verifier: mật khẩu chỉ được chứa ký tự ASCII in được (chữ, số, dấu câu, khoảng trắng); ' +
     'script không chạy SASLprep nên ký tự khác có thể cho verifier mà Postgres không khớp. Sinh lại mật khẩu.',
+  edgeWhitespace:
+    'scram-verifier: mật khẩu không được có khoảng trắng ở đầu hoặc cuối (ứng dụng trim() DATABASE_APP_PASSWORD, ' +
+    'nên verifier sẽ không khớp). Sinh lại mật khẩu.',
   tooShort: `scram-verifier: mật khẩu phải dài ít nhất ${MIN_LENGTH} ký tự (khuyên dùng 40 ký tự chữ và số ngẫu nhiên).`,
   endpoint: 'scram-verifier: mật khẩu không được bắt đầu bằng endpoint= hoặc project= (ứng dụng sẽ từ chối).',
 }
@@ -37,6 +40,9 @@ export const PASSWORD_ERRORS = {
 export const assertUsablePassword = (password) => {
   if (password === '') throw new Error(PASSWORD_ERRORS.empty)
   if (!PRINTABLE_ASCII.test(password)) throw new Error(PASSWORD_ERRORS.nonAscii)
+  // client.ts trims DATABASE_APP_PASSWORD before logging in (audit PR #39 L-B). Before the length check, so a short
+  // password with a space gets the message that names the actual problem.
+  if (password.trim() !== password) throw new Error(PASSWORD_ERRORS.edgeWhitespace)
   if (password.length < MIN_LENGTH) throw new Error(PASSWORD_ERRORS.tooShort)
   if (NEON_PASSWORD_ENDPOINT.test(password.trimStart())) throw new Error(PASSWORD_ERRORS.endpoint)
 }
