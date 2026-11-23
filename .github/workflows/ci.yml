@@ -39,10 +39,11 @@ jobs:
         run: npm run build
       - name: smoke
         run: npm run smoke
-      - name: test:scripts
-        run: npm run test:scripts
+      # Before test:scripts: scripts/redact-report.test.sh opens a browser (NS-84).
       - name: install Playwright Chromium
         run: npx playwright install --with-deps chromium
+      - name: test:scripts
+        run: npm run test:scripts
       - name: e2e
         run: npm run e2e
       - name: upload Playwright report
