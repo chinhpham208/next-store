@@ -38,7 +38,7 @@ export default defineConfig({
     baseURL: BASE_URL ?? `http://localhost:${LOCAL_PORT}`,
     channel: CHANNEL,
     // A trace records request headers, the bypass secret included: never while the bypass is on (audit PR #61 L1;
-    // e2e/test.ts fails a test that turns it back on).
+    // with tracing turned back on, the fixtures of e2e/test.ts refuse to add the bypass, in hooks too).
     trace: RUN_BYPASS ? 'off' : 'retain-on-failure',
     // No extraHTTPHeaders: they go to every origin. The Deployment Protection bypass of previews is added by the
     // fixtures of e2e/test.ts, only for the origin of BASE_URL (NS-54, e2e/bypass.ts).

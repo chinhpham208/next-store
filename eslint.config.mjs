@@ -14,11 +14,27 @@ const E2E_NAMESPACE_IMPORTS = [
     message: "Không import() '@playwright/test' trong spec: lấy test từ './test'.",
   },
 ];
-// NS-54 (audit PR #61 L1): a trace records the bypass secret; e2e/test.ts also fails such a test while it is set.
+// NS-54 (audit PR #61 L1): a trace records the bypass secret; e2e/test.ts also refuses the bypass while it is on.
+// Audit 2 L-B: the only trace a spec may set is the literal 'off', in an object literal whose keys lint can read.
+const TEST_USE = "CallExpression[callee.type='MemberExpression'][callee.property.name='use']";
+const TRACE_MESSAGE =
+  "Không bật trace trong test.use của spec (chỉ được trace: 'off' viết thẳng): trace ghi lại header bypass Vercel (secret). Dùng --trace khi chạy tại máy.";
 const E2E_TRACE = [
   {
-    selector: "CallExpression[callee.property.name='use'] > ObjectExpression > Property[key.name='trace']:not([value.value='off'])",
-    message: "Không bật trace trong test.use của spec (chỉ được 'off'): trace ghi lại header bypass Vercel (secret). Dùng --trace khi chạy tại máy.",
+    selector: `${TEST_USE} > ObjectExpression > Property:matches([key.name='trace'][computed=false], [key.value='trace']):not([value.value='off'])`,
+    message: TRACE_MESSAGE,
+  },
+  {
+    selector: `${TEST_USE} > ObjectExpression > Property[computed=true]:not([key.type='Literal'])`,
+    message: "Không dùng khoá tính toán trong test.use của spec: lint không đọc được đó có phải 'trace' không.",
+  },
+  {
+    selector: `${TEST_USE} > ObjectExpression > SpreadElement`,
+    message: "Không spread trong test.use của spec: lint không thấy được khoá 'trace' bên trong.",
+  },
+  {
+    selector: `${TEST_USE} > :not(ObjectExpression).arguments`,
+    message: "test.use trong spec chỉ nhận object viết thẳng: lint không thấy được khoá 'trace' trong biến hay lời gọi.",
   },
 ];
 const E2E_UNGUARDED_CLIENTS = [

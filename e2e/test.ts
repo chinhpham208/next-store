@@ -101,9 +101,19 @@ export type NewContext = (options?: BrowserContextOptions) => Promise<BrowserCon
 
 
 // A trace records every request header, the bypass header included (audit PR #61 L1). playwright.config.ts turns
-// tracing off when the bypass is on; a spec's test.use({ trace }) or `--trace` would turn it back on, so such a test
-// fails before any context or request client exists instead.
+// tracing off when the bypass is on; a spec's test.use({ trace }) or `--trace` would turn it back on. The secret only
+// ever enters a client through the fixtures below (`context`, `request`, `newContext`), so each of them refuses to add
+// the bypass while tracing is on. Hooks get these same fixtures (audit 2 PR #61 L-B): a failing auto fixture does not
+// stop afterEach / afterAll, and neither does a failing worker fixture, so the check sits where the secret is added.
+// The auto fixture only fails a test body that uses no client early, with the same message.
 export const TRACE_WITH_BYPASS_MESSAGE = 'Không bật trace khi có header bypass Vercel: trace ghi lại secret (NS-54)'
+
+type TraceOption = string | { mode: string }
+
+const assertNoTrace = (trace: TraceOption, bypass: Bypass | undefined) => {
+  const mode = typeof trace === 'string' ? trace : trace.mode
+  if (bypass && mode !== 'off') throw new Error(TRACE_WITH_BYPASS_MESSAGE)
+}
 
 type Fixtures = {
   newContext: NewContext
@@ -120,24 +130,26 @@ export const test = base.extend<Fixtures>({
   vercelBypass: [RUN_BYPASS, { option: true }],
   bypassWithoutTrace: [
     async ({ trace, vercelBypass }, provide) => {
-      const mode = typeof trace === 'string' ? trace : trace.mode
-      if (vercelBypass && mode !== 'off') throw new Error(TRACE_WITH_BYPASS_MESSAGE)
+      assertNoTrace(trace, vercelBypass)
       await provide()
     },
     { auto: true },
   ],
   // `provide` is Playwright's `use`, renamed so the React hooks lint rule does not read it as React's use().
-  context: async ({ context, baseURL, vercelBypass }, provide) => {
+  context: async ({ context, baseURL, trace, vercelBypass }, provide) => {
+    assertNoTrace(trace, vercelBypass)
     await withBypass(context, vercelBypass, baseURL)
     await withWriteGuard(context, isProductionUrl(baseURL), provide)
     // A route.fetch still in flight when the context closes must not fail the test.
     await context.unrouteAll({ behavior: 'ignoreErrors' })
   },
-  request: async ({ request, baseURL, vercelBypass }, provide) => {
+  request: async ({ request, baseURL, trace, vercelBypass }, provide) => {
+    assertNoTrace(trace, vercelBypass)
     const bypassed = vercelBypass ? bypassRequest(request, vercelBypass, baseURL) : request
     await provide(isProductionUrl(baseURL) ? readOnlyRequest(bypassed) : bypassed)
   },
-  newContext: async ({ browser, baseURL, extraHTTPHeaders, vercelBypass }, provide) => {
+  newContext: async ({ browser, baseURL, extraHTTPHeaders, trace, vercelBypass }, provide) => {
+    assertNoTrace(trace, vercelBypass)
     const created: { context: BrowserContext; guard: WriteGuard | undefined }[] = []
     await provide(async (options = {}) => {
       const resolved = { baseURL, extraHTTPHeaders, ...options }
