@@ -5,6 +5,7 @@ import { db } from '@/db/client'
 import { runMigrations } from '@/db/migrate'
 import { seed } from '@/db/seed'
 import { getAllProductSlugs, getProductBySlug, isKnownProductSlug } from '@/features/products'
+import { getCachedProductBySlug } from './queries'
 import { resetKnownProductSlugs } from './slug-guard'
 
 // cacheTag() throws outside a cacheComponents build; Vitest also ignores 'use cache', so these tests cover the
@@ -72,6 +73,31 @@ describe('getProductBySlug', () => {
     await getProductBySlug('sticker-git')
     expect(cacheTag).toHaveBeenCalledWith('product:sticker-git')
     expect(cacheLife).toHaveBeenCalledWith('hours')
+  })
+})
+
+// NS-105: the cached query is a Server Function of its own, reachable without getProductBySlug's guard. Reflect.apply
+// bypasses the static type, as an action request does.
+describe('getCachedProductBySlug called directly (NS-105)', () => {
+  it.each([123, null, undefined, ['ao-x'], 'A B', '../x', 'Sai_Dang', 'a'.repeat(81), ''])(
+    'refuses %j before querying or tagging',
+    async (slug) => {
+      const select = vi.spyOn(db, 'select')
+      await expect(Reflect.apply(getCachedProductBySlug, undefined, [slug])).rejects.toThrow(
+        /^invalid arguments for cached products\.detail$/,
+      )
+      expect(select).not.toHaveBeenCalled()
+      expect(cacheTag).not.toHaveBeenCalled()
+      expect(cacheLife).not.toHaveBeenCalled()
+    },
+  )
+  it('returns null for an unknown well-formed slug and expires the entry at once, so it is not stored', async () => {
+    expect(await getCachedProductBySlug('x-khong-co-that')).toBeNull()
+    expect(cacheLife).toHaveBeenLastCalledWith({ revalidate: 0, expire: 0 })
+  })
+  it('keeps the hours lifetime of a product that exists', async () => {
+    expect((await getCachedProductBySlug('sticker-git'))?.slug).toBe('sticker-git')
+    expect(vi.mocked(cacheLife).mock.calls).toEqual([['hours']])
   })
 })
 

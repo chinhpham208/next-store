@@ -10,7 +10,7 @@ import { db } from '@/db/client'
 import { runMigrations } from '@/db/migrate'
 import { seed } from '@/db/seed'
 import { PRODUCT_SORTS, type ProductListing, type ProductQuery, type ProductSort } from '@/features/products'
-import { escapeLikePattern, getCategories, listProducts } from '@/features/products/queries'
+import { countCatalog, escapeLikePattern, getCatalogPage, getCategories, listProducts } from '@/features/products/queries'
 
 // cacheTag() throws outside a cacheComponents build and Vitest ignores 'use cache': these tests cover the
 // queries and the branching; the directive's effect is checked by the build of the listing page (Task 13).
@@ -169,11 +169,10 @@ it('treats an unknown category as no filter', async () => {
 })
 it('tags both cached listing queries with products and an hours lifetime', async () => {
   await listProducts(ALL)
-  // category null: exactly countCatalog and getCatalogPage run, so each must tag and set its lifetime once.
-  expect(cacheTag).toHaveBeenCalledTimes(2)
-  expect(cacheLife).toHaveBeenCalledTimes(2)
-  expect(vi.mocked(cacheTag).mock.calls).toEqual([['products'], ['products']])
-  expect(vi.mocked(cacheLife).mock.calls).toEqual([['hours'], ['hours']])
+  // category null: countCatalog, then getCatalogPage, which checks its page against countCatalog (NS-105). Vitest
+  // ignores 'use cache', so that nested count runs again here; under Next it is a hit on the same entry.
+  expect(vi.mocked(cacheTag).mock.calls).toEqual([['products'], ['products'], ['products']])
+  expect(vi.mocked(cacheLife).mock.calls).toEqual([['hours'], ['hours'], ['hours']])
   expect(connection).not.toHaveBeenCalled()
 })
 it('awaits connection() before an uncached search', async () => {
@@ -393,7 +392,82 @@ describe('cache key rules (structural: Vitest does not run the directive)', () =
       expect(body).not.toMatch(/\bquery\b|\btext\b/)
     }
   })
+  // NS-105: every cached function is a Server Function, callable with any arguments. One with parameters checks them
+  // (rejectCacheArguments) before it tags, so a refused call neither queries nor stores an entry.
+  it.each(['getFeaturedProducts', 'getCachedProductBySlug', 'countCatalog', 'getCatalogPage'])(
+    '%s checks its arguments before it tags',
+    (name) => {
+      const body = cached.get(name) ?? ''
+      const check = body.indexOf('rejectCacheArguments(')
+      expect(check).toBeGreaterThan(-1)
+      expect(check).toBeLessThan(body.indexOf('cacheTag('))
+    },
+  )
+  it.each(['getCategoryRows', 'getProductSitemapEntries'])('%s takes no arguments (Next drops extra ones)', (name) => {
+    expect(cached.get(name) ?? '').toMatch(/= async \(\)/)
+  })
   it('never builds SQL from raw strings', () => {
     expect(source).not.toMatch(/sql\.raw|sql\.identifier/)
+  })
+})
+
+// NS-105: countCatalog and getCatalogPage are Server Functions of their own: their arguments, the cache key, may come
+// from anyone. Reflect.apply bypasses the static type, as an action request does. The count runs
+// `select({ total })`, the page selects the summary fields (`inStock`): neither may run for a refused key.
+describe('cached listing queries called directly (NS-105)', () => {
+  const callsWith = (select: { mock: { calls: unknown[][] } }, field: string) =>
+    select.mock.calls.filter(([fields]) => typeof fields === 'object' && fields !== null && field in fields).length
+  const categoryId = async (slug: string) => {
+    const [row] = await db.select({ id: categories.id }).from(categories).where(sql`${categories.slug} = ${slug}`)
+    if (row === undefined) throw new Error(`no category ${slug}`)
+    return row.id
+  }
+
+  it.each([undefined, '1', 1.5, -1, 0, [1], { id: 1 }])('countCatalog refuses categoryId=%j without counting', async (id) => {
+    const select = vi.spyOn(db, 'select')
+    await expect(Reflect.apply(countCatalog, undefined, [id])).rejects.toThrow(/^invalid arguments for cached products\.count$/)
+    expect(callsWith(select, 'total')).toBe(0)
+    expect(cacheTag).not.toHaveBeenCalled()
+  })
+  it('countCatalog answers 0 for an id that is not a category, without counting or storing an entry', async () => {
+    const select = vi.spyOn(db, 'select')
+    expect(await countCatalog(987_654)).toBe(0)
+    expect(callsWith(select, 'total')).toBe(0)
+    expect(cacheLife).toHaveBeenLastCalledWith({ revalidate: 0, expire: 0 })
+  })
+  it('countCatalog still counts all products and a real category', async () => {
+    expect(await countCatalog(null)).toBe(24)
+    expect(await countCatalog(await categoryId('ao-thun'))).toBe(6)
+  })
+
+  it.each([
+    [undefined, 'newest', 1],
+    ['1', 'newest', 1],
+    [null, 'x', 1],
+    [null, undefined, 1],
+    [null, 'newest', 0],
+    [null, 'newest', 1.5],
+    [null, 'newest', '1'],
+    [{ categoryId: null, sort: 'newest', page: 1 }, undefined, undefined],
+  ])('getCatalogPage refuses (%j, %j, %j) without reading a page', async (id, sort, page) => {
+    const select = vi.spyOn(db, 'select')
+    await expect(Reflect.apply(getCatalogPage, undefined, [id, sort, page])).rejects.toThrow(
+      /^invalid arguments for cached products\.page$/,
+    )
+    expect(callsWith(select, 'inStock')).toBe(0)
+    expect(cacheTag).not.toHaveBeenCalled()
+  })
+  it.each([
+    ['a page past the last one', null, 3],
+    ['an id that is not a category', 987_654, 1],
+  ])('getCatalogPage answers [] for %s, without reading a page or storing an entry', async (_label, id, page) => {
+    const select = vi.spyOn(db, 'select')
+    expect(await getCatalogPage(id, 'newest', page)).toEqual([])
+    expect(callsWith(select, 'inStock')).toBe(0)
+    expect(cacheLife).toHaveBeenLastCalledWith({ revalidate: 0, expire: 0 })
+  })
+  it('getCatalogPage still returns the real pages', async () => {
+    expect(await getCatalogPage(null, 'newest', 2)).toHaveLength(12)
+    expect(await getCatalogPage(await categoryId('sach'), 'price-asc', 1)).toHaveLength(6)
   })
 })

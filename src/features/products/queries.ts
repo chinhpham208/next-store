@@ -3,8 +3,16 @@ import { and, asc, count, desc, eq, ilike, sql, type SQL } from 'drizzle-orm'
 import { cacheLife, cacheTag } from 'next/cache'
 import { connection } from 'next/server'
 import { categories, dbQuery, products, type DbQueryName } from '@/db'
-import { isProductSlug, PAGE_SIZE, parseProductQuery, type ProductQuery, type ProductSort } from '@/features/products/schema'
+import {
+  isProductSlug,
+  PAGE_SIZE,
+  parseProductQuery,
+  PRODUCT_SORTS,
+  type ProductQuery,
+  type ProductSort,
+} from '@/features/products/schema'
 import type { CategoryOption, ProductDetail, ProductListing, ProductSummary } from '@/features/products/types'
+import { isCacheCount, rejectCacheArguments, SKIP_CACHE_ENTRY } from '@/lib/cache-args'
 
 const FEATURED_LIMIT = 8
 
@@ -29,8 +37,12 @@ const ORDER_BY: Record<ProductSort, readonly SQL[]> = {
   'price-desc': [desc(products.price), asc(products.id)],
 }
 
+// Every 'use cache' function below is also a Server Function that anyone can call with arguments of their choice
+// (NS-105, src/lib/cache-args.ts): each one with parameters checks them before it tags or reads anything.
 export const getFeaturedProducts = async (limit: number = FEATURED_LIMIT): Promise<ProductSummary[]> => {
   'use cache'
+  // The limit is part of the cache key: 1..FEATURED_LIMIT only, so at most that many entries plus the default.
+  if (!isCacheCount(limit, FEATURED_LIMIT)) return rejectCacheArguments('products.featured')
   // Tag 'products' is invalidated by admin edits (M5). Stock changes from the payment webhook invalidate only
   // product:<slug> (ADR-0003), so listings may show inStock up to the cache lifetime after a purchase.
   // 'hours' is the cache lifetime and the safety net if an invalidation is ever missed.
@@ -51,9 +63,12 @@ export const getFeaturedProducts = async (limit: number = FEATURED_LIMIT): Promi
   })
 }
 
-// The slug is the cache key: only called after isProductSlug, so a malformed URL never becomes an entry.
-const getCachedProductBySlug = async (slug: string): Promise<ProductDetail | null> => {
+// The slug is the cache key. getProductBySlug checks it first, but this function is a Server Function of its own
+// (NS-105), so it checks again: a malformed slug throws before the database, and an unknown one is not stored.
+// Exported for tests only; outside the feature, index.ts does not export it.
+export const getCachedProductBySlug = async (slug: string): Promise<ProductDetail | null> => {
   'use cache'
+  if (!isProductSlug(slug)) return rejectCacheArguments('products.detail')
   // product:<slug> is invalidated by admin edits (M5, updateTag) and by the payment webhook after a stock
   // decrement (M4, revalidateTag) — ADR-0003. 'hours' is the safety net if an invalidation is ever missed.
   cacheTag(`product:${slug}`)
@@ -78,7 +93,13 @@ const getCachedProductBySlug = async (slug: string): Promise<ProductDetail | nul
         .where(eq(products.slug, slug))
         .limit(1),
   })
-  return row ?? null
+  // Not stored: otherwise every made-up slug sent straight to this function would leave an entry behind. The proxy
+  // answers an unknown slug with a 404 before the page renders (ADR-0009), so pages never reach this branch.
+  if (row === undefined) {
+    cacheLife(SKIP_CACHE_ENTRY)
+    return null
+  }
+  return row
 }
 
 export const getProductBySlug = async (slug: string): Promise<ProductDetail | null> => {
@@ -175,28 +196,52 @@ const selectPage = ({ name, where, sort, page }: PageSelection): Promise<Product
         .offset((page - 1) * PAGE_SIZE),
   })
 
-// Arguments of a 'use cache' function are its cache key (ADR-0008). Only callers below may reach these two, and
-// only with a category id confirmed by getCategoryRows and a page already clamped, so the number of entries stays
-// at categories x sorts x real pages.
-const countCatalog = async (categoryId: number | null): Promise<number> => {
+const toPageCount = (total: number) => Math.max(1, Math.ceil(total / PAGE_SIZE))
+
+const isCategoryIdShape = (value: unknown): value is number | null =>
+  value === null || isCacheCount(value, Number.MAX_SAFE_INTEGER)
+
+// getCategoryRows is cached with a fixed key, so this costs no database round trip once its entry exists.
+const isCategoryId = async (categoryId: number | null) =>
+  categoryId === null || (await getCategoryRows()).some((row) => row.id === categoryId)
+
+// Arguments of a 'use cache' function are its cache key (ADR-0008). listCatalog passes only a category id confirmed
+// by getCategoryRows and a page already clamped, but both functions are Server Functions of their own (NS-105), so
+// each checks its key again: a wrong shape throws, an unknown category or a page past the last one is answered
+// without the database and not stored. The entries stay at categories x sorts x real pages.
+// Exported for tests only; outside the feature, index.ts does not export them.
+export const countCatalog = async (categoryId: number | null): Promise<number> => {
   'use cache'
+  if (!isCategoryIdShape(categoryId)) return rejectCacheArguments('products.count')
   cacheTag('products')
   cacheLife('hours')
 
+  if (!(await isCategoryId(categoryId))) {
+    cacheLife(SKIP_CACHE_ENTRY)
+    return 0
+  }
   return countWhere({ name: 'products.count', where: inCategory(categoryId) })
 }
 
-type CatalogPageKey = { categoryId: number | null; sort: ProductSort; page: number }
-
-const getCatalogPage = async ({ categoryId, sort, page }: CatalogPageKey): Promise<ProductSummary[]> => {
+// Positional, not one object: an object key could carry extra properties, each one a new entry.
+export const getCatalogPage = async (
+  categoryId: number | null,
+  sort: ProductSort,
+  page: number,
+): Promise<ProductSummary[]> => {
   'use cache'
+  const validKey =
+    isCategoryIdShape(categoryId) && PRODUCT_SORTS.includes(sort) && isCacheCount(page, Number.MAX_SAFE_INTEGER)
+  if (!validKey) return rejectCacheArguments('products.page')
   cacheTag('products')
   cacheLife('hours')
 
+  if (!(await isCategoryId(categoryId)) || page > toPageCount(await countCatalog(categoryId))) {
+    cacheLife(SKIP_CACHE_ENTRY)
+    return []
+  }
   return selectPage({ name: 'products.page', where: inCategory(categoryId), sort, page })
 }
-
-const toPageCount = (total: number) => Math.max(1, Math.ceil(total / PAGE_SIZE))
 
 const clampPage = (requested: number, pageCount: number) => Math.min(Math.max(requested, 1), pageCount)
 
@@ -233,7 +278,7 @@ const listCatalog = async ({ categoryId, sort, page: requested }: ListingInput):
   if (total === 0) return emptyPage()
   const pageCount = toPageCount(total)
   const page = clampPage(requested, pageCount)
-  const items = await getCatalogPage({ categoryId, sort, page })
+  const items = await getCatalogPage(categoryId, sort, page)
   return { items, total, pageCount, page }
 }
 
