@@ -148,6 +148,11 @@ describe('scripts/sql/app-role.sql on a migrated database (NS-60)', () => {
           (await client.query('SELECT quantity FROM cart_items WHERE cart_id = $1', [cartId])).rows,
         ).toEqual([{ quantity: 2 }])
         await client.query("DELETE FROM carts WHERE id IN (SELECT id FROM carts WHERE updated_at < now() - interval '30 days' ORDER BY updated_at LIMIT 50)")
+        // The eviction of the oldest carts (NS-104): one DELETE with an EXISTS … OFFSET gate, still DML only.
+        await client.query(
+          'DELETE FROM carts WHERE id IN (SELECT id FROM carts WHERE id <> $1 AND EXISTS (SELECT 1 FROM carts OFFSET 99999 LIMIT 1) ORDER BY updated_at LIMIT 50)',
+          [cartId],
+        )
         await client.query('DELETE FROM carts WHERE id = $1', [cartId])
         expect((await client.query('SELECT 1 FROM cart_items WHERE cart_id = $1', [cartId])).rows).toEqual([])
         for (const statement of ['TRUNCATE carts', 'TRUNCATE cart_items', 'ALTER TABLE carts ADD COLUMN x int']) {

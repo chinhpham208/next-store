@@ -24,6 +24,7 @@ vi.mock('next/cache', () => ({ refresh }))
 // The store runs on PGlite in store.test.ts; here only what the action does with its answers matters.
 const store = vi.hoisted(() => ({
   addLine: vi.fn(),
+  evictOldestCarts: vi.fn(),
   purgeExpiredCarts: vi.fn(),
   setLine: vi.fn(),
   removeLine: vi.fn(),
@@ -31,6 +32,7 @@ const store = vi.hoisted(() => ({
 vi.mock('@/features/cart/store', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/features/cart/store')>()),
   addLine: store.addLine,
+  evictOldestCarts: store.evictOldestCarts,
   purgeExpiredCarts: store.purgeExpiredCarts,
   setLine: store.setLine,
   removeLine: store.removeLine,
@@ -47,6 +49,7 @@ beforeEach(() => {
   vi.stubEnv('SITE_URL', 'http://localhost:3100')
   store.addLine.mockResolvedValue({ ok: true, count: 1 } satisfies AddLineResult)
   store.purgeExpiredCarts.mockResolvedValue(undefined)
+  store.evictOldestCarts.mockResolvedValue(undefined)
   store.setLine.mockResolvedValue({ ok: true, count: 1 } satisfies SetLineResult)
   store.removeLine.mockResolvedValue({ ok: true, count: 0 } satisfies SetLineResult)
 })
@@ -219,6 +222,50 @@ describe('addToCartAction without a live cart', () => {
   })
 })
 
+describe('addToCartAction and the cap on carts (NS-104)', () => {
+  it('evicts the oldest carts after the purge, only when a new cart was created, never the new one', async () => {
+    const order: string[] = []
+    store.purgeExpiredCarts.mockImplementation(async () => {
+      order.push('purge')
+    })
+    store.evictOldestCarts.mockImplementation(async () => {
+      order.push('evict')
+    })
+    await addToCartAction({ slug: SLUG, quantity: 1 })
+    expect(order).toEqual(['purge', 'evict'])
+    const [[{ cartId: created }]] = store.addLine.mock.calls as [[{ cartId: string }]]
+    expect(store.evictOldestCarts).toHaveBeenCalledWith({ keep: created })
+
+    vi.clearAllMocks()
+    jar.incoming.set(COOKIE, crypto.randomUUID())
+    await addToCartAction({ slug: SLUG, quantity: 1 })
+    expect(store.evictOldestCarts).not.toHaveBeenCalled()
+  })
+
+  it('does not evict when the first add is refused', async () => {
+    store.addLine.mockResolvedValue({ ok: false, error: 'over-stock', available: 3 } satisfies AddLineResult)
+    await addToCartAction({ slug: SLUG, quantity: 4 })
+    expect(store.evictOldestCarts).not.toHaveBeenCalled()
+  })
+
+  it('ignores an eviction failure', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    store.evictOldestCarts.mockRejectedValue(new Error('database query failed: cart.evict (57014)'))
+    expect(await addToCartAction({ slug: SLUG, quantity: 1 })).toEqual({ ok: true, count: 1 })
+    expect(jar.set).toHaveBeenCalledTimes(1)
+    expect(refresh).not.toHaveBeenCalled()
+    expect(error.mock.calls).toEqual([['cart: eviction of the oldest carts failed']])
+  })
+
+  it('still evicts when the purge failed', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {})
+    store.purgeExpiredCarts.mockRejectedValue(new Error('database query failed: cart.purge'))
+    expect(await addToCartAction({ slug: SLUG, quantity: 1 })).toEqual({ ok: true, count: 1 })
+    expect(store.evictOldestCarts).toHaveBeenCalledTimes(1)
+    expect(error.mock.calls).toEqual([['cart: purge of expired carts failed']])
+  })
+})
+
 describe('addToCartAction when the database fails', () => {
   it('returns unavailable and refreshes on a timed-out write', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => {})
@@ -320,7 +367,7 @@ const updates = [
 ] as const
 
 const expectNoDatabaseOrCookie = async () => {
-  for (const write of [store.addLine, store.setLine, store.removeLine, store.purgeExpiredCarts]) {
+  for (const write of [store.addLine, store.setLine, store.removeLine, store.purgeExpiredCarts, store.evictOldestCarts]) {
     expect(write).not.toHaveBeenCalled()
   }
   expect(jar.set).not.toHaveBeenCalled()

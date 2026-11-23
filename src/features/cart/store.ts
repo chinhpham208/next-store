@@ -1,7 +1,7 @@
 import 'server-only'
-import { and, asc, count, eq, gte, inArray, lt, sql } from 'drizzle-orm'
+import { and, asc, count, eq, exists, gte, inArray, lt, ne, sql } from 'drizzle-orm'
 import { cartItems, carts, dbQuery, products, type Db } from '@/db'
-import { CART_TTL_DAYS, MAX_CART_LINES, MAX_LINE_QUANTITY } from '@/features/cart/limits'
+import { CART_TTL_DAYS, MAX_CARTS, MAX_CART_LINES, MAX_LINE_QUANTITY } from '@/features/cart/limits'
 import type { CartId } from '@/features/cart/schema'
 import type { CartError, CartLine } from '@/features/cart/types'
 
@@ -68,15 +68,18 @@ export type AddLineResult =
 
 type CartTx = Parameters<Parameters<Db['transaction']>[0]>[0]
 
-// Step 1 of every write of an existing cart, as in addLine: takes the row lock (writes of one cart run one after
-// the other, plan M4 D3) and slides the expiry. An unknown or expired cart matches no row.
+// Step 1 of every write of an existing cart, as in addLine: SELECT … FOR UPDATE takes the row lock, so writes of
+// one cart run one after the other (plan M4 D3). It writes nothing: a refusal must leave updated_at as it was, or
+// a refused add would still slide the expiry. An unknown or expired cart matches no row.
 const lockCart = async (tx: CartTx, cartId: CartId, now: Date): Promise<boolean> => {
-  const locked = await tx
-    .update(carts)
-    .set({ updatedAt: now })
-    .where(liveCart(cartId, now))
-    .returning({ id: carts.id })
+  const locked = await tx.select({ id: carts.id }).from(carts).where(liveCart(cartId, now)).for('update')
   return locked.length > 0
+}
+
+// Only once a write has passed every check (ADR-0014 6A, Bổ sung 2026-11-24): only a successful write slides the
+// expiry. The row is already locked by lockCart.
+const touchCart = async (tx: CartTx, cartId: CartId, now: Date): Promise<void> => {
+  await tx.update(carts).set({ updatedAt: now }).where(eq(carts.id, cartId))
 }
 
 const countInTx = async (tx: CartTx, cartId: CartId): Promise<number> => {
@@ -123,8 +126,10 @@ export const addLine = async ({ cartId, slug, quantity, create, now }: AddLineIn
         if ((lines?.value ?? 0) >= MAX_CART_LINES) return { ok: false, error: 'cart-full' }
       }
 
-      // Only now: a first add that was refused leaves no empty cart behind.
+      // Only now: a first add that was refused leaves no empty cart behind, and a refused add to an existing cart
+      // leaves its updated_at alone.
       if (create) await tx.insert(carts).values({ id: cartId, createdAt: now, updatedAt: now })
+      else await touchCart(tx, cartId, now)
       await tx
         .insert(cartItems)
         .values({ cartId, productId: product.id, quantity, createdAt: now })
@@ -166,6 +171,7 @@ export const setLine = async ({ cartId, slug, quantity, now }: SetLineInput): Pr
 
       if (quantity === 0) {
         await tx.delete(cartItems).where(ofLine)
+        await touchCart(tx, cartId, now)
         return { ok: true, count: await countInTx(tx, cartId) }
       }
 
@@ -178,6 +184,7 @@ export const setLine = async ({ cartId, slug, quantity, now }: SetLineInput): Pr
       if (line === undefined) return { ok: false, error: 'not-found' }
 
       await tx.update(cartItems).set({ quantity }).where(ofLine)
+      await touchCart(tx, cartId, now)
       return { ok: true, count: await countInTx(tx, cartId) }
     },
   })
@@ -198,6 +205,8 @@ export const removeLine = async ({ cartId, slug, now }: RemoveLineInput): Promis
             inArray(cartItems.productId, tx.select({ id: products.id }).from(products).where(eq(products.slug, slug))),
           ),
         )
+      // A removal always succeeds, even of a line that was not there (idempotent), so it always slides the expiry.
+      await touchCart(tx, cartId, now)
       return { ok: true, count: await countInTx(tx, cartId) }
     },
   })
@@ -219,6 +228,42 @@ export const purgeExpiredCarts = async (now: Date): Promise<void> => {
             .where(lt(carts.updatedAt, cartExpiryCutoff(now)))
             .orderBy(asc(carts.updatedAt))
             .limit(PURGE_BATCH),
+        ),
+      ),
+  })
+}
+
+/** Most carts one eviction deletes, as for the purge: the add that triggers it stays quick. */
+const EVICT_BATCH = 50
+
+/**
+ * Once there are MAX_CARTS carts, deletes the 50 least recently written, never `keep` (the cart just created: with
+ * another instance's clock ahead, it may not be the newest). One statement, run after purgeExpiredCarts.
+ *
+ * The total is never counted (NS-104): `EXISTS (SELECT 1 FROM carts OFFSET MAX_CARTS - 1 LIMIT 1)` stops after
+ * MAX_CARTS rows however large the table is, and only one-time: Postgres runs it as an InitPlan, then walks
+ * carts_updated_at_idx for the 50 oldest. Below the cap it costs a scan of the carts there are; at the cap, about
+ * 4–13 ms on PGlite (PR NS-104). Creating a cart is never refused: an attacker can push out the oldest carts, not
+ * lock customers out (ADR-0014 Bổ sung 2026-11-24).
+ */
+export const evictOldestCarts = async ({ keep }: { keep: CartId }): Promise<void> => {
+  await dbQuery({
+    name: 'cart.evict',
+    run: (db) =>
+      db.delete(carts).where(
+        inArray(
+          carts.id,
+          db
+            .select({ id: carts.id })
+            .from(carts)
+            .where(
+              and(
+                ne(carts.id, keep),
+                exists(db.select({ one: sql`1` }).from(carts).offset(MAX_CARTS - 1).limit(1)),
+              ),
+            )
+            .orderBy(asc(carts.updatedAt))
+            .limit(EVICT_BATCH),
         ),
       ),
   })
