@@ -160,6 +160,13 @@ describe('production endpoint guard on the migration path (NS-36)', () => {
     expect(run).toThrow(/NEON_PRODUCTION_ENDPOINT/)
   })
 
+  // NS-77: the runtime must go through the Neon pooler, migrate must not (DDL over the direct endpoint).
+  it('refuses a direct DATABASE_URL on Vercel when DATABASE_URL_UNPOOLED is unset', () => {
+    const run = () => resolveMigrationTarget({ pooledUrl: neon(BRANCH), env: preview(PROD) })
+    expect(run).toThrow(/DATABASE_URL.*-pooler/)
+    expect(run).not.toThrow(/npg_FakePass123|neon\.tech|ep-fake/)
+  })
+
   const PROD_ENV = {
     VERCEL: '1',
     VERCEL_ENV: 'preview',
