@@ -1,6 +1,6 @@
 # ADR-0012: Blog: MDX tĩnh, registry TypeScript, 404 bằng danh sách slug trong proxy
 
-- Trạng thái: Đã chấp nhận
+- Trạng thái: Đã chấp nhận; bổ sung bởi [ADR-0014](./0014-cart-storage-and-cookie.md) (blog vẫn prerender, header có lỗ động biểu tượng giỏ)
 - Ngày: 2026-11-22
 - Quyết định của chủ dự án: 2026-11-22 (plan M3, Cổng 1, quyết định 5, 6, 7)
 - Liên quan: [ADR-0003](./0003-cache-strategy.md), [ADR-0009](./0009-product-404-in-proxy.md), `docs/plans/M3.md` Task 9, 10, 13; ticket NS-63 (Task 9)
