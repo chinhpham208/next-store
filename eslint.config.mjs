@@ -48,9 +48,10 @@ const eslintConfig = defineConfig([
       "no-restricted-syntax": ["error", ...E2E_NAMESPACE_IMPORTS, ...E2E_UNGUARDED_CLIENTS],
     },
   },
-  // The guard's own spec builds contexts and calls fetch in the page on purpose, against a local server.
+  // The guard's own spec (and the bypass spec, NS-54) build contexts and call fetch in the page on purpose, against
+  // local servers.
   {
-    files: ["e2e/production-guard.spec.ts"],
+    files: ["e2e/production-guard.spec.ts", "e2e/vercel-bypass.spec.ts"],
     rules: { "no-restricted-syntax": ["error", ...E2E_NAMESPACE_IMPORTS] },
   },
   // Override default ignores of eslint-config-next.

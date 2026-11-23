@@ -93,7 +93,13 @@ BASE_URL=https://<url-preview> npm run smoke
 
 URL preview của từng deploy có thể bị Vercel Deployment Protection chặn (trang đăng nhập Vercel); khi đó cần `VERCEL_AUTOMATION_BYPASS_SECRET` (script gửi header `x-vercel-protection-bypass`, không in giá trị). Thiếu secret, smoke báo rõ là bị Deployment Protection chặn. `SMOKE_TEXT` đổi chuỗi cần có trên trang chủ. `SMOKE_ROBOTS=disallow` bắt buộc `robots.txt` có `Disallow: /` (workflow `e2e-preview` luôn đặt), `SMOKE_ROBOTS=allow` bắt buộc `Allow: /` (khi kiểm Production); bỏ trống thì chấp nhận một trong hai và in ra. `SMOKE_PRODUCT_FAIL_OPEN=warn` (chỉ workflow `Production E2E` đặt) biến slug sản phẩm lạ đúng dạng trả 200 (lookup DB của proxy fail-open, NS-79) thành `::warning::` kèm thời gian thay vì lỗi; slug sai dạng, slug bài và ảnh OG của bài vẫn phải 404. Header `X-Robots-Tag` của `/`, `/robots.txt`, `/sitemap.xml` luôn được in, không bắt buộc.
 
-E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMATION_BYPASS_SECRET` (không gửi header bypass khi `BASE_URL` là Production).
+E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMATION_BYPASS_SECRET`. Header bypass chỉ được gửi khi `BASE_URL` là `https://` và không phải Production, và chỉ tới **đúng origin** của `BASE_URL` (NS-54, `e2e/bypass.ts`); không dùng `extraHTTPHeaders`:
+
+- request của trình duyệt (fixture `context`, `page`, `newContext`): một `context.route` khớp origin, tự gửi request kèm header với `maxRedirects: 0` (`route.fetch`) rồi trả response cho trình duyệt. Trình duyệt tự đi theo redirect, và bước redirect không đi qua route nữa nên **không mang header**, kể cả khi quay về `BASE_URL`; trên preview, một redirect cùng origin sẽ gặp Deployment Protection;
+- `request`, `context.request`, `page.request`: mỗi bước redirect được gửi riêng, header chỉ có ở bước tới origin của `BASE_URL`;
+- ảnh, script, `fetch`, đích redirect ở origin khác không bao giờ nhận header. Route mà spec tự đăng ký chạy trước route bypass: dùng `route.fallback()` cho request tới `BASE_URL`, `route.continue()` gửi đi không có header.
+
+`e2e/vercel-bypass.spec.ts` kiểm các điều trên với hai server Node local.
 
 Không có `BASE_URL`, `npm run e2e` tự chạy ba `next start` từ cùng bản build: cổng 3100; cổng 3101 với `DATABASE_URL` trỏ vào cổng đóng (trang lỗi của US-05); cổng 3102 với `DATABASE_URL` trỏ vào một listener TCP im lặng ở cổng 3103 và `DB_QUERY_TIMEOUT_MS=1000` (DB treo, NS-55). Log của hai server DB hỏng ghi vào `.verify/e2e-broken-db.log`, `.verify/e2e-hung-db.log`. Các nhóm test này bỏ qua khi có `BASE_URL`. `E2E_PORT=<n>` dời bốn cổng sang `n` … `n+3`. `scripts/verify.sh` đọc `E2E_PORT` và `SMOKE_PORT`; chỉ đặt một biến thì biến kia lấy cùng giá trị. Nó chỉ tắt tiến trình do chính nó khởi động; cổng bận bởi tiến trình khác thì dừng với lỗi.
 

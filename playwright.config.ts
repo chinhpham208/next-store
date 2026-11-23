@@ -1,9 +1,7 @@
 import { defineConfig, devices } from '@playwright/test'
-import { grepInvertFor, isProductionUrl } from './e2e/production'
+import { grepInvertFor } from './e2e/production'
 
 const BASE_URL = process.env.BASE_URL
-// Production has no Deployment Protection (custom domain): the bypass secret is never sent there (M3 Task 17).
-const BYPASS_SECRET = isProductionUrl(BASE_URL) ? undefined : process.env.VERCEL_AUTOMATION_BYPASS_SECRET
 // Only for machines that cannot download Playwright's Chromium (e.g. PW_CHANNEL=chrome); CI uses the bundled one.
 const CHANNEL = process.env.PW_CHANNEL || undefined
 // E2E_PORT moves the four local servers (E2E_PORT … E2E_PORT + 3) off 3100, e.g. when scripts/verify.sh holds it;
@@ -39,8 +37,8 @@ export default defineConfig({
     baseURL: BASE_URL ?? `http://localhost:${LOCAL_PORT}`,
     channel: CHANNEL,
     trace: 'retain-on-failure',
-    // Previews sit behind Vercel Deployment Protection; the header is the documented automation bypass.
-    extraHTTPHeaders: BYPASS_SECRET ? { 'x-vercel-protection-bypass': BYPASS_SECRET } : undefined,
+    // No extraHTTPHeaders: they go to every origin. The Deployment Protection bypass of previews is added by the
+    // fixtures of e2e/test.ts, only for the origin of BASE_URL (NS-54, e2e/bypass.ts).
   },
   projects: [
     { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } } },
