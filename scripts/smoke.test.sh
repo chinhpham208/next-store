@@ -49,7 +49,7 @@ EOF
 chmod +x "$TMP/bin/curl"
 
 # start_server <port> <header-file> [status] [404-body] [soft-regex] [hard-404-regex]: answers / and the smoke's
-# product page (and its RSC / segment prefetch forms) with the default SMOKE_TEXT, /blog and the smoke's post (and its
+# product page (and its RSC / segment prefetch forms) with the default SMOKE_TEXT, /cart with the empty cart, /blog and the smoke's post (and its
 # RSC / segment prefetch forms) with an article and its h1, the smoke's listing paths with the labelled grid (or with <status>, e.g. 401 like Vercel Deployment Protection), everything else with 404 and
 # <404-body> (default: the app's Vietnamese page). URLs matching <soft-regex> answer 200 with the not-found page, like
 # a page-level notFound() under Cache Components (K3) or a proxy that failed open; URLs matching <hard-404-regex>
@@ -75,6 +75,7 @@ start_server() {
       if (images.includes(req.url)) { res.writeHead(Number(ogStatus), { "content-type": Number(ogStatus) === 200 ? "image/png" : "text/html" }); res.end("png"); return }
       if (hard && new RegExp(hard).test(req.url)) { res.writeHead(404, { "content-type": "text/html; charset=utf-8", "x-middleware-rewrite": "/_khong-tim-thay" }); res.end(body) }
       else if (req.url === "/" || ["/products/ao-404-not-found", "/products/ao-404-not-found?_rsc", "/products/ao-404-not-found.rsc", "/products/ao-404-not-found.segments/_tree.segment.rsc"].includes(req.url)) { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end(`<meta property="og:site_name" content="next-store"/>${og(req.url === "/" ? images[0] : images[1])}<h1>Áo thun 404 Not Found</h1><button type="submit" class="x disabled:x">Thêm vào giỏ</button>`) }
+      else if (req.url === "/cart") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<meta name=\"robots\" content=\"noindex\"/><h1>Giỏ hàng</h1><p>Giỏ hàng trống.</p>") }
       else if (req.url === "/products/ao-tabs-vs-spaces") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<h1>Áo thun Tabs vs Spaces</h1><button type=\"button\" class=\"x\" disabled=\"\">Thêm vào giỏ</button>") }
       else if (["/blog", "/blog/chao-mung-den-next-store", "/blog/chao-mung-den-next-store?_rsc", "/blog/chao-mung-den-next-store.rsc", "/blog/chao-mung-den-next-store.segments/_tree.segment.rsc"].includes(req.url)) { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end(`${og(images[2])}<article><h1>Chào mừng đến next-store</h1></article>`) }
       else if (req.url === "/products" || req.url === "/products?page=abc&sort=xyz") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<ul aria-label=\"Danh sách sản phẩm\"></ul>") }
