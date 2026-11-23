@@ -6,3 +6,5 @@ export { AddToCartForm, type AddToCartFormProps } from '@/features/cart/componen
 export { CartBadge, StaticCartLink } from '@/features/cart/components/cart-badge'
 export { CartLink, type CartLinkProps } from '@/features/cart/components/cart-link'
 export { CartProvider, type CartProviderProps } from '@/features/cart/components/cart-provider'
+// CartView (the component) stays inside the feature: its name is the CartView type's.
+export { CartSection, CartSkeleton } from '@/features/cart/components/cart-view'

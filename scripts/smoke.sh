@@ -2,7 +2,7 @@
 # Smoke test: trang chủ trả 200 và có SMOKE_TEXT; một đường dẫn không tồn tại trả 404 với trang tiếng Việt;
 # một trang chi tiết sản phẩm trả 200 và có tên sản phẩm; /products trả 200 và có lưới sản phẩm, kể cả với
 # tham số không hợp lệ; nút "Thêm vào giỏ" dùng được ở sản phẩm còn hàng, vô hiệu ở sản phẩm hết hàng, trang chủ không
-# Set-Cookie; /blog và một bài blog trả 200 và có nội dung; slug sản phẩm, slug bài và ảnh OG của slug
+# Set-Cookie; /cart không cookie trả 200, giỏ trống, noindex; /blog và một bài blog trả 200 và có nội dung; slug sản phẩm, slug bài và ảnh OG của slug
 # lạ trả 404 ngay lần đầu, bài và sản phẩm có thật vẫn 200 ở mọi dạng vận chuyển; /sitemap.xml và /robots.txt trả 200, cùng một origin tuyệt đối, robots.txt chặn hay cho crawl đúng môi trường;
 # trang chủ có og:site_name; og:image của trang chủ, một sản phẩm và một bài blog tải được, là PNG.
 #
@@ -252,6 +252,18 @@ status=$(fetch "$BASE$SOLD_OUT_PATH" "$TMP/sold-out.html") || fail "không kết
 case $(add_button "$TMP/sold-out.html") in *'disabled=""'*) ;; *) fail "HTML $SOLD_OUT_PATH không có nút \"Thêm vào giỏ\" bị vô hiệu" ;; esac
 if tr -d '\r' < "$TMP/home.headers" | grep -qi '^set-cookie:'; then fail "GET / trả Set-Cookie"; fi
 echo "smoke: nút \"Thêm vào giỏ\": $DETAIL_PATH dùng được, $SOLD_OUT_PATH vô hiệu; GET / không có Set-Cookie"
+
+# US-07 (M4 Task 9): /cart without a cookie is the empty cart, read behind Suspense (so the text proves the section
+# rendered, not just the shell), and never indexed. No cookie is sent, so the request writes nothing.
+status=$(fetch "$BASE/cart" "$TMP/cart.html" '' "$TMP/cart.headers") || fail "không kết nối được $BASE/cart"
+[ "$status" = 200 ] || fail "GET /cart trả $status, cần 200"
+grep -qF -- 'Giỏ hàng trống.' "$TMP/cart.html" || fail "HTML /cart (không cookie) không có \"Giỏ hàng trống.\""
+if ! grep -qE '<meta name="robots" content="[^"]*noindex' "$TMP/cart.html" &&
+  ! tr -d '\r' < "$TMP/cart.headers" | grep -qiE '^x-robots-tag:.*noindex'; then
+  fail "/cart không có noindex (meta robots hay X-Robots-Tag)"
+fi
+if tr -d '\r' < "$TMP/cart.headers" | grep -qi '^set-cookie:'; then fail "GET /cart (không cookie) trả Set-Cookie"; fi
+echo "smoke: GET /cart → 200, giỏ trống, noindex, không Set-Cookie"
 
 # US-02 / US-03: the listing reads the catalogue (the labelled grid is inside the Suspense boundary, so it is
 # only in the HTML when the data was read), and invalid parameters fall back to defaults instead of an error.

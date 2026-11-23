@@ -65,19 +65,12 @@ describe('client boundary', () => {
     const found = listTsx('src')
       .filter((path) => USE_CLIENT.test(readFileSync(path, 'utf8')))
       .sort()
-    // cart-line-controls.tsx arrives with the /cart page (Task 9); every file found must be on the list.
-    expect(found.filter((path) => !ALLOWED_CLIENT_FILES.includes(path))).toEqual([])
-    expect(found).toEqual(expect.arrayContaining(['src/app/(shop)/error.tsx', ...CART_CLIENT_FILES.slice(0, 3)]))
+    expect(found).toEqual([...ALLOWED_CLIENT_FILES].sort())
   })
 
   it('client files import nothing server-only', () => {
     for (const path of CART_CLIENT_FILES) {
-      let source: string
-      try {
-        source = readFileSync(path, 'utf8')
-      } catch {
-        continue // cart-line-controls.tsx: Task 9
-      }
+      const source = readFileSync(path, 'utf8')
       expect(source, path).not.toContain('server-only')
       expect(importsOf(source).filter((specifier) => !isAllowedClientImport(specifier)), path).toEqual([])
     }
