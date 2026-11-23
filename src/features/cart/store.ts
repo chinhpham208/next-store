@@ -1,6 +1,6 @@
 import 'server-only'
 import { and, asc, count, eq, gte, inArray, lt, sql } from 'drizzle-orm'
-import { cartItems, carts, dbQuery, products } from '@/db'
+import { cartItems, carts, dbQuery, products, type Db } from '@/db'
 import { CART_TTL_DAYS, MAX_CART_LINES, MAX_LINE_QUANTITY } from '@/features/cart/limits'
 import type { CartId } from '@/features/cart/schema'
 import type { CartError, CartLine } from '@/features/cart/types'
@@ -66,6 +66,27 @@ export type AddLineResult =
   | { ok: true; count: number }
   | { ok: false; error: Exclude<CartError, 'invalid' | 'unavailable'> | 'missing-cart'; available?: number }
 
+type CartTx = Parameters<Parameters<Db['transaction']>[0]>[0]
+
+// Step 1 of every write of an existing cart, as in addLine: takes the row lock (writes of one cart run one after
+// the other, plan M4 D3) and slides the expiry. An unknown or expired cart matches no row.
+const lockCart = async (tx: CartTx, cartId: CartId, now: Date): Promise<boolean> => {
+  const locked = await tx
+    .update(carts)
+    .set({ updatedAt: now })
+    .where(liveCart(cartId, now))
+    .returning({ id: carts.id })
+  return locked.length > 0
+}
+
+const countInTx = async (tx: CartTx, cartId: CartId): Promise<number> => {
+  const [total] = await tx
+    .select({ count: sql`coalesce(sum(${cartItems.quantity}), 0)`.mapWith(Number) })
+    .from(cartItems)
+    .where(eq(cartItems.cartId, cartId))
+  return total?.count ?? 0
+}
+
 type AddLineInput = { cartId: CartId; slug: string; quantity: number; create: boolean; now: Date }
 
 /**
@@ -76,17 +97,9 @@ export const addLine = async ({ cartId, slug, quantity, create, now }: AddLineIn
   dbQuery({
     name: 'cart.add',
     transaction: async (tx): Promise<AddLineResult> => {
-      if (!create) {
-        // First, before reading the line: the row lock makes every write of one cart wait for the previous one
-        // to commit (two tabs run side by side, plan M4 D3), so the check below sees what the other wrote. It
-        // also slides the expiry; an expired cart matches no row and stays expired.
-        const locked = await tx
-          .update(carts)
-          .set({ updatedAt: now })
-          .where(liveCart(cartId, now))
-          .returning({ id: carts.id })
-        if (locked.length === 0) return { ok: false, error: 'missing-cart' }
-      }
+      // First, before reading the line: the row lock makes every write of one cart wait for the previous one to
+      // commit (two tabs run side by side, plan M4 D3), so the check below sees what the other wrote.
+      if (!create && !(await lockCart(tx, cartId, now))) return { ok: false, error: 'missing-cart' }
 
       const [product] = await tx
         .select({ id: products.id, stock: products.stock })
@@ -120,11 +133,72 @@ export const addLine = async ({ cartId, slug, quantity, create, now }: AddLineIn
           set: { quantity: sql`${cartItems.quantity} + excluded.quantity` },
         })
 
-      const [total] = await tx
-        .select({ count: sql`coalesce(sum(${cartItems.quantity}), 0)`.mapWith(Number) })
-        .from(cartItems)
-        .where(eq(cartItems.cartId, cartId))
-      return { ok: true, count: total?.count ?? 0 }
+      return { ok: true, count: await countInTx(tx, cartId) }
+    },
+  })
+
+/**
+ * Errors of an update or a removal. No `line-limit` (the action's schema caps the quantity) and no `cart-full` (an
+ * update never adds a line). `missing-cart`: the action answers with an empty cart; it never creates one.
+ */
+export type SetLineResult =
+  | { ok: true; count: number }
+  | { ok: false; error: 'not-found' | 'out-of-stock' | 'over-stock' | 'missing-cart'; available?: number }
+
+type SetLineInput = { cartId: CartId; slug: string; quantity: number; now: Date }
+
+/**
+ * Sets the quantity of a line already in the cart; 0 removes it (US-07). Never creates a line or a cart.
+ * Lowering is always allowed, even while the line stays above the stock (ADR-0014 10A): only raising is checked.
+ */
+export const setLine = async ({ cartId, slug, quantity, now }: SetLineInput): Promise<SetLineResult> =>
+  dbQuery({
+    name: 'cart.set',
+    transaction: async (tx): Promise<SetLineResult> => {
+      if (!(await lockCart(tx, cartId, now))) return { ok: false, error: 'missing-cart' }
+
+      const [product] = await tx
+        .select({ id: products.id, stock: products.stock })
+        .from(products)
+        .where(eq(products.slug, slug))
+      if (product === undefined) return { ok: false, error: 'not-found' }
+      const ofLine = and(eq(cartItems.cartId, cartId), eq(cartItems.productId, product.id))
+
+      if (quantity === 0) {
+        await tx.delete(cartItems).where(ofLine)
+        return { ok: true, count: await countInTx(tx, cartId) }
+      }
+
+      const [line] = await tx.select({ quantity: cartItems.quantity }).from(cartItems).where(ofLine)
+      // The stock is checked only when raising: a line already above it (stock fell since the add) can go down.
+      if (quantity > (line?.quantity ?? 0)) {
+        if (product.stock === 0) return { ok: false, error: 'out-of-stock' }
+        if (quantity > product.stock) return { ok: false, error: 'over-stock', available: product.stock }
+      }
+      if (line === undefined) return { ok: false, error: 'not-found' }
+
+      await tx.update(cartItems).set({ quantity }).where(ofLine)
+      return { ok: true, count: await countInTx(tx, cartId) }
+    },
+  })
+
+type RemoveLineInput = { cartId: CartId; slug: string; now: Date }
+
+/** Removes a line; a line (or a product) that is not there is still `ok` (idempotent). */
+export const removeLine = async ({ cartId, slug, now }: RemoveLineInput): Promise<SetLineResult> =>
+  dbQuery({
+    name: 'cart.remove',
+    transaction: async (tx): Promise<SetLineResult> => {
+      if (!(await lockCart(tx, cartId, now))) return { ok: false, error: 'missing-cart' }
+      await tx
+        .delete(cartItems)
+        .where(
+          and(
+            eq(cartItems.cartId, cartId),
+            inArray(cartItems.productId, tx.select({ id: products.id }).from(products).where(eq(products.slug, slug))),
+          ),
+        )
+      return { ok: true, count: await countInTx(tx, cartId) }
     },
   })
 

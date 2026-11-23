@@ -8,7 +8,15 @@ import { seed } from '@/db/seed'
 import { PRODUCT_SEEDS } from '@/db/seed-data'
 import { CART_TTL_DAYS, MAX_CART_LINES, MAX_LINE_QUANTITY } from '@/features/cart/limits'
 import { cartIdSchema, type CartId } from '@/features/cart/schema'
-import { addLine, cartExpiryCutoff, countCartItems, purgeExpiredCarts, readCartLines } from '@/features/cart/store'
+import {
+  addLine,
+  cartExpiryCutoff,
+  countCartItems,
+  purgeExpiredCarts,
+  readCartLines,
+  removeLine,
+  setLine,
+} from '@/features/cart/store'
 
 // The real dbQuery, with the transaction handle wrapped so a test can see the order in which addLine reaches the
 // tables (`locks the cart row before reading the line`). Every other test runs it unchanged.
@@ -459,6 +467,235 @@ describe('addLine', () => {
     // getProductBySlug is cached for hours (plan M4 Global Constraints): the store must not reach for it.
     const source = await readFile(new URL('./store.ts', import.meta.url), 'utf8')
     expect(source).not.toMatch(/from '@\/features\/products|getProductBySlug\(|^\s*'use cache/m)
+  })
+})
+
+describe('setLine', () => {
+  const quantityOf = async (cartId: CartId, slug: string) => {
+    const id = await productId(slug)
+    return (await linesOf(cartId)).find((line) => line.productId === id)?.quantity
+  }
+
+  it('US-07: setting the quantity to 0 removes the line', async () => {
+    const cartId = await makeCart({
+      lines: [
+        { slug: STOCK_12, quantity: 2 },
+        { slug: 'ao-404-not-found', quantity: 1 },
+      ],
+    })
+    expect(await setLine({ cartId, slug: STOCK_12, quantity: 0, now: NOW })).toEqual({ ok: true, count: 1 })
+    expect(await linesOf(cartId)).toEqual([{ productId: await productId('ao-404-not-found'), quantity: 1 }])
+  })
+
+  it('US-07: changing the quantity changes the total', async () => {
+    const first = seedOf(STOCK_12)
+    const second = seedOf('ao-404-not-found')
+    const cartId = await makeCart({
+      lines: [
+        { slug: first.slug, quantity: 1, createdAt: daysAgo(1) },
+        { slug: second.slug, quantity: 1 },
+      ],
+    })
+    expect(await setLine({ cartId, slug: first.slug, quantity: 2, now: NOW })).toEqual({ ok: true, count: 3 })
+    const lines = await readCartLines(cartId, NOW)
+    expect(lines.map((line) => [line.slug, line.quantity])).toEqual([
+      [first.slug, 2],
+      [second.slug, 1],
+    ])
+    expect(lines.reduce((sum, line) => sum + line.lineTotal, 0)).toBe(2 * first.price + 1 * second.price)
+  })
+
+  it('US-08: refuses raising a line above the stock', async () => {
+    const cartId = await makeCart({ lines: [{ slug: LEFT_3, quantity: 2 }] })
+    expect(await setLine({ cartId, slug: LEFT_3, quantity: 4, now: NOW })).toEqual({
+      ok: false,
+      error: 'over-stock',
+      available: 3,
+    })
+    expect(await quantityOf(cartId, LEFT_3)).toBe(2)
+  })
+
+  it('raises a line up to the stock', async () => {
+    const cartId = await makeCart({ lines: [{ slug: LEFT_3, quantity: 1 }] })
+    expect(await setLine({ cartId, slug: LEFT_3, quantity: 3, now: NOW })).toEqual({ ok: true, count: 3 })
+    expect(await quantityOf(cartId, LEFT_3)).toBe(3)
+  })
+
+  it('allows lowering a line that is above the stock', async () => {
+    // Stock fell after the add (ADR-0014 10A): the customer is going the right way, so lowering is always allowed;
+    // the cart page keeps warning until the line fits.
+    const cartId = await makeCart({ lines: [{ slug: LEFT_3, quantity: 5 }] })
+    expect(await setLine({ cartId, slug: LEFT_3, quantity: 4, now: NOW })).toEqual({ ok: true, count: 4 })
+    expect(await quantityOf(cartId, LEFT_3)).toBe(4)
+    // Keeping it as it is, is not raising it either.
+    expect(await setLine({ cartId, slug: LEFT_3, quantity: 4, now: NOW })).toEqual({ ok: true, count: 4 })
+    expect(await setLine({ cartId, slug: LEFT_3, quantity: 5, now: NOW })).toEqual({
+      ok: false,
+      error: 'over-stock',
+      available: 3,
+    })
+    expect(await quantityOf(cartId, LEFT_3)).toBe(4)
+  })
+
+  it('allows lowering a line of a product that sold out, and refuses raising it', async () => {
+    const cartId = await makeCart({ lines: [{ slug: SOLD_OUT, quantity: 2 }] })
+    expect(await setLine({ cartId, slug: SOLD_OUT, quantity: 3, now: NOW })).toEqual({
+      ok: false,
+      error: 'out-of-stock',
+    })
+    expect(await setLine({ cartId, slug: SOLD_OUT, quantity: 1, now: NOW })).toEqual({ ok: true, count: 1 })
+    expect(await setLine({ cartId, slug: SOLD_OUT, quantity: 0, now: NOW })).toEqual({ ok: true, count: 0 })
+    expect(await linesOf(cartId)).toEqual([])
+  })
+
+  it('does not create a line when setting an absent product', async () => {
+    const cartId = await makeCart({ lines: [{ slug: 'ao-404-not-found', quantity: 1 }] })
+    expect(await setLine({ cartId, slug: STOCK_12, quantity: 2, now: NOW })).toEqual({
+      ok: false,
+      error: 'not-found',
+    })
+    expect(await linesOf(cartId)).toEqual([{ productId: await productId('ao-404-not-found'), quantity: 1 }])
+  })
+
+  it('reports not-found for a slug no product has', async () => {
+    const cartId = await makeCart({ lines: [{ slug: STOCK_12, quantity: 1 }] })
+    for (const quantity of [0, 1]) {
+      expect(await setLine({ cartId, slug: 'khong-ton-tai', quantity, now: NOW })).toEqual({
+        ok: false,
+        error: 'not-found',
+      })
+    }
+    expect(await quantityOf(cartId, STOCK_12)).toBe(1)
+  })
+
+  it('reads stock inside the transaction, not from the cache', async () => {
+    const cartId = await makeCart({ lines: [{ slug: STOCK_12, quantity: 1 }] })
+    await db.update(products).set({ stock: 2 }).where(eq(products.slug, STOCK_12))
+    try {
+      expect(await setLine({ cartId, slug: STOCK_12, quantity: 3, now: NOW })).toEqual({
+        ok: false,
+        error: 'over-stock',
+        available: 2,
+      })
+    } finally {
+      await db.update(products).set({ stock: 12 }).where(eq(products.slug, STOCK_12))
+    }
+  })
+
+  it('reports missing-cart for an unknown or expired id and writes nothing', async () => {
+    const unknown = newCartId()
+    expect(await setLine({ cartId: unknown, slug: STOCK_12, quantity: 1, now: NOW })).toEqual({
+      ok: false,
+      error: 'missing-cart',
+    })
+    expect(await cartRow(unknown)).toBeUndefined()
+
+    const expired = await makeCart({ updatedAt: daysAgo(31), lines: [{ slug: STOCK_12, quantity: 2 }] })
+    for (const quantity of [0, 1]) {
+      expect(await setLine({ cartId: expired, slug: STOCK_12, quantity, now: NOW })).toEqual({
+        ok: false,
+        error: 'missing-cart',
+      })
+    }
+    expect(await cartRow(expired)).toMatchObject({ updatedAt: daysAgo(31) })
+    expect(await quantityOf(expired, STOCK_12)).toBe(2)
+  })
+
+  it('touches updated_at on every successful set', async () => {
+    const cartId = await makeCart({ updatedAt: daysAgo(20), lines: [{ slug: STOCK_12, quantity: 1 }] })
+    await setLine({ cartId, slug: STOCK_12, quantity: 2, now: daysAgo(5) })
+    expect(await cartRow(cartId)).toMatchObject({ updatedAt: daysAgo(5) })
+    await setLine({ cartId, slug: STOCK_12, quantity: 0, now: NOW })
+    expect(await cartRow(cartId)).toMatchObject({ updatedAt: NOW })
+  })
+
+  it('does not change another cart', async () => {
+    const other = await makeCart({ lines: [{ slug: STOCK_12, quantity: 3 }] })
+    const mine = await makeCart({ lines: [{ slug: STOCK_12, quantity: 1 }] })
+    expect(await setLine({ cartId: mine, slug: STOCK_12, quantity: 2, now: NOW })).toEqual({ ok: true, count: 2 })
+    expect(await setLine({ cartId: mine, slug: STOCK_12, quantity: 0, now: NOW })).toEqual({ ok: true, count: 0 })
+    expect(await quantityOf(other, STOCK_12)).toBe(3)
+  })
+
+  it('locks the cart row before reading the line', async () => {
+    // As in addLine: two tabs run side by side (plan M4 D3), and the row lock makes the second wait for the first.
+    const cartId = await makeCart({ lines: [{ slug: STOCK_12, quantity: 1 }] })
+    statements.recording = true
+    await setLine({ cartId, slug: STOCK_12, quantity: 2, now: NOW })
+    expect(statements.log[0]).toBe('update carts')
+    statements.log = []
+    await setLine({ cartId, slug: STOCK_12, quantity: 0, now: NOW })
+    expect(statements.log[0]).toBe('update carts')
+    expect(statements.log).toContain('delete cart_items')
+    expect(statements.log).not.toContain('insert cart_items')
+  })
+})
+
+describe('removeLine', () => {
+  it('US-07: removes the line and returns the count of the rest', async () => {
+    const cartId = await makeCart({
+      lines: [
+        { slug: STOCK_12, quantity: 2 },
+        { slug: 'ao-404-not-found', quantity: 1 },
+      ],
+    })
+    expect(await removeLine({ cartId, slug: STOCK_12, now: NOW })).toEqual({ ok: true, count: 1 })
+    expect(await linesOf(cartId)).toEqual([{ productId: await productId('ao-404-not-found'), quantity: 1 }])
+  })
+
+  it('removing an absent line is ok', async () => {
+    const cartId = await makeCart({ lines: [{ slug: 'ao-404-not-found', quantity: 2 }] })
+    expect(await removeLine({ cartId, slug: STOCK_12, now: NOW })).toEqual({ ok: true, count: 2 })
+    expect(await removeLine({ cartId, slug: 'khong-ton-tai', now: NOW })).toEqual({ ok: true, count: 2 })
+    expect(await linesOf(cartId)).toHaveLength(1)
+  })
+
+  it('removes a line above the stock or of a sold-out product', async () => {
+    const cartId = await makeCart({
+      lines: [
+        { slug: LEFT_3, quantity: 5 },
+        { slug: SOLD_OUT, quantity: 1 },
+      ],
+    })
+    expect(await removeLine({ cartId, slug: LEFT_3, now: NOW })).toEqual({ ok: true, count: 1 })
+    expect(await removeLine({ cartId, slug: SOLD_OUT, now: NOW })).toEqual({ ok: true, count: 0 })
+  })
+
+  it('reports missing-cart for an unknown or expired id and writes nothing', async () => {
+    expect(await removeLine({ cartId: newCartId(), slug: STOCK_12, now: NOW })).toEqual({
+      ok: false,
+      error: 'missing-cart',
+    })
+    const expired = await makeCart({ updatedAt: daysAgo(31), lines: [{ slug: STOCK_12, quantity: 2 }] })
+    expect(await removeLine({ cartId: expired, slug: STOCK_12, now: NOW })).toEqual({
+      ok: false,
+      error: 'missing-cart',
+    })
+    expect(await cartRow(expired)).toMatchObject({ updatedAt: daysAgo(31) })
+    expect(await linesOf(expired)).toHaveLength(1)
+  })
+
+  it('touches updated_at, even when the line was absent', async () => {
+    const cartId = await makeCart({ updatedAt: daysAgo(20), lines: [{ slug: STOCK_12, quantity: 1 }] })
+    await removeLine({ cartId, slug: 'ao-404-not-found', now: daysAgo(5) })
+    expect(await cartRow(cartId)).toMatchObject({ updatedAt: daysAgo(5) })
+    await removeLine({ cartId, slug: STOCK_12, now: NOW })
+    expect(await cartRow(cartId)).toMatchObject({ updatedAt: NOW })
+  })
+
+  it('does not remove the line of another cart', async () => {
+    const other = await makeCart({ lines: [{ slug: STOCK_12, quantity: 3 }] })
+    const mine = await makeCart({ lines: [{ slug: STOCK_12, quantity: 1 }] })
+    expect(await removeLine({ cartId: mine, slug: STOCK_12, now: NOW })).toEqual({ ok: true, count: 0 })
+    expect(await linesOf(other)).toEqual([{ productId: await productId(STOCK_12), quantity: 3 }])
+  })
+
+  it('locks the cart row first, in one transaction', async () => {
+    const cartId = await makeCart({ lines: [{ slug: STOCK_12, quantity: 1 }] })
+    statements.recording = true
+    await removeLine({ cartId, slug: STOCK_12, now: NOW })
+    expect(statements.log[0]).toBe('update carts')
+    expect(statements.log).toContain('delete cart_items')
   })
 })
 
