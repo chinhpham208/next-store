@@ -51,14 +51,17 @@ curl_safe() { curl -g --proto "=$SCHEME" --proto-redir "=$SCHEME" "$@"; }
 # the quoted config value.
 # <header> is a fixed string from this script (e.g. `rsc: 1`), checked so it cannot break out of the config value.
 # The total time of the request, in seconds as curl prints it, goes to $TMP/last-time (read with last_time_ms).
-fetch() { # fetch <url> <body-file> [header] [response-headers-file] → in mã HTTP
-  local url=$1 body=$2 header=${3:-} dump=${4:-/dev/null} code=0 out
+# <method> (default GET) is a fixed word from this script; any other method sends the fixed body `smoke=1` and never
+# the `next-action` header, so it is never a Server Action (NS-103).
+fetch() { # fetch <url> <body-file> [header] [response-headers-file] [method] → in mã HTTP
+  local url=$1 body=$2 header=${3:-} dump=${4:-/dev/null} method=${5:-GET} code=0 out request=()
   if [ -n "$header" ] && ! [[ $header =~ ^[A-Za-z0-9-]+:\ [A-Za-z0-9./-]+$ ]]; then fail "header không hợp lệ"; fi
+  case $method in GET) ;; POST | PUT | PATCH | DELETE) request=(-X "$method" --data 'smoke=1') ;; *) fail "method không hợp lệ" ;; esac
   xtrace_off
   {
     if [ -n "$SEND_BYPASS" ]; then printf 'header = "x-vercel-protection-bypass: %s"\n' "$BYPASS"; fi
     if [ -n "$header" ]; then printf 'header = "%s"\n' "$header"; fi
-  } | curl_safe -sS -D "$dump" -o "$body" -w '%{http_code} %{time_total}' --max-time 20 --config - --url "$url" > "$TMP/last-write" || code=$?
+  } | curl_safe -sS -D "$dump" -o "$body" -w '%{http_code} %{time_total}' --max-time 20 --config - "${request[@]}" --url "$url" > "$TMP/last-write" || code=$?
   xtrace_restore
   out=$(cat "$TMP/last-write")
   printf '%s\n' "${out#* }" > "$TMP/last-time"
@@ -327,20 +330,20 @@ POST_OG_PATH=$OG_PATH
 # database, so a 200 there means the proxy did not run: always a failure.
 NOT_FOUND_FAILED=
 PRODUCT_FAIL_OPEN_COUNT=0
-expect_404() { check_404 '' "$@"; } # expect_404 <path> <label> [header]
-expect_product_404() { check_404 product "$@"; } # expect_product_404 <path> <label> [header]: slug đi qua lookup DB
+expect_404() { check_404 '' "$@"; } # expect_404 <path> <label> [header] [method]
+expect_product_404() { check_404 product "$@"; } # expect_product_404 <path> <label> [header] [method]: slug đi qua lookup DB
 product_fail_open_warned() { # product_fail_open_warned <status> <message>: 0 = cảnh báo thay cho lỗi
   [ "$1" = 200 ] && [ "${SMOKE_PRODUCT_FAIL_OPEN:-}" = warn ] || return 1
   # A workflow command on purpose: visible on the run summary, not only in the log.
   echo "::warning::smoke: $2 sau $(last_time_ms): lookup DB của proxy fail-open (SMOKE_PRODUCT_FAIL_OPEN=warn, NS-79)"
   PRODUCT_FAIL_OPEN_COUNT=$((PRODUCT_FAIL_OPEN_COUNT + 1))
 }
-check_404() { # check_404 <kind> <path> <label> [header]
-  local kind=$1 path=$2 label=$3 header=${4:-} status
-  status=$(fetch "$BASE$path" "$TMP/not-found" "$header") || fail "không kết nối được $BASE$path"
-  if [ "$kind" = product ] && product_fail_open_warned "$status" "GET $path ($label) trả 200"; then return 0; fi
+check_404() { # check_404 <kind> <path> <label> [header] [method]
+  local kind=$1 path=$2 label=$3 header=${4:-} method=${5:-GET} status
+  status=$(fetch "$BASE$path" "$TMP/not-found" "$header" /dev/null "$method") || fail "không kết nối được $BASE$path"
+  if [ "$kind" = product ] && product_fail_open_warned "$status" "$method $path ($label) trả 200"; then return 0; fi
   if [ "$status" != 404 ]; then
-    echo "smoke: LỖI: GET $path ($label) trả $status ngay lần đầu, cần 404" >&2
+    echo "smoke: LỖI: $method $path ($label) trả $status ngay lần đầu, cần 404" >&2
     NOT_FOUND_FAILED=1
     return 0
   fi
@@ -352,7 +355,7 @@ check_404() { # check_404 <kind> <path> <label> [header]
     NOT_FOUND_FAILED=1
     return 0
   fi
-  echo "smoke: GET $path ($label) → 404, $(last_time_ms)"
+  echo "smoke: $method $path ($label) → 404, $(last_time_ms)"
 }
 # A cold database connection (Neon waking up, new function instance) can outlast the proxy's 400 ms bound; the
 # proxy then fails open and that slug answers 200 (ADR-0009). Measured on the first preview of NS-49: the first two
@@ -412,32 +415,22 @@ expect_product_404 "$OG_UNKNOWN_PRODUCT${DETAIL_OG_PATH#"$DETAIL_PATH"}" 'ảnh 
 expect_product_404 "$OG_UNKNOWN_PRODUCT-2/opengraph-image" 'ảnh OG: slug sản phẩm lạ, không hậu tố băm'
 expect_404 "$OG_UNKNOWN_POST${POST_OG_PATH#"$POST_PATH"}" 'ảnh OG: slug bài lạ'
 expect_404 "$OG_UNKNOWN_POST-2/opengraph-image" 'ảnh OG: slug bài lạ, không hậu tố băm'
+[ -z "$NOT_FOUND_FAILED" ] || fail "slug hoặc ảnh OG không tồn tại không trả 404 ngay lần đầu (xem các dòng LỖI ở trên)"
+
+# NS-103 (narrows M4 decision 11, NS-92): only a POST with the `next-action` header is a Server Action and skips the
+# slug check. Next.js renders any other request like a GET, so a POST without the header, a PUT or a DELETE to an unknown
+# or malformed slug must get the proxy's 404 too; before the fix it answered 200 and left a new route cache entry
+# (audit NS-96). The unknown product slug needs the lookup, so it may fail open like the GET cases above (NS-79).
+expect_product_404 "/products/khong-ton-tai-post-$RUN_ID" 'POST không có next-action' '' POST
+expect_404 "/products/KHONG-TON-TAI-POST-$RUN_ID" 'POST không có next-action, chữ hoa' '' POST
+expect_404 "/blog/khong-ton-tai-post-$RUN_ID" 'bài: POST không có next-action' '' POST
+expect_product_404 "/products/khong-ton-tai-put-$RUN_ID" 'PUT' '' PUT
+expect_404 "/blog/khong-ton-tai-delete-$RUN_ID" 'bài: DELETE' '' DELETE
+expect_product_404 "/products/khong-ton-tai-post-$RUN_ID" 'GET sau POST cùng slug'
+[ -z "$NOT_FOUND_FAILED" ] || fail "request không phải Server Action tới slug lạ không trả 404 ngay lần đầu (xem các dòng LỖI ở trên)"
 if [ "$PRODUCT_FAIL_OPEN_COUNT" -gt 0 ]; then
   echo "smoke: $PRODUCT_FAIL_OPEN_COUNT ca slug sản phẩm fail-open, chỉ cảnh báo (SMOKE_PRODUCT_FAIL_OPEN=warn)"
 fi
-[ -z "$NOT_FOUND_FAILED" ] || fail "slug hoặc ảnh OG không tồn tại không trả 404 ngay lần đầu (xem các dòng LỖI ở trên)"
-
-# M4 decision 11 (NS-92): the proxy lets anything but GET / HEAD through without the slug lookup, so a POST that is
-# not a Server Action reaches the page of an unknown slug. It must not break the page (5xx), and the GET that follows
-# must still be the proxy's 404. The body is a fixed string; the bypass secret goes through stdin as in fetch().
-post_status() { # post_status <url> → in mã HTTP
-  local url=$1 code=0 out
-  xtrace_off
-  {
-    if [ -n "$SEND_BYPASS" ]; then printf 'header = "x-vercel-protection-bypass: %s"\n' "$BYPASS"; fi
-  } | curl_safe -sS -o "$TMP/post" -w '%{http_code}' --max-time 20 --config - -X POST --data 'smoke=1' --url "$url" \
-    > "$TMP/last-write" || code=$?
-  xtrace_restore
-  out=$(cat "$TMP/last-write")
-  printf '%s' "$out"
-  return "$code"
-}
-POST_UNKNOWN="/products/khong-ton-tai-post-$RUN_ID"
-status=$(post_status "$BASE$POST_UNKNOWN") || fail "không kết nối được $BASE$POST_UNKNOWN"
-case $status in 5*) fail "POST $POST_UNKNOWN (không có next-action) trả $status, không được 5xx" ;; esac
-echo "smoke: POST $POST_UNKNOWN (không có next-action) → $status, proxy không tra slug"
-expect_product_404 "$POST_UNKNOWN" 'GET sau POST cùng slug'
-[ -z "$NOT_FOUND_FAILED" ] || fail "GET $POST_UNKNOWN sau POST không trả 404"
 
 # The proxy must not turn a known product's client navigation (RSC request) into a 404. `?_rsc` is the cache-busting
 # parameter Next.js redirects an RSC request to (307) when it is missing; empty matches a request with no router headers.

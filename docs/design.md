@@ -118,7 +118,7 @@ Chi tiết và lý do: [ADR-0014](./adr/0014-cart-storage-and-cookie.md); giới
 - Tồn kho kiểm trong transaction trên dữ liệu không cache: **đã có trong giỏ + số thêm** không quá tồn kho ("Chỉ còn N sản phẩm"), mỗi dòng tối đa 10 cái, mỗi giỏ tối đa 20 loại (`src/features/cart/limits.ts`). Giảm số lượng luôn được; dòng vượt tồn kho hiện cảnh báo, không tự sửa. M4 không trừ hay giữ chỗ tồn kho.
 - Giá là giá hiện tại của sản phẩm; M6 chụp giá vào `orders.items` lúc tạo đơn.
 - Giao diện: `CartProvider` trong `(shop)/layout.tsx` giữ độ lệch số lượng bằng `useOptimistic`, số trên biểu tượng tăng ngay rồi khớp với RSC mới của action; action lỗi hoặc reject → số về như cũ, thông báo trong `role="alert"`.
-- Proxy không tham gia giỏ hàng; nó bỏ qua request không phải `GET` / `HEAD` (Server Action) trước mọi kiểm slug (ADR-0014, nếu M4 Task 7 xác nhận proxy chạy cho POST). Giới hạn tốc độ ở biên: một quy tắc Vercel WAF cho `POST` theo IP, 60 request / 60 s (ADR-0015).
+- Proxy không tham gia giỏ hàng; nó chỉ cho Server Action (`POST` có header `next-action`) đi thẳng trước mọi kiểm slug (ADR-0014; NS-103 thu hẹp từ "mọi request không phải `GET` / `HEAD`"). Mọi request khác, kể cả `POST` không có header, `PUT`, `DELETE`, được kiểm slug như `GET` (ADR-0009). Giới hạn tốc độ ở biên: một quy tắc Vercel WAF cho `POST` theo IP, 60 request / 60 s (ADR-0015).
 
 ### Thanh toán
 1. Khách bấm thanh toán → Server Action kiểm tra tồn kho, tạo `orders` trạng thái `pending`, gọi `PaymentProvider.createCheckout()`.
