@@ -1,7 +1,13 @@
 import { inspect } from 'node:util'
+import { eq, sql } from 'drizzle-orm'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { db } from '@/db/client'
-import { dbQuery, resolveQueryTimeout, warnIfInvalidQueryTimeout } from '@/db/query'
+import { dbQuery, resolveQueryTimeout, warnIfInvalidQueryTimeout, type DbStatement } from '@/db/query'
+import { categories, products } from '@/db/schema'
+
+// `run` takes exactly one Drizzle statement (audit PR #44 L1): these fakes stand in for a builder, which carries
+// getSQL as well as then.
+const statement = <T>(promise: PromiseLike<T>): DbStatement<T> => Object.assign(promise, { getSQL: () => sql`select 1` })
 
 // What Drizzle 0.45 throws for a driver failure: the SQL and params in the message and as properties, and the
 // postgres-js error (with the host in its message and properties) as `cause`.
@@ -23,16 +29,16 @@ afterEach(() => {
 })
 
 it('returns what the query returns and passes the client in', async () => {
-  await expect(dbQuery({ name: 'test.ok', run: async (client) => (client === db ? 7 : 0) })).resolves.toBe(7)
+  await expect(dbQuery({ name: 'test.ok', run: (client) => statement(Promise.resolve(client === db ? 7 : 0)) })).resolves.toBe(7)
 })
 
 it('accepts a thenable such as a Drizzle query builder', async () => {
   const thenable: PromiseLike<string> = { then: (resolve) => Promise.resolve('row').then(resolve) }
-  await expect(dbQuery({ name: 'test.thenable', run: () => thenable })).resolves.toBe('row')
+  await expect(dbQuery({ name: 'test.thenable', run: () => statement(thenable) })).resolves.toBe('row')
 })
 
 it('never carries the SQL, the params, the host or a cause', async () => {
-  const error = await rejectionOf(dbQuery({ name: 'test.fail', run: () => Promise.reject(drizzleError()) }))
+  const error = await rejectionOf(dbQuery({ name: 'test.fail', run: () => statement(Promise.reject(drizzleError())) }))
   expect(error).toBeInstanceOf(Error)
   expect(error).toMatchObject({ message: 'database query failed: test.fail (ECONNREFUSED)', code: 'ECONNREFUSED' })
   expect(JSON.stringify(error, error instanceof Error ? Object.getOwnPropertyNames(error) : [])).not.toMatch(
@@ -48,7 +54,7 @@ it('never carries the SQL, the params, the host or a cause', async () => {
 
 it('keeps a SQLSTATE from the driver error', async () => {
   const failing = () => Promise.reject(Object.assign(new Error('x'), { cause: Object.assign(new Error('y'), { code: '42703' }) }))
-  await expect(dbQuery({ name: 'test.state', run: failing })).rejects.toMatchObject({
+  await expect(dbQuery({ name: 'test.state', run: () => statement(failing()) })).rejects.toMatchObject({
     message: 'database query failed: test.state (42703)',
     code: '42703',
   })
@@ -56,7 +62,7 @@ it('keeps a SQLSTATE from the driver error', async () => {
 
 it('reads the code from the error itself when the cause has none', async () => {
   const failing = () => Promise.reject(Object.assign(new Error('x'), { code: 'ECONNRESET', cause: new Error('y') }))
-  await expect(dbQuery({ name: 'test.own', run: failing })).rejects.toMatchObject({
+  await expect(dbQuery({ name: 'test.own', run: () => statement(failing()) })).rejects.toMatchObject({
     message: 'database query failed: test.own (ECONNRESET)',
     code: 'ECONNRESET',
   })
@@ -80,7 +86,7 @@ it.each([
   // postgres-js connection errors read "write CONNECT_TIMEOUT 10.1.2.3:5432" and carry address / port.
   const driver = Object.assign(new Error(`write ${code} 10.1.2.3:5432`), { code, errno: code, address: '10.1.2.3', port: 5432 })
   const failing = () => Promise.reject(Object.assign(new Error('Failed query: select 1'), { cause: driver }))
-  const error = await rejectionOf(dbQuery({ name: 'test.driver', run: failing }))
+  const error = await rejectionOf(dbQuery({ name: 'test.driver', run: () => statement(failing()) }))
   expect(error).toMatchObject({ message: `database query failed: test.driver (${code})`, code })
   expect(inspect(error, { depth: 10, showHidden: true })).not.toMatch(/10\.1\.2\.3|5432|select/)
 })
@@ -88,7 +94,7 @@ it.each([
 it.each([['CONNECTION_CLOSED_10.1.2.3'], ['connection_closed'], ['SOME_OTHER_DRIVER_CODE']])(
   'drops a driver-looking code that is not on the allow-list (%j)',
   async (code) => {
-    const error = await rejectionOf(dbQuery({ name: 'test.unknown', run: () => Promise.reject(Object.assign(new Error('x'), { code })) }))
+    const error = await rejectionOf(dbQuery({ name: 'test.unknown', run: () => statement(Promise.reject(Object.assign(new Error('x'), { code }))) }))
     expect(error).toMatchObject({ message: 'database query failed: test.unknown' })
     expect(error).not.toHaveProperty('code')
   },
@@ -98,7 +104,7 @@ it.each([['host=10.1.2.3'], ['42p01'], ['E'], [`E${'X'.repeat(31)}`], [42703]])(
   'drops a code that is neither a SQLSTATE nor an errno (%j)',
   async (code) => {
     const failing = () => Promise.reject(Object.assign(new Error('x'), { code }))
-    const error = await rejectionOf(dbQuery({ name: 'test.code', run: failing }))
+    const error = await rejectionOf(dbQuery({ name: 'test.code', run: () => statement(failing()) }))
     expect(error).toMatchObject({ message: 'database query failed: test.code' })
     expect(error).not.toHaveProperty('code')
   },
@@ -109,14 +115,14 @@ it('wraps a synchronous throw and a non-Error rejection', async () => {
     throw new Error('select 1')
   }
   await expect(dbQuery({ name: 'test.sync', run: throwing })).rejects.toThrow(/^database query failed: test\.sync$/)
-  await expect(dbQuery({ name: 'test.string', run: () => Promise.reject('select 1') })).rejects.toThrow(
+  await expect(dbQuery({ name: 'test.string', run: () => statement(Promise.reject('select 1')) })).rejects.toThrow(
     /^database query failed: test\.string$/,
   )
 })
 
 it('rejects after the time limit', async () => {
   vi.useFakeTimers()
-  const pending = dbQuery({ name: 'test.slow', run: () => new Promise(() => {}), timeoutMs: 1000 })
+  const pending = dbQuery({ name: 'test.slow', run: () => statement(new Promise(() => {})), timeoutMs: 1000 })
   const settled = expect(pending).rejects.toMatchObject({
     message: 'database query timed out: test.slow',
     code: 'DB_QUERY_TIMEOUT',
@@ -130,7 +136,7 @@ it('uses DB_QUERY_TIMEOUT_MS when no limit is passed', async () => {
   vi.useFakeTimers()
   vi.stubEnv('DB_QUERY_TIMEOUT_MS', '200')
   try {
-    const pending = dbQuery({ name: 'test.env', run: () => new Promise(() => {}) })
+    const pending = dbQuery({ name: 'test.env', run: () => statement(new Promise(() => {})) })
     const settled = expect(pending).rejects.toMatchObject({ code: 'DB_QUERY_TIMEOUT' })
     await vi.advanceTimersByTimeAsync(200)
     await settled
@@ -150,7 +156,7 @@ it.each([
   [Number.POSITIVE_INFINITY, 5000],
 ])('clamps an explicit timeoutMs of %d to %d ms', async (timeoutMs, expected) => {
   vi.useFakeTimers()
-  const pending = dbQuery({ name: 'test.clamp', run: () => new Promise(() => {}), timeoutMs })
+  const pending = dbQuery({ name: 'test.clamp', run: () => statement(new Promise(() => {})), timeoutMs })
   let settled = false
   const done = rejectionOf(pending).then((error) => {
     settled = true
@@ -164,8 +170,8 @@ it.each([
 
 it('clears its timer once the query settles', async () => {
   vi.useFakeTimers()
-  await dbQuery({ name: 'test.fast', run: async () => 1, timeoutMs: 1000 })
-  await rejectionOf(dbQuery({ name: 'test.fast-fail', run: () => Promise.reject(new Error('x')), timeoutMs: 1000 }))
+  await dbQuery({ name: 'test.fast', run: () => statement(Promise.resolve(1)), timeoutMs: 1000 })
+  await rejectionOf(dbQuery({ name: 'test.fast-fail', run: () => statement(Promise.reject(new Error('x'))), timeoutMs: 1000 }))
   expect(vi.getTimerCount()).toBe(0)
 })
 
@@ -177,7 +183,7 @@ it('does not report a late rejection as unhandled', async () => {
     const late = new Promise<never>((_, reject) => {
       rejectLate = reject
     })
-    await expect(dbQuery({ name: 'test.late', run: () => late, timeoutMs: 10 })).rejects.toMatchObject({
+    await expect(dbQuery({ name: 'test.late', run: () => statement(late), timeoutMs: 10 })).rejects.toMatchObject({
       code: 'DB_QUERY_TIMEOUT',
     })
     rejectLate(drizzleError())
@@ -226,4 +232,64 @@ it('@/db does not export the raw client', async () => {
   const exported = Object.keys(await import('@/db'))
   expect(exported).not.toContain('db')
   expect(exported).toContain('dbQuery')
+})
+
+// Audit PR #44 L1: a second statement in one `run` can meet CONNECTION_ENDED when another request recycled the
+// client in between, so `run` is one statement and anything longer is a transaction, which holds its connection.
+describe('one statement or one transaction', () => {
+  it('runs a transaction on the current client and returns its result', async () => {
+    const begin = vi.spyOn(db, 'transaction')
+    const result = await dbQuery({
+      name: 'test.transaction',
+      transaction: async (tx) => {
+        await tx.execute(sql`select set_config('ns77.check', 'same', true)`)
+        await new Promise((resolve) => setTimeout(resolve, 5))
+        return tx.execute(sql`select current_setting('ns77.check', true) as value`)
+      },
+    })
+    expect(begin).toHaveBeenCalledOnce()
+    // A transaction-local setting is visible to the second statement only when both ran inside one transaction.
+    expect(result).toMatchObject({ rows: [{ value: 'same' }] })
+    begin.mockRestore()
+  })
+
+  it('replaces a failure inside a transaction like any other', async () => {
+    const error = await rejectionOf(
+      dbQuery({ name: 'test.tx-fail', transaction: () => Promise.reject(drizzleError()) }),
+    )
+    expect(error).toMatchObject({ message: 'database query failed: test.tx-fail (ECONNREFUSED)' })
+  })
+
+  it('accepts every single-statement builder', () => {
+    // Compile-time only: never called, so nothing reaches the database.
+    const typesOnly = () => [
+      dbQuery({ name: 'test.select', run: (client) => client.select().from(products).limit(1) }),
+      dbQuery({ name: 'test.execute', run: (client) => client.execute(sql`select 1`) }),
+      dbQuery({ name: 'test.count', run: (client) => client.$count(products) }),
+      dbQuery({ name: 'test.insert', run: (client) => client.insert(categories).values({ slug: 'x', name: 'x' }) }),
+      dbQuery({ name: 'test.update', run: (client) => client.update(products).set({ stock: 0 }).where(eq(products.id, 0)) }),
+      dbQuery({ name: 'test.delete', run: (client) => client.delete(categories).where(eq(categories.id, 0)).returning() }),
+    ]
+    expect(typesOnly).toBeTypeOf('function')
+  })
+
+  it('refuses two statements in one run, at compile time', () => {
+    const typesOnly = () => [
+      dbQuery({
+        name: 'test.two',
+        // @ts-expect-error an async run can hold several statements: use `transaction` instead
+        run: async (client) => {
+          await client.execute(sql`select 1`)
+          return client.execute(sql`select 2`)
+        },
+      }),
+      // @ts-expect-error Promise.all of two statements is two statements
+      dbQuery({ name: 'test.all', run: (client) => Promise.all([client.execute(sql`select 1`), client.execute(sql`select 2`)]) }),
+      // @ts-expect-error a plain promise is not a statement
+      dbQuery({ name: 'test.plain', run: () => Promise.resolve(1) }),
+      // @ts-expect-error run and transaction are exclusive
+      dbQuery({ name: 'test.both', run: (client) => client.execute(sql`select 1`), transaction: async () => 1 }),
+    ]
+    expect(typesOnly).toBeTypeOf('function')
+  })
 })

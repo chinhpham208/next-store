@@ -209,6 +209,10 @@ const ENDPOINT_IN_PASSWORD_MESSAGE =
 const ENDPOINT_UNKNOWN_NEON_HOST_MESSAGE =
   'Từ chối kết nối: host Neon của bản preview / development không mang endpoint id (ep-…), nên không so được với ' +
   'NEON_PRODUCTION_ENDPOINT; dùng URL do tích hợp Neon cấp.'
+const POOLER_REQUIRED_MESSAGE =
+  'Từ chối kết nối: DATABASE_URL trên Vercel trỏ tới host Neon không có hậu tố -pooler; runtime phải đi qua ' +
+  'PgBouncer của Neon, nếu không vài instance sau một lần dựng lại client đã chạm max_connections (ADR-0013). ' +
+  'Dùng URL pooled do tích hợp Neon cấp; db:migrate dùng DATABASE_URL_UNPOOLED cho endpoint trực tiếp.'
 const ENDPOINT_NOT_PRODUCTION_MESSAGE =
   'Từ chối kết nối: database của production không nằm trên endpoint khai báo trong NEON_PRODUCTION_ENDPOINT; ' +
   'sửa giá trị biến hoặc DATABASE_URL trên Vercel.'
@@ -274,7 +278,18 @@ export const assertEndpointAllowed = ({ url, vercelEnv, productionEndpoint }: En
   }
 }
 
-export const resolveDatabaseTarget = (env: DatabaseEnv): DatabaseTarget => {
+const isPoolerHost = (url: ParsedPostgresUrl): boolean =>
+  (url.host.split('.')[0] ?? '').toLowerCase().endsWith(POOLER_SUFFIX)
+
+type TargetOptions = {
+  /**
+   * Refuse a Neon host without -pooler on Vercel. Only db:migrate turns it off, for DATABASE_URL_UNPOOLED: DDL
+   * goes over the direct endpoint, and that one short-lived connection (max 1) is not what fills max_connections.
+   */
+  requirePooler?: boolean
+}
+
+export const resolveDatabaseTarget = (env: DatabaseEnv, { requirePooler = true }: TargetOptions = {}): DatabaseTarget => {
   // `.env.example` ships `DATABASE_URL=`; an empty or whitespace value must mean "unset", not "connect to ''".
   const url = env.DATABASE_URL?.trim() ?? ''
   // Vercel sets VERCEL=1 today; any non-empty value counts so a format change cannot silently disable the checks.
@@ -299,6 +314,10 @@ export const resolveDatabaseTarget = (env: DatabaseEnv): DatabaseTarget => {
         vercelEnv: env.VERCEL_ENV ?? '',
         productionEndpoint: env.NEON_PRODUCTION_ENDPOINT,
       })
+      // Audit PR #44 N1: a recycle leaves up to ~15 sockets per instance for 10 s. PgBouncer behind -pooler absorbs
+      // them; a direct host turns them into server connections (105 for the app at 0.25 CU). After the endpoint
+      // guard, so a preview pointed at production still gets that refusal first.
+      if (requirePooler && isNeonHost(parsed.host) && !isPoolerHost(parsed)) throw new Error(POOLER_REQUIRED_MESSAGE)
     }
     return { kind: 'postgres', url }
   }
@@ -528,8 +547,28 @@ const RETIRE_TIMEOUT_SECONDS = MAX_QUERY_WAIT_MS / 1000
 // Fixed text: no host, no query; enough for the on-call reader to see that the pool was rebuilt.
 const RECYCLED_WARNING = 'database client recycled after a query timeout'
 
-export const createRuntimeConnection = (open: () => Connection): RuntimeConnection => {
+/**
+ * A client younger than this is kept although a query on it timed out (audit PR #44 L2). With a short
+ * DB_QUERY_TIMEOUT_MS (100–300 ms) and a slow database every timeout would otherwise open a client, and each retired
+ * one lives RETIRE_TIMEOUT_SECONDS: ~100 clients, 500 sockets per instance. With the floor at most 1 + 10 / 2 = 6
+ * clients (30 sockets) live together. The default limit (5000 ms) is never affected: a query can only time out on a
+ * client at least its limit after the client was opened.
+ */
+export const MIN_RECYCLE_AGE_MS = 2000
+
+type RuntimeOptions = {
+  /** Milliseconds on a monotonic clock: a wall-clock step back must not stop recycling. */
+  now?: () => number
+  /** How long a retired client gives its queries before destroying its sockets; tests shorten it. */
+  retireTimeoutSeconds?: number
+}
+
+export const createRuntimeConnection = (
+  open: () => Connection,
+  { now = () => performance.now(), retireTimeoutSeconds = RETIRE_TIMEOUT_SECONDS }: RuntimeOptions = {},
+): RuntimeConnection => {
   let current = open()
+  let openedAt = now()
   return {
     get current() {
       return current
@@ -537,10 +576,14 @@ export const createRuntimeConnection = (open: () => Connection): RuntimeConnecti
     recycle: (stale) => {
       // Several queries time out together on one dead pool: only the first replaces it.
       if (stale !== current || stale.kind !== 'postgres') return
+      // A later timeout on the same client replaces it once it is old enough.
+      if (now() - openedAt < MIN_RECYCLE_AGE_MS) return
       current = open()
+      openedAt = now()
       console.warn(RECYCLED_WARNING)
-      // Nobody awaits the old client; a failure while it ends must not become an unhandled rejection.
-      stale.db.$client.end({ timeout: RETIRE_TIMEOUT_SECONDS }).catch(() => {})
+      // Nobody awaits the old client; a failure while it ends must not become an unhandled rejection. After the
+      // timeout postgres-js destroys its sockets, so a FIN the network swallowed cannot keep them (audit PR #44 L4).
+      stale.db.$client.end({ timeout: retireTimeoutSeconds }).catch(() => {})
     },
   }
 }
