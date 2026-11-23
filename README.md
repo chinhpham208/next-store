@@ -5,7 +5,7 @@ Cửa hàng online đồ dùng cho lập trình viên (áo thun, cốc, sticker,
 - Production: https://next-store-iota-silk.vercel.app
 - Dev (nhánh `develop`): https://next-store-dev-ginpham.vercel.app
 
-Tài liệu: [`docs/design.md`](./docs/design.md), [`docs/architecture.md`](./docs/architecture.md), [`docs/conventions.md`](./docs/conventions.md), [`docs/process.md`](./docs/process.md).
+Tài liệu: bắt đầu từ [`docs/overview.md`](./docs/overview.md) (sơ đồ toàn cảnh hạ tầng và quy trình), rồi [`docs/design.md`](./docs/design.md), [`docs/architecture.md`](./docs/architecture.md), [`docs/conventions.md`](./docs/conventions.md), [`docs/process.md`](./docs/process.md).
 
 ## Chạy ở máy
 
