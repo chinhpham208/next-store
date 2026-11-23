@@ -4,6 +4,7 @@
 
 | # | Tài liệu | Trả lời câu hỏi |
 |---|---|---|
+| 0 | [`overview.md`](./overview.md) | **Toàn cảnh** hạ tầng (nhánh → Vercel → Neon, CI) và quy trình một mốc, bằng sơ đồ |
 | 1 | [`requirements.md`](./requirements.md) | Làm **cái gì**, cho **ai**, thế nào là **xong** |
 | 2 | [`architecture.md`](./architecture.md) | Hệ thống trông thế nào (sơ đồ) |
 | 3 | [`design.md`](./design.md) | Xây **như thế nào**: công nghệ, cấu trúc, luồng, cache, các mốc |
