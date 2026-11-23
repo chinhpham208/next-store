@@ -290,21 +290,26 @@ describe('proxy: open graph image paths', () => {
   })
 })
 
-// M4 decision 11 (C3, NS-92): a Server Action is a POST to the page that renders it, and the matcher does not filter
-// by method, so without this every "add to cart" on /products/<slug> waited for the slug lookup from the edge (up to
-// 400 ms, NS-79). Only GET and HEAD read a page; anything else goes straight on, before any slug check, query or log.
-describe('proxy: methods other than GET and HEAD', () => {
-  const callWith = (method: string, path: string) => proxy(new NextRequest(`https://shop.test${path}`, { method }))
+// M4 decision 11 (C3, NS-92), narrowed by NS-103: a Server Action is a POST to the page that renders it, carrying the
+// `next-action` header (Next.js 16.4.6 client/components/app-router-headers.js ACTION_HEADER, read in
+// server/lib/server-action-request-meta.js), and the matcher does not filter by method. Only that request goes
+// straight on, so "add to cart" never waits for the slug lookup from the edge (up to 400 ms, NS-79). Any other method,
+// and a POST without the header, is rendered by Next.js like a GET: it gets the same slug check, or an unknown slug
+// would answer 200 and leave a new route cache entry (audit NS-96, ADR-0014 (e)).
+describe('proxy: Server Actions and other methods', () => {
+  const callWith = (method: string, path: string, headers?: Record<string, string>) =>
+    proxy(new NextRequest(`https://shop.test${path}`, { method, headers }))
+  const ACTION = { 'next-action': '7f3a9c' }
 
   beforeEach(() => {
     known.mockRejectedValue(new Error('db down'))
   })
 
   it.each([KNOWN_PRODUCT, '/products/khong-ton-tai', '/products/KHONG-TON-TAI', `${KNOWN_PRODUCT}.rsc`])(
-    'lets a POST to a product path through without a lookup (%s)',
+    'lets a Server Action POST to a product path through without a lookup (%s)',
     async (path) => {
       vi.useFakeTimers()
-      const response = await callWith('POST', path)
+      const response = await callWith('POST', path, ACTION)
       expect(isPassThrough(response)).toBe(true)
       expect(known).not.toHaveBeenCalled()
       expect(vi.getTimerCount()).toBe(0)
@@ -312,28 +317,80 @@ describe('proxy: methods other than GET and HEAD', () => {
     },
   )
 
-  it('lets a POST to a blog path or an open graph image path through without checking the slug', async () => {
+  it('lets a Server Action POST to a blog path or an open graph image path through without checking the slug', async () => {
     for (const path of ['/blog/khong-ton-tai', KNOWN_POST, '/products/khong-ton-tai/opengraph-image-16g1u1']) {
-      expect(isPassThrough(await callWith('POST', path))).toBe(true)
+      expect(isPassThrough(await callWith('POST', path, ACTION))).toBe(true)
     }
     expect(postCheck).not.toHaveBeenCalled()
     expect(known).not.toHaveBeenCalled()
   })
 
-  it.each(['PUT', 'PATCH', 'DELETE', 'OPTIONS'])('lets %s through without a lookup', async (method) => {
-    expect(isPassThrough(await callWith(method, '/products/khong-ton-tai'))).toBe(true)
-    expect(isPassThrough(await callWith(method, '/blog/khong-ton-tai'))).toBe(true)
+  // Header names are case-insensitive on the wire; Headers.has matches them all, as Next.js's own headers.get does.
+  // An empty value is still a fetch action to Next.js (typeof '' === 'string'), answered before render.
+  it.each(['next-action', 'Next-Action', 'NEXT-ACTION', 'nExT-aCtIoN'])('recognises the %s header', async (name) => {
+    expect(isPassThrough(await callWith('POST', '/products/khong-ton-tai', { [name]: '7f3a9c' }))).toBe(true)
     expect(known).not.toHaveBeenCalled()
-    expect(postCheck).not.toHaveBeenCalled()
-    expect(log).not.toHaveBeenCalled()
   })
 
-  it.each(['GET', 'HEAD'])('still 404s an unknown product slug on %s', async (method) => {
+  it('recognises a next-action header with an empty value', async () => {
+    expect(isPassThrough(await callWith('POST', '/blog/khong-ton-tai', { 'next-action': '' }))).toBe(true)
+    expect(postCheck).not.toHaveBeenCalled()
+  })
+
+  it.each(['PUT', 'PATCH', 'DELETE', 'OPTIONS'])('does not take next-action on %s as a Server Action', async (method) => {
+    expect(isNotFound(await callWith(method, '/products/KHONG-TON-TAI', ACTION))).toBe(true)
+    expect(isNotFound(await callWith(method, '/blog/khong-ton-tai', ACTION))).toBe(true)
+    expect(known).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['POST', {}],
+    ['POST', { 'content-type': 'application/x-www-form-urlencoded' }],
+    ['POST', { 'content-type': 'multipart/form-data; boundary=x' }],
+    ['POST', { 'next-router-state-tree': 'x', 'x-action': '7f3a9c' }],
+    ['PUT', {}],
+    ['PATCH', {}],
+    ['DELETE', {}],
+    ['OPTIONS', {}],
+  ])('rewrites a %s %j to an unknown or malformed slug to not-found', async (method, headers) => {
+    for (const path of [
+      '/products/KHONG-TON-TAI',
+      '/products/a..b',
+      '/products/Ao%20X',
+      '/blog/khong-ton-tai',
+      '/blog/constructor',
+      '/blog/khong-ton-tai/opengraph-image-11vtts',
+    ]) {
+      expect(isNotFound(await callWith(method, path, headers))).toBe(true)
+    }
+    expect(known).not.toHaveBeenCalled()
     known.mockResolvedValue(false)
-    expect(isNotFound(await callWith(method, '/products/khong-ton-tai'))).toBe(true)
+    expect(isNotFound(await callWith(method, '/products/khong-ton-tai', headers))).toBe(true)
     expect(known).toHaveBeenCalledWith('khong-ton-tai')
-    expect(isNotFound(await callWith(method, '/products/KHONG-TON-TAI'))).toBe(true)
-    expect(isNotFound(await callWith(method, '/blog/khong-ton-tai'))).toBe(true)
+  })
+
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])('lets %s without next-action to a known slug through', async (method) => {
+    known.mockResolvedValue(true)
+    expect(isPassThrough(await callWith(method, KNOWN_PRODUCT))).toBe(true)
+    expect(known).toHaveBeenCalledWith('ao-git-push-force')
+    expect(isPassThrough(await callWith(method, KNOWN_POST))).toBe(true)
+    expect(isPassThrough(await callWith(method, `${KNOWN_PRODUCT}/opengraph-image-16g1u1`))).toBe(true)
+  })
+
+  it('still fails open for a product POST without next-action when the lookup throws', async () => {
+    expect(isPassThrough(await callWith('POST', '/products/sticker-git'))).toBe(true)
+    expect(known).toHaveBeenCalledWith('sticker-git')
+    expect(log).toHaveBeenCalledTimes(1)
+  })
+
+  it.each(['GET', 'HEAD'])('still checks the slug on %s, with or without next-action', async (method) => {
+    known.mockResolvedValue(false)
+    for (const headers of [{}, ACTION]) {
+      expect(isNotFound(await callWith(method, '/products/khong-ton-tai', headers))).toBe(true)
+      expect(isNotFound(await callWith(method, '/products/KHONG-TON-TAI', headers))).toBe(true)
+      expect(isNotFound(await callWith(method, '/blog/khong-ton-tai', headers))).toBe(true)
+    }
+    expect(known).toHaveBeenCalledWith('khong-ton-tai')
     known.mockResolvedValue(true)
     expect(isPassThrough(await callWith(method, KNOWN_PRODUCT))).toBe(true)
   })
