@@ -50,7 +50,10 @@ test('US-01: trang chủ hiện 3 bài blog mới nhất', async ({ page }) => {
 
 test('US-01: link "Xem tất cả bài viết" và link "Blog" trên header dẫn tới /blog', async ({ page }) => {
   const header = page.getByRole('navigation', { name: 'Chính' })
-  expect(await header.getByRole('link').allInnerTexts()).toEqual(['Sản phẩm', 'Blog'])
+  // M4: the cart link follows "Blog"; it shows an icon only, its name is in aria-label (no cart yet: no number).
+  expect(await header.getByRole('link').allInnerTexts()).toEqual(['Sản phẩm', 'Blog', ''])
+  await expect(header.getByRole('link').nth(2)).toHaveAccessibleName('Giỏ hàng')
+  await expect(header.getByRole('link').nth(2)).toHaveAttribute('href', '/cart')
 
   await page.getByRole('main').getByRole('link', { name: 'Xem tất cả bài viết' }).click()
   await expect(page).toHaveURL(/\/blog$/)

@@ -8,6 +8,12 @@ import type { CartError } from '@/features/cart/types'
 /** When the action itself rejects: the network failed, or a new deploy no longer knows the action's id. */
 export const CART_NETWORK_ERROR = 'Không kết nối được. Vui lòng tải lại trang và thử lại.'
 
+/**
+ * Checked in the browser before the action is called (Gate 2 decision 6): an empty, fractional or below-1 quantity
+ * would otherwise come back as `invalid`, whose text ("Không tìm thấy sản phẩm") says the wrong thing.
+ */
+export const QUANTITY_RANGE_MESSAGE = `Nhập số lượng từ 1 đến ${MAX_LINE_QUANTITY}`
+
 const assertNever = (value: never): never => {
   throw new Error(`unknown cart error: ${String(value)}`)
 }

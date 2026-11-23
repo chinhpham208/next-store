@@ -136,6 +136,20 @@ test.describe('DB không đọc được', () => {
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(PRERENDERED_NAME)
   })
 
+  // M4 decision 9: the cart icon is a dynamic hole of its own; with a cart cookie it reads the database, and that read
+  // failing must only cost the number, never the page (Review Focus 4). Any well-formed UUID v4 makes it query.
+  test('US-05: DB chết, có cookie giỏ: trang sản phẩm vẫn mở, biểu tượng giỏ không có số', async ({ page, context }) => {
+    await context.addCookies([{ name: 'ns_cart', value: crypto.randomUUID(), url: BROKEN_DB_URL }])
+    const response = await page.goto(`${BROKEN_DB_URL}/products/${PRERENDERED_SLUG}`)
+    expect(response?.status()).toBe(200)
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(PRERENDERED_NAME)
+    const cartLink = page.getByRole('navigation', { name: 'Chính' }).getByRole('link', { name: /^Giỏ hàng/ })
+    await expect(cartLink).toHaveAccessibleName('Giỏ hàng')
+    await expect(page.getByRole('button', { name: 'Thêm vào giỏ' })).toBeEnabled()
+    await expect(page.getByRole('heading', { level: 1, name: 'Đã có lỗi xảy ra' })).toHaveCount(0)
+    expectCleanLog(BROKEN_DB_LOG, 'cart: cart count unavailable')
+  })
+
   test('US-05: DB chết thì slug lạ hiện trang lỗi, không treo', async ({ page }) => {
     await page.goto(`${BROKEN_DB_URL}/products/${freshSlug()}`, { timeout: 15_000 })
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Đã có lỗi xảy ra', { timeout: 15_000 })

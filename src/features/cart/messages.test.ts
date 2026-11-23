@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { MAX_CART_LINES, MAX_LINE_QUANTITY } from '@/features/cart/limits'
-import { CART_NETWORK_ERROR, cartErrorMessage } from '@/features/cart/messages'
+import { CART_NETWORK_ERROR, cartErrorMessage, QUANTITY_RANGE_MESSAGE } from '@/features/cart/messages'
 import type { CartError } from '@/features/cart/types'
 
 // Every member of CartError, checked at compile time: adding one to the union without listing it here fails
@@ -41,5 +41,12 @@ describe('cartErrorMessage', () => {
 describe('CART_NETWORK_ERROR', () => {
   it('asks to reload the page', () => {
     expect(CART_NETWORK_ERROR).toBe('Không kết nối được. Vui lòng tải lại trang và thử lại.')
+  })
+})
+
+describe('QUANTITY_RANGE_MESSAGE', () => {
+  it('names the range 1 to MAX_LINE_QUANTITY', () => {
+    expect(QUANTITY_RANGE_MESSAGE).toBe(`Nhập số lượng từ 1 đến ${MAX_LINE_QUANTITY}`)
+    expect(QUANTITY_RANGE_MESSAGE).toBe('Nhập số lượng từ 1 đến 10')
   })
 })
