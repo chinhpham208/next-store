@@ -63,8 +63,13 @@ export const waitForHydration = async (locator: Locator): Promise<void> => {
     .toBe(true)
 }
 
+// `domcontentloaded`, not `load`: these helpers need the markup and hydration, not every subresource. On a preview
+// `load` once did not fire within the test's 30 s, twice in one run (PR #83, mobile; the report does not say which
+// resource held it), and passed on retry. Images and page loads are US-01 … US-04's to check.
+const NO_IMAGE_WAIT = { waitUntil: 'domcontentloaded' } as const
+
 export const openProduct = async (page: Page, slug: string): Promise<void> => {
-  await page.goto(`/products/${slug}`)
+  await page.goto(`/products/${slug}`, NO_IMAGE_WAIT)
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(seedProduct(slug).name)
   await waitForHydration(addToCartButton(page))
 }
@@ -167,7 +172,7 @@ export const cartTotal = (page: Page): Locator => page.getByTestId('cart-total')
 export const emptyCart = (page: Page): Locator => page.getByRole('main').getByText('Giỏ hàng trống.', { exact: true })
 
 export const openCart = async (page: Page): Promise<void> => {
-  await page.goto('/cart')
+  await page.goto('/cart', NO_IMAGE_WAIT)
   await expect(page.getByRole('heading', { level: 1 })).toHaveText('Giỏ hàng')
   // The cart streams in behind the skeleton; either state ends the wait.
   await expect(cartList(page).or(emptyCart(page))).toBeVisible()
