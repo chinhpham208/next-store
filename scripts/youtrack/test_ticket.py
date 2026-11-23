@@ -5,6 +5,7 @@
 
 import unittest
 
+import ticket
 from ticket import parse_created_issue
 
 # Copied from youtrack_cli/commands/issues.py (`create`) and utils.display_success: the summary is echoed first,
@@ -67,3 +68,17 @@ class ParseCreatedIssueTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TaskParentTest(unittest.TestCase):
+    MAP = {"M3": "NS-3", "US-10": "NS-16", "US-11": "NS-17", "M3-TECH": "NS-82"}
+
+    def test_uses_the_first_story_named_in_the_title(self):
+        self.assertEqual(ticket.task_parent("M3", "Trang `/blog` (US-10, US-01)", self.MAP), "NS-16")
+
+    def test_falls_back_to_the_technical_story_of_the_milestone(self):
+        self.assertEqual(ticket.task_parent("M3", "NS-36: runtime kết nối bằng role app", self.MAP), "NS-82")
+
+    def test_exits_when_the_parent_story_is_missing(self):
+        with self.assertRaises(SystemExit):
+            ticket.task_parent("M4", "Giỏ hàng", self.MAP)

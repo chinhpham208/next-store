@@ -7,6 +7,11 @@ Dùng YouTrack CLI (`yt`). Mọi lệnh in mã ticket bị ảnh hưởng.
   python3 scripts/youtrack/ticket.py state NS-7 "In Progress" --comment "..."
   python3 scripts/youtrack/ticket.py tasks M2            # tạo Task từ "### Task N: ..." trong docs/plans/M2.md
   python3 scripts/youtrack/ticket.py bug --story US-02 --summary "..." --description "..." [--priority Major]
+  python3 scripts/youtrack/ticket.py bug --story M3-TECH --summary "..." --description "..."   # ticket kỹ thuật
+
+Board Development xếp thẻ theo User Story: Task và Bug phải là **subtask** của một story, không chỉ "relates to",
+nếu không sẽ rơi vào "Uncategorized Cards". Phân cấp: Epic (M<n>) → User Story (US-xx, hoặc story kỹ thuật
+M<n>-TECH "M<n> — Kỹ thuật & hạ tầng") → Task / Bug.
   python3 scripts/youtrack/ticket.py id US-02             # tra mã YouTrack từ mã nội bộ
 """
 
@@ -88,12 +93,24 @@ def create_issue(summary: str, issue_type: str, description: str, priority: str 
     return parse_created_issue(yt(*args), summary, description)
 
 
+STORY_IN_TITLE = re.compile(r"\b(US-\d{2})\b")
+
+
+def task_parent(milestone: str, title: str, issue_map: dict[str, str]) -> str:
+    """Story cha của một Task: US đầu tiên nhắc trong tiêu đề, không có thì story kỹ thuật M<n>-TECH."""
+    match = STORY_IN_TITLE.search(title)
+    key = match.group(1) if match else f"{milestone}-TECH"
+    if key not in issue_map:
+        sys.exit(f"Chưa có '{key}' trong {MAP_FILE.name}: tạo story đó (User Story, subtask của {milestone}) trước")
+    return issue_map[key]
+
+
 def cmd_tasks(milestone: str) -> None:
     plan = ROOT / "docs" / "plans" / f"{milestone}.md"
     if not plan.exists():
         sys.exit(f"Không thấy {plan}")
     issue_map = load_map()
-    epic = issue_map.get(milestone) or sys.exit(f"Chưa có epic {milestone} trong {MAP_FILE.name}")
+    issue_map.get(milestone) or sys.exit(f"Chưa có epic {milestone} trong {MAP_FILE.name}")
     tasks = re.findall(r"^### Task (\d+): (.+)$", plan.read_text(), flags=re.MULTILINE)
     if not tasks:
         sys.exit(f"Không tìm thấy '### Task N: ...' trong {plan}")
@@ -103,8 +120,9 @@ def cmd_tasks(milestone: str) -> None:
             print(f"{key:7} = {issue_map[key]} (đã có)")
             continue
         description = f"Plan: `docs/plans/{milestone}.md` — Task {number}."
+        parent = task_parent(milestone, title, issue_map)
         issue = create_issue(title.strip(), "Task", description)
-        yt("issues", "links", "create", issue, epic, "subtask of")
+        yt("issues", "links", "create", issue, parent, "subtask of")
         issue_map[key] = issue
         save_map(issue_map)
         print(f"{key:7} → {issue}  {title.strip()}")
@@ -113,8 +131,8 @@ def cmd_tasks(milestone: str) -> None:
 def cmd_bug(story: str, summary: str, description: str, priority: str) -> None:
     story_issue = resolve(story)
     issue = create_issue(f"[{story}] {summary}", "Bug", description, priority)
-    yt("issues", "links", "create", issue, story_issue, "relates to")
-    print(f"Bug {issue} (liên quan {story} = {story_issue})")
+    yt("issues", "links", "create", issue, story_issue, "subtask of")
+    print(f"Bug {issue} (subtask của {story} = {story_issue})")
 
 
 def main() -> None:
