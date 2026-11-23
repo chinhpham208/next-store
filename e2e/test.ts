@@ -150,16 +150,22 @@ export const test = base.extend<Fixtures>({
   },
   newContext: async ({ browser, baseURL, extraHTTPHeaders, trace, vercelBypass }, provide) => {
     assertNoTrace(trace, vercelBypass)
-    const created: { context: BrowserContext; guard: WriteGuard | undefined }[] = []
+    const created: { context: BrowserContext; guard: WriteGuard | undefined; closed: boolean }[] = []
     await provide(async (options = {}) => {
       const resolved = { baseURL, extraHTTPHeaders, ...options }
       const context = await browser.newContext(resolved)
       await withBypass(context, vercelBypass, resolved.baseURL)
       const production = isProductionUrl(baseURL) || isProductionUrl(resolved.baseURL)
-      created.push({ context, guard: production ? await guardContext(context) : undefined })
+      const entry = { context, guard: production ? await guardContext(context) : undefined, closed: false }
+      // A spec may close a context itself (US-07 closes the browser and opens it again); its guard is still checked.
+      context.once('close', () => {
+        entry.closed = true
+      })
+      created.push(entry)
       return context
     })
-    for (const { context } of created) {
+    for (const { context, closed } of created) {
+      if (closed) continue
       await context.unrouteAll({ behavior: 'ignoreErrors' })
       await context.close()
     }
