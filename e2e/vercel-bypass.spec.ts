@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { gzipSync } from 'node:zlib'
 import type { APIRequestContext, BrowserContext, Page } from '@playwright/test'
 import { BYPASS_HEADER, bypassFor } from './bypass'
+import { holdNextAction } from './cart'
 import { VIEWPORT_INDEPENDENT } from './catalog'
 import { PRODUCTION_ORIGINS } from './production'
 import { expect, READ_ONLY_MESSAGE, test } from './test'
@@ -189,6 +190,25 @@ test.describe('request của trình duyệt', () => {
     await page.goto(`${base}/gzip`)
     await expect(page.getByText('nội dung nén')).toBeVisible()
     expect(withHeader()).toEqual(['base GET /gzip'])
+  })
+
+  // NS-97: holdNextAction (e2e/cart.ts) hands a held Server Action POST back with route.fallback(). It must reach the
+  // server once, through the bypass route: unrouting too early also sent it natively, without the header (a preview
+  // answered that copy with Deployment Protection's 302).
+  test('POST action bị holdNextAction giữ rồi thả chỉ tới server một lần, có header', async ({ page, baseURL }) => {
+    await page.goto(`${base}/page`)
+    received.length = 0
+    const held = await holdNextAction(page, baseURL)
+    const sent = page.evaluate(
+      (url) => fetch(url, { method: 'POST', headers: { 'next-action': 'thu' }, body: 'x' }).then((r) => r.status),
+      `${base}/action`,
+    )
+    await held.request
+    expect(counted()).toEqual([])
+    await held.release()
+    expect(await sent).toBe(200)
+    expect(withHeader()).toEqual(['base POST /action'])
+    expect(withoutHeader()).toEqual([])
   })
 
   test('newContext có cùng cách gắn header', async ({ newContext }) => {
