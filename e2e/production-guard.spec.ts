@@ -217,6 +217,22 @@ test.describe('fixture với baseURL production', () => {
     test.fail(true, 'teardown của fixture newContext phải ném READ_ONLY_MESSAGE')
   })
 
+  // NS-98: a spec that closes its context itself (US-07 closes the browser) still has its writes checked.
+  test('newContext do spec tự đóng vẫn bị kiểm ở teardown', async ({ newContext }) => {
+    const context = await newContext()
+    const page = await openLocal(context)
+    expect(await send(page, 'POST')).toBe('huỷ')
+    await context.close()
+    expect(writesReceived()).toEqual([])
+    test.fail(true, 'teardown của fixture newContext phải ném READ_ONLY_MESSAGE dù context đã đóng')
+  })
+
+  test('newContext do spec tự đóng, chỉ đọc thì qua', async ({ newContext }) => {
+    const context = await newContext()
+    expect(await send(await openLocal(context), 'GET')).toBe(200)
+    await context.close()
+  })
+
   test('newContext chỉ đọc thì qua', async ({ newContext }) => {
     const page = await openLocal(await newContext())
     expect(await send(page, 'GET')).toBe(200)

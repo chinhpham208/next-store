@@ -148,3 +148,52 @@ export const holdNextAction = async (page: Page, baseURL: string | undefined): P
     abort: () => settle((route) => route.abort('failed')),
   }
 }
+
+// /cart (plan M4 Task 9, markup contract). Lines are looked up by the product's link, which holds its name.
+export const cartList = (page: Page): Locator => page.getByRole('list', { name: 'Sản phẩm trong giỏ' })
+
+export const cartLines = (page: Page): Locator => cartList(page).getByRole('listitem')
+
+export const cartLine = (page: Page, name: string): Locator =>
+  cartLines(page).filter({ has: page.getByRole('link', { name, exact: true }) })
+
+export const lineQuantity = (page: Page, name: string): Locator =>
+  cartLine(page, name).getByRole('spinbutton', { name: `Số lượng ${name}`, exact: true })
+
+export const lineAlert = (page: Page, name: string): Locator => cartLine(page, name).getByRole('alert')
+
+export const cartTotal = (page: Page): Locator => page.getByTestId('cart-total')
+
+export const emptyCart = (page: Page): Locator => page.getByRole('main').getByText('Giỏ hàng trống.', { exact: true })
+
+export const openCart = async (page: Page): Promise<void> => {
+  await page.goto('/cart')
+  await expect(page.getByRole('heading', { level: 1 })).toHaveText('Giỏ hàng')
+  // The cart streams in behind the skeleton; either state ends the wait.
+  await expect(cartList(page).or(emptyCart(page))).toBeVisible()
+}
+
+// Waits until the action has answered and no line is busy any more: by then the route's new render (line totals,
+// cart total, header number) has committed (plan M4 D2), or the refusal's message is on the line.
+const runLineAction = async (page: Page, act: () => Promise<void>): Promise<void> => {
+  const answered = waitForActionResponse(page)
+  await act()
+  await answered
+  await expect(page.getByRole('main').locator('[aria-busy="true"]')).toHaveCount(0, { timeout: 15_000 })
+}
+
+// Types the number into the line's field and sends it with Enter, as a keyboard user does.
+export const setQuantity = async (page: Page, name: string, quantity: number): Promise<void> => {
+  const field = lineQuantity(page, name)
+  await waitForHydration(field)
+  await runLineAction(page, async () => {
+    await field.fill(String(quantity))
+    await field.press('Enter')
+  })
+}
+
+export const removeLine = async (page: Page, name: string): Promise<void> => {
+  const button = cartLine(page, name).getByRole('button', { name: `Xoá ${name}`, exact: true })
+  await waitForHydration(button)
+  await runLineAction(page, () => button.click())
+}
