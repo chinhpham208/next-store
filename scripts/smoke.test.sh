@@ -26,6 +26,7 @@ SOFT_OG_PORT=3186
 POST_SEG_PORT=3185
 FAIL_OPEN_PORT=3184
 MALFORMED_PORT=3183
+POST_5XX_PORT=3182
 
 TMP=$(mktemp -d)
 PIDS=()
@@ -56,16 +57,18 @@ chmod +x "$TMP/bin/curl"
 # answer like the app on <sitemap-origin> (default https://shop.example.test); <robots-tag>, when set, is sent as
 # X-Robots-Tag on every response; <robots-rule> (default `Allow: /`) is the rule line of robots.txt. The pages carry an
 # og:image on http://localhost:3000 (as under next start); its path answers <og-status> (default 200) with a PNG.
+# <post-status>, when set, answers every POST with that status (NS-92).
 start_server() {
-  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} ready="$TMP/ready-$1"
+  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} postStatus=${11:-} ready="$TMP/ready-$1"
   node -e '
-    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule, ogStatus] = process.argv.slice(1)
+    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule, ogStatus, postStatus] = process.argv.slice(1)
     const og = (path) => `<meta property="og:image" content="http://localhost:3000${path}"/>`
     const images = ["/opengraph-image?a1b2c3", "/products/ao-404-not-found/opengraph-image-16g1u1?d4e5f6", "/blog/chao-mung-den-next-store/opengraph-image-16g1u1?a7b8c9"]
     const fs = require("node:fs")
     require("node:http").createServer((req, res) => {
       fs.appendFileSync(headers, JSON.stringify(req.headers) + "\n")
       if (robotsTag) res.setHeader("x-robots-tag", robotsTag)
+      if (postStatus && req.method === "POST") { res.writeHead(Number(postStatus), { "content-type": "text/html" }); res.end("error"); return }
       const locs = ["/", "/products/ao-404-not-found", "/blog/chao-mung-den-next-store"]
       if (req.url === "/sitemap.xml") { res.writeHead(200, { "content-type": "application/xml" }); res.end(`<urlset>${locs.map((p) => `<url>\n<loc>${p === "/" ? "https://shop.example.test" : origin}${p}</loc>\n</url>`).join("\n")}</urlset>`); return }
       if (req.url === "/robots.txt") { res.writeHead(200, { "content-type": "text/plain" }); res.end(`User-Agent: *\n${robotsRule}\n\nSitemap: https://shop.example.test/sitemap.xml\n`); return }
@@ -77,7 +80,7 @@ start_server() {
       else if (soft && new RegExp(soft).test(req.url)) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
       else { res.writeHead(404, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
     }).listen(Number(port), "127.0.0.1", () => fs.writeFileSync(ready, ""))
-  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" "$ogStatus" &
+  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" "$ogStatus" "$postStatus" &
   PIDS+=($!)
   local i
   for i in $(seq 1 50); do [ -f "$ready" ] && return 0; sleep 0.1; done
@@ -297,11 +300,12 @@ run BASE_URL="http://127.0.0.1:$FAIL_OPEN_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- 
 grep -qE '^::warning::smoke: 3 slug lạ warm-up đều trả 200, lần cuối sau [0-9]+ ms: lookup DB của proxy fail-open' "$TMP/out" ||
   fail product-fail-open-warn "thiếu ::warning:: của warm-up"
 for label in 'slug cố định của US-05' 'slug mới' 'request RSC' 'hậu tố .rsc' 'segment prefetch dạng đường dẫn' \
-  'segment prefetch dạng đường dẫn, không header' 'ảnh OG: slug sản phẩm lạ' 'ảnh OG: slug sản phẩm lạ, không hậu tố băm'; do
+  'segment prefetch dạng đường dẫn, không header' 'ảnh OG: slug sản phẩm lạ' 'ảnh OG: slug sản phẩm lạ, không hậu tố băm' \
+  'GET sau POST cùng slug'; do
   grep -qE "^::warning::smoke: GET /products/[^ ]+ \\($label\\) trả 200 sau [0-9]+ ms" "$TMP/out" ||
     fail product-fail-open-warn "thiếu ::warning:: có thời gian cho \"$label\""
 done
-[ "$(grep -c '^::warning::smoke: .*SMOKE_PRODUCT_FAIL_OPEN=warn' "$TMP/out")" = 9 ] || fail product-fail-open-warn "cần đúng 9 cảnh báo fail-open"
+[ "$(grep -c '^::warning::smoke: .*SMOKE_PRODUCT_FAIL_OPEN=warn' "$TMP/out")" = 10 ] || fail product-fail-open-warn "cần đúng 10 cảnh báo fail-open"
 grep -qF '(%2D) → 404' "$TMP/out" || fail product-fail-open-warn "ca %2D không còn được kiểm 404"
 grep -qF '(chữ hoa) → 404' "$TMP/out" || fail product-fail-open-warn "ca chữ hoa không còn được kiểm 404"
 run BASE_URL="http://127.0.0.1:$FAIL_OPEN_PORT" -- bash scripts/smoke.sh
@@ -309,6 +313,15 @@ run BASE_URL="http://127.0.0.1:$FAIL_OPEN_PORT" -- bash scripts/smoke.sh
 grep -qF 'hơn 2 slug fail-open' "$TMP/out" || fail product-fail-open-warn "không cờ: thiếu lỗi warm-up"
 ! grep -q 'SMOKE_PRODUCT_FAIL_OPEN=warn' "$TMP/out" || fail product-fail-open-warn "không cờ mà vẫn cảnh báo"
 echo "ok product-fail-open-warn"
+
+# post-5xx (NS-92): the proxy no longer checks the slug of a POST, so a POST to an unknown product reaches the page;
+# a 5xx there fails smoke.
+start_server "$POST_5XX_PORT" "$TMP/post-5xx-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 500
+run BASE_URL="http://127.0.0.1:$POST_5XX_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail post-5xx "thoát $CODE, cần 1"
+grep -qE 'POST /products/khong-ton-tai-post-[^ ]+ \(không có next-action\) trả 500, không được 5xx' "$TMP/out" ||
+  fail post-5xx "thông báo không nêu POST trả 500"
+echo "ok post-5xx"
 
 # product-fail-open-warn-single: warm-up fine, only one later product case fails open → warning with the flag, failure
 # without (the existing soft-404 case with the flag added).

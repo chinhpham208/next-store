@@ -391,6 +391,28 @@ if [ "$PRODUCT_FAIL_OPEN_COUNT" -gt 0 ]; then
 fi
 [ -z "$NOT_FOUND_FAILED" ] || fail "slug hoặc ảnh OG không tồn tại không trả 404 ngay lần đầu (xem các dòng LỖI ở trên)"
 
+# M4 decision 11 (NS-92): the proxy lets anything but GET / HEAD through without the slug lookup, so a POST that is
+# not a Server Action reaches the page of an unknown slug. It must not break the page (5xx), and the GET that follows
+# must still be the proxy's 404. The body is a fixed string; the bypass secret goes through stdin as in fetch().
+post_status() { # post_status <url> → in mã HTTP
+  local url=$1 code=0 out
+  xtrace_off
+  {
+    if [ -n "$SEND_BYPASS" ]; then printf 'header = "x-vercel-protection-bypass: %s"\n' "$BYPASS"; fi
+  } | curl_safe -sS -o "$TMP/post" -w '%{http_code}' --max-time 20 --config - -X POST --data 'smoke=1' --url "$url" \
+    > "$TMP/last-write" || code=$?
+  xtrace_restore
+  out=$(cat "$TMP/last-write")
+  printf '%s' "$out"
+  return "$code"
+}
+POST_UNKNOWN="/products/khong-ton-tai-post-$RUN_ID"
+status=$(post_status "$BASE$POST_UNKNOWN") || fail "không kết nối được $BASE$POST_UNKNOWN"
+case $status in 5*) fail "POST $POST_UNKNOWN (không có next-action) trả $status, không được 5xx" ;; esac
+echo "smoke: POST $POST_UNKNOWN (không có next-action) → $status, proxy không tra slug"
+expect_product_404 "$POST_UNKNOWN" 'GET sau POST cùng slug'
+[ -z "$NOT_FOUND_FAILED" ] || fail "GET $POST_UNKNOWN sau POST không trả 404"
+
 # The proxy must not turn a known product's client navigation (RSC request) into a 404. `?_rsc` is the cache-busting
 # parameter Next.js redirects an RSC request to (307) when it is missing; empty matches a request with no router headers.
 # The transport forms of a known product's URL must reach the page too: `.rsc` and the segment prefetch path

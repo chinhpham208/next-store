@@ -290,6 +290,55 @@ describe('proxy: open graph image paths', () => {
   })
 })
 
+// M4 decision 11 (C3, NS-92): a Server Action is a POST to the page that renders it, and the matcher does not filter
+// by method, so without this every "add to cart" on /products/<slug> waited for the slug lookup from the edge (up to
+// 400 ms, NS-79). Only GET and HEAD read a page; anything else goes straight on, before any slug check, query or log.
+describe('proxy: methods other than GET and HEAD', () => {
+  const callWith = (method: string, path: string) => proxy(new NextRequest(`https://shop.test${path}`, { method }))
+
+  beforeEach(() => {
+    known.mockRejectedValue(new Error('db down'))
+  })
+
+  it.each([KNOWN_PRODUCT, '/products/khong-ton-tai', '/products/KHONG-TON-TAI', `${KNOWN_PRODUCT}.rsc`])(
+    'lets a POST to a product path through without a lookup (%s)',
+    async (path) => {
+      vi.useFakeTimers()
+      const response = await callWith('POST', path)
+      expect(isPassThrough(response)).toBe(true)
+      expect(known).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+      expect(log).not.toHaveBeenCalled()
+    },
+  )
+
+  it('lets a POST to a blog path or an open graph image path through without checking the slug', async () => {
+    for (const path of ['/blog/khong-ton-tai', KNOWN_POST, '/products/khong-ton-tai/opengraph-image-16g1u1']) {
+      expect(isPassThrough(await callWith('POST', path))).toBe(true)
+    }
+    expect(postCheck).not.toHaveBeenCalled()
+    expect(known).not.toHaveBeenCalled()
+  })
+
+  it.each(['PUT', 'PATCH', 'DELETE', 'OPTIONS'])('lets %s through without a lookup', async (method) => {
+    expect(isPassThrough(await callWith(method, '/products/khong-ton-tai'))).toBe(true)
+    expect(isPassThrough(await callWith(method, '/blog/khong-ton-tai'))).toBe(true)
+    expect(known).not.toHaveBeenCalled()
+    expect(postCheck).not.toHaveBeenCalled()
+    expect(log).not.toHaveBeenCalled()
+  })
+
+  it.each(['GET', 'HEAD'])('still 404s an unknown product slug on %s', async (method) => {
+    known.mockResolvedValue(false)
+    expect(isNotFound(await callWith(method, '/products/khong-ton-tai'))).toBe(true)
+    expect(known).toHaveBeenCalledWith('khong-ton-tai')
+    expect(isNotFound(await callWith(method, '/products/KHONG-TON-TAI'))).toBe(true)
+    expect(isNotFound(await callWith(method, '/blog/khong-ton-tai'))).toBe(true)
+    known.mockResolvedValue(true)
+    expect(isPassThrough(await callWith(method, KNOWN_PRODUCT))).toBe(true)
+  })
+})
+
 describe('config.matcher', () => {
   it('is a constant list, so Next.js can analyse it statically', () => {
     expect(config).toEqual({

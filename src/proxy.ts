@@ -63,7 +63,14 @@ const answerProduct = async (request: NextRequest, slug: string | undefined): Pr
   }
 }
 
+// Only GET and HEAD read a page. A Server Action is a POST to the page that renders it and the matcher cannot filter by
+// method, so without this every action on /products/<slug> waited for the slug lookup (measured on `next start`, M4
+// C3, NS-92). Nothing else is served for an unknown slug: the action checks the product itself, and a route has no
+// handler for PUT, PATCH, DELETE (M4 decision 11, ADR-0009).
+const READS_A_PAGE = new Set(['GET', 'HEAD'])
+
 export const proxy = async (request: NextRequest): Promise<NextResponse> => {
+  if (!READS_A_PAGE.has(request.method)) return NextResponse.next()
   const [, section, slug] = SLUG_PATH.exec(request.nextUrl.pathname) ?? []
   if (section === 'products') return answerProduct(request, slug)
   // Blog: posts only change with a deploy, so the static registry is the whole truth (ADR-0012). No query, no
