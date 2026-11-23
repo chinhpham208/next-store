@@ -22,15 +22,14 @@ env:
 jobs:
   production-e2e:
     # The environment must be exactly Vercel's "Production" (contains() would also match a future Custom Environment
-    # such as "pre-production"; == ignores case). The deployment must be of the `production` branch: a preview
-    # promoted to Production, or `vercel --prod` from another branch, would otherwise run this workflow and
-    # e2e/test.ts (the write guard) from an unreviewed commit. Both the deployment and its status must come from
-    # Vercel: anyone with write access can add a status to a deployment.
+    # such as "pre-production"; == ignores case). Both the deployment and its status must come from Vercel: anyone
+    # with write access can add a status to a deployment. Vercel sets deployment.ref to the commit SHA, not the branch
+    # (deployment 7987168922 of v0.3.0, NS-78), so the `production` branch check is the "deployed commit is on
+    # production" step below, not a condition here.
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event.deployment_status.state == 'success' &&
        github.event.deployment.environment == 'Production' &&
-       github.event.deployment.ref == 'production' &&
        github.event.deployment.creator.login == 'vercel[bot]' &&
        github.event.deployment_status.creator.login == 'vercel[bot]')
     runs-on: ubuntu-latest
@@ -57,7 +56,20 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.deployment.sha || 'production' }}
+          # Full history and every branch, for the ancestry check below.
+          fetch-depth: 0
           persist-credentials: false
+
+      # A preview promoted to Production, or `vercel --prod` from another branch, would otherwise run this workflow
+      # and e2e/test.ts (the write guard) from an unreviewed commit.
+      - name: deployed commit is on production
+        if: github.event_name == 'deployment_status'
+        env:
+          DEPLOY_SHA: ${{ github.event.deployment.sha }}
+        run: |
+          [[ $DEPLOY_SHA =~ ^[0-9a-f]{40}$ ]] || { echo "deployment.sha không hợp lệ" >&2; exit 1; }
+          git merge-base --is-ancestor "$DEPLOY_SHA" origin/production ||
+            { echo "commit đã deploy không nằm trên nhánh production: không chạy E2E" >&2; exit 1; }
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
