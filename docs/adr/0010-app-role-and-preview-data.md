@@ -1,6 +1,7 @@
 # ADR-0010: Role app cho runtime và nhánh cha không có dữ liệu khách cho preview
 
 - Trạng thái: Đã chấp nhận (chủ dự án duyệt 2026-11-22, gồm việc chỉ dùng phạm vi Preview cho resource 2)
+- Bổ sung (2026-11-23): Neon từ chối verifier SCRAM (`Neon only supports being given plaintext passwords`), nên "mật khẩu do chủ dự án đặt" ở bước 1, 4, 6 và Hệ quả được đặt **dạng rõ** trong SQL Editor, rồi xoá mục đó khỏi History ngay. Chủ dự án giao Orchestrator quyết; xem [plan M3 Task 5, "Lệch so với chữ của ADR-0010", chỗ lệch thứ tư](../plans/M3.md). `scripts/scram-verifier.mjs` giữ nguyên, không dùng được với Neon.
 - Ngày: 2026-11-22
 - Bổ sung: [ADR-0007](./0007-dev-neon-branch.md) (hệ quả 2: "Rủi ro này và việc tách role / `preview-base` thuộc NS-36")
 - Liên quan: ticket NS-36 (M3 Task 3), NS-53 (dọn nhánh Neon preview), audit PR #6 (mục M1, M2, M3)
