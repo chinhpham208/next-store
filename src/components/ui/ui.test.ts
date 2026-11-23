@@ -2,6 +2,7 @@ import { createElement, type FunctionComponent } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { Badge } from '@/components/ui/badge'
+import { CartIcon } from '@/components/ui/cart-icon'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Container } from '@/components/ui/container'
@@ -9,6 +10,7 @@ import { CursorBlock } from '@/components/ui/cursor-block'
 import { Input } from '@/components/ui/input'
 import { Price } from '@/components/ui/price'
 import { Prose, PROSE_COMPONENTS } from '@/components/ui/prose'
+import { QuantityStepper, type QuantityStepperProps } from '@/components/ui/quantity-stepper'
 import { Skeleton } from '@/components/ui/skeleton'
 
 const NBSP = ' '
@@ -193,5 +195,64 @@ describe('Prose', () => {
     }
     expect(render(PROSE_COMPONENTS.li, { children: 'x' })).toBe('<li>x</li>')
     expect(render(PROSE_COMPONENTS.hr, {})).toMatch(/^<hr class="[^"]*my-4[^"]*"\/>$/)
+  })
+})
+
+describe('CartIcon', () => {
+  it('is a decorative 24 px stroke icon', () => {
+    const html = render(CartIcon, { className: 'shrink-0' })
+    expect(html).toMatch(/^<svg [^>]*viewBox="0 0 24 24"/)
+    expect(html).toContain('aria-hidden="true"')
+    expect(html).toContain('stroke="currentColor"')
+    expect(classOf(html.replace(/^<svg [^>]*?(class="[^"]*")[\s\S]*$/, '$1'))).toEqual(['size-6', 'shrink-0'])
+  })
+})
+
+describe('QuantityStepper', () => {
+  const base: QuantityStepperProps = {
+    inputId: 'quantity',
+    name: 'quantity',
+    value: '1',
+    min: 1,
+    max: 10,
+    onValueChange: () => {},
+    onStep: () => {},
+    decreaseLabel: 'Giảm số lượng',
+    increaseLabel: 'Tăng số lượng',
+  }
+  const buttons = (html: string) => [...html.matchAll(/<button [^>]*>/g)].map((match) => match[0])
+
+  it('renders − / number / + with named 44 px buttons', () => {
+    const html = render(QuantityStepper, { ...base, value: '3' })
+    const [decrease, increase] = buttons(html)
+    expect(decrease).toContain('aria-label="Giảm số lượng"')
+    expect(decrease).toContain('type="button"')
+    expect(increase).toContain('aria-label="Tăng số lượng"')
+    expect(html).toContain('>\u2212</button>')
+    expect(html).toContain('>+</button>')
+    expect(html.match(/size-11/g)).toHaveLength(2)
+    const input = /<input [^>]*>/.exec(html)?.[0] ?? ''
+    expect(input).toMatch(/type="number"/)
+    expect(input).toMatch(/inputMode="numeric"/i)
+    expect(input).toContain('id="quantity"')
+    expect(input).toContain('value="3"')
+    expect(classOf(input)).toContain('quantity-field')
+    expect(html).not.toContain('disabled=""')
+  })
+
+  it('disables − at the minimum and + at the maximum with the real attribute', () => {
+    const [atMinDecrease, atMinIncrease] = buttons(render(QuantityStepper, base))
+    expect(atMinDecrease).toContain('disabled=""')
+    expect(atMinIncrease).not.toContain('disabled=""')
+    const [atMaxDecrease, atMaxIncrease] = buttons(render(QuantityStepper, { ...base, value: '10' }))
+    expect(atMaxDecrease).not.toContain('disabled=""')
+    expect(atMaxIncrease).toContain('disabled=""')
+  })
+
+  it('disables + when canIncrease is false and names the input when inputLabel is set', () => {
+    const html = render(QuantityStepper, { ...base, value: '3', min: 0, canIncrease: false, inputLabel: 'Số lượng Áo', describedBy: 'w-1' })
+    expect(buttons(html)[1]).toContain('disabled=""')
+    expect(html).toContain('aria-label="Số lượng Áo"')
+    expect(html).toContain('aria-describedby="w-1"')
   })
 })

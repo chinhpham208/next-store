@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Smoke test: trang chủ trả 200 và có SMOKE_TEXT; một đường dẫn không tồn tại trả 404 với trang tiếng Việt;
 # một trang chi tiết sản phẩm trả 200 và có tên sản phẩm; /products trả 200 và có lưới sản phẩm, kể cả với
-# tham số không hợp lệ; /blog và một bài blog trả 200 và có nội dung; slug sản phẩm, slug bài và ảnh OG của slug
+# tham số không hợp lệ; nút "Thêm vào giỏ" dùng được ở sản phẩm còn hàng, vô hiệu ở sản phẩm hết hàng, trang chủ không
+# Set-Cookie; /blog và một bài blog trả 200 và có nội dung; slug sản phẩm, slug bài và ảnh OG của slug
 # lạ trả 404 ngay lần đầu, bài và sản phẩm có thật vẫn 200 ở mọi dạng vận chuyển; /sitemap.xml và /robots.txt trả 200, cùng một origin tuyệt đối, robots.txt chặn hay cho crawl đúng môi trường;
 # trang chủ có og:site_name; og:image của trang chủ, một sản phẩm và một bài blog tải được, là PNG.
 #
@@ -238,6 +239,19 @@ status=$(fetch "$BASE$DETAIL_PATH" "$TMP/detail.html") || fail "không kết n�
 [ "$status" = 200 ] || fail "GET $DETAIL_PATH trả $status, cần 200"
 grep -qF -- "$DETAIL_TEXT" "$TMP/detail.html" || fail "HTML $DETAIL_PATH không có \"$DETAIL_TEXT\""
 echo "smoke: GET $DETAIL_PATH → 200, có \"$DETAIL_TEXT\""
+
+# US-06 / US-08 (M4 Task 8): an in-stock product has an enabled "Thêm vào giỏ" submit button in the prerendered page,
+# a sold-out one only a disabled button. The home page sets no cookie: the cart cookie is written by the action alone.
+add_button() { grep -o '<button[^>]*>Thêm vào giỏ</button>' "$1" | head -n 1; }
+BUTTON=$(add_button "$TMP/detail.html")
+[ -n "$BUTTON" ] || fail "HTML $DETAIL_PATH không có nút \"Thêm vào giỏ\""
+case $BUTTON in *'disabled=""'*) fail "nút \"Thêm vào giỏ\" của $DETAIL_PATH bị vô hiệu" ;; esac
+SOLD_OUT_PATH=/products/ao-tabs-vs-spaces
+status=$(fetch "$BASE$SOLD_OUT_PATH" "$TMP/sold-out.html") || fail "không kết nối được $BASE$SOLD_OUT_PATH"
+[ "$status" = 200 ] || fail "GET $SOLD_OUT_PATH trả $status, cần 200"
+case $(add_button "$TMP/sold-out.html") in *'disabled=""'*) ;; *) fail "HTML $SOLD_OUT_PATH không có nút \"Thêm vào giỏ\" bị vô hiệu" ;; esac
+if tr -d '\r' < "$TMP/home.headers" | grep -qi '^set-cookie:'; then fail "GET / trả Set-Cookie"; fi
+echo "smoke: nút \"Thêm vào giỏ\": $DETAIL_PATH dùng được, $SOLD_OUT_PATH vô hiệu; GET / không có Set-Cookie"
 
 # US-02 / US-03: the listing reads the catalogue (the labelled grid is inside the Suspense boundary, so it is
 # only in the HTML when the data was read), and invalid parameters fall back to defaults instead of an error.

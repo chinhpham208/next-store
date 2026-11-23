@@ -23,6 +23,7 @@ export {
   ProductDetailView,
   type ProductDetailSectionProps,
   type ProductDetailViewProps,
+  type ProductPurchase,
 } from '@/features/products/components/product-detail'
 export type { CategoryOption, ProductDetail, ProductListing, ProductSummary } from '@/features/products/types'
 export {

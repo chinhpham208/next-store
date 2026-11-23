@@ -140,4 +140,17 @@
   .hero-title {
     max-width: 11em;
   }
+
+  /* M4 QuantityStepper: a real number input (spinbutton, arrow keys) without the browser's own spin arrows; the − / +
+     buttons beside it are the visible controls. Pseudo-elements, so no utility can do it (design-system, Component M4). */
+  .quantity-field {
+    appearance: textfield;
+    -moz-appearance: textfield;
+  }
+
+  .quantity-field::-webkit-inner-spin-button,
+  .quantity-field::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
 }

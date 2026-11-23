@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { expect, it } from 'vitest'
@@ -24,6 +25,15 @@ it('SiteHeader lists "Sản phẩm" then "Blog" in the main nav, each a 44 px ta
     ['/blog', 'Blog'],
   ])
   expect(nav.match(/min-h-11/g)).toHaveLength(2)
+})
+it('SiteHeader renders the cart slot after the Blog link', () => {
+  const cart = createElement('a', { href: '/cart', 'aria-label': 'Giỏ hàng' }, 'giỏ')
+  const html = renderToStaticMarkup(createElement(SiteHeader, { cart }))
+  const nav = /<nav aria-label="Chính"[^>]*>(.*?)<\/nav>/.exec(html)?.[1] ?? ''
+  expect([...nav.matchAll(/<a [^>]*href="([^"]+)"/g)].map((match) => match[1])).toEqual(['/products', '/blog', '/cart'])
+})
+it('SiteHeader imports no feature', () => {
+  expect(readFileSync('src/components/layout/site-header.tsx', 'utf8')).not.toContain('@/features/')
 })
 it('Breadcrumb renders a labelled nav with an ordered list of links separated by a hidden "/"', () => {
   const html = renderToStaticMarkup(

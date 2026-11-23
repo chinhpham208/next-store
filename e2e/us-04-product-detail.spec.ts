@@ -98,3 +98,43 @@ for (const product of [IN_STOCK, SOLD_OUT]) {
     await expectNoSeriousA11yViolations(page)
   })
 }
+
+// M4 Task 8 (Orchestrator, 2026-11-23): 320 px is the narrowest width supported. There the page never scrolls sideways
+// (the add-to-cart row wraps its button below the quantity) and every header target stays 44 px; from 360 px the header
+// stays on one line. Read-only:
+// no cart is created, so the cart link has no number here; the numbered cases are in the PR's measurement table.
+test.describe('khổ hẹp', () => {
+  test.skip(({ isMobile }) => isMobile, 'Tự đặt bề rộng: chỉ chạy ở desktop')
+
+  for (const width of [320, 360]) {
+    test(`US-04: trang chi tiết còn hàng ở ${width} px không cuộn ngang, vùng chạm header ≥ 44 px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 })
+      await page.goto(`/products/${IN_STOCK.slug}`)
+      await expect(page.getByRole('button', { name: 'Thêm vào giỏ' })).toBeVisible()
+      await page.evaluate(() => document.fonts.ready)
+      const layout = await page.evaluate(() => {
+        const nav = document.querySelector('nav[aria-label="Chính"]')
+        const logo = document.querySelector('header a[href="/"] > span')
+        const lineHeight = logo ? parseFloat(getComputedStyle(logo).lineHeight) : 0
+        return {
+          scrollWidth: document.documentElement.scrollWidth,
+          targets: [...(nav?.querySelectorAll('a') ?? [])].map((link) => {
+            const box = link.getBoundingClientRect()
+            return Math.min(box.width, box.height)
+          }),
+          logoOneLine: logo ? logo.getBoundingClientRect().height < lineHeight * 1.5 : false,
+          navHeight: nav?.getBoundingClientRect().height ?? 0,
+        }
+      })
+      expect(layout.scrollWidth).toBeLessThanOrEqual(width)
+      expect(layout.targets).toHaveLength(3)
+      for (const target of layout.targets) expect(target).toBeGreaterThanOrEqual(44)
+      // One line is required from 360 px only: at 320 px the header may wrap (it fits by about 1 px without a number,
+      // which depends on the browser's text rendering).
+      if (width >= 360) {
+        expect(layout.logoOneLine).toBe(true)
+        expect(layout.navHeight).toBe(44)
+      }
+    })
+  }
+})

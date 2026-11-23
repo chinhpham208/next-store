@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { createElement, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -85,10 +85,13 @@ describe('ProductDetailView', () => {
     expect(nav).toContain('href="/"')
     expect(nav).not.toContain(product.name)
   })
-  it('has no add-to-cart button before M4', () => {
-    const html = render(product)
-    expect(html).not.toContain('<button')
-    expect(html).not.toContain('Thêm vào giỏ')
+  it('renders nothing in the purchase slot when no purchase is given', () => {
+    expect(render(product)).not.toContain('<button')
+  })
+  it('renders the purchase slot after the description', () => {
+    const purchase = createElement('section', { 'aria-label': 'Mua hàng' }, 'mua')
+    const html = renderToStaticMarkup(createElement(ProductDetailView, { product, purchase }))
+    expect(html).toMatch(/Áo thun cotton 100% in dòng lệnh\.<\/p><section aria-label="Mua hàng">mua<\/section>/)
   })
 })
 
@@ -102,6 +105,14 @@ describe('ProductDetailSkeleton', () => {
 })
 
 describe('ProductDetailSection', () => {
+  it('renders the purchase slot from the slug and stock of the product', async () => {
+    const renderPurchase = vi.fn(({ slug, stock }: { slug: string; stock: number }) =>
+      createElement('p', null, `${slug}:${stock}`),
+    )
+    const element: ReactElement = await ProductDetailSection({ params: params('ao-git-push-force'), renderPurchase })
+    expect(renderPurchase).toHaveBeenCalledWith({ slug: 'ao-git-push-force', stock: 12 })
+    expect(renderToStaticMarkup(element)).toContain('<p>ao-git-push-force:12</p>')
+  })
   it('US-04: reads the product by its slug and renders the view', async () => {
     const element: ReactElement = await ProductDetailSection({ params: params('ao-git-push-force') })
     expect(getProductBySlug).toHaveBeenCalledWith('ao-git-push-force')
@@ -121,7 +132,7 @@ describe('product page', () => {
   it('wraps the detail section in Suspense', () => {
     const source = readFileSync('src/app/(shop)/products/[slug]/page.tsx', 'utf8')
     expect(source).toMatch(
-      /<Suspense fallback=\{<ProductDetailSkeleton \/>\}>\s*<ProductDetailSection params=\{params\} \/>\s*<\/Suspense>/,
+      /<Suspense fallback=\{<ProductDetailSkeleton \/>\}>\s*<ProductDetailSection\s+params=\{params\}\s+renderPurchase=\{renderPurchase\}\s*\/>\s*<\/Suspense>/,
     )
     expect(source).not.toMatch(/export default async/)
   })
@@ -129,6 +140,22 @@ describe('product page', () => {
     const source = readFileSync('src/app/(shop)/products/[slug]/page.tsx', 'utf8')
     expect(source).toMatch(/generateStaticParams\(\) \{\s*const slugs = await getAllProductSlugs\(\);/)
     expect(source).toMatch(/return getProductMetadata\(slug\);/)
+  })
+})
+
+describe('products and cart', () => {
+  it('products does not import cart', () => {
+    const files = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+        entry.isDirectory() ? files(`${dir}/${entry.name}`) : [`${dir}/${entry.name}`],
+      )
+    for (const path of files('src/features/products').filter((file) => /\.tsx?$/.test(file))) {
+      expect(readFileSync(path, 'utf8'), path).not.toMatch(/from ['"]@\/features\/cart/)
+    }
+  })
+  it('the product page hands AddToCartForm the slug and stock', () => {
+    const source = readFileSync('src/app/(shop)/products/[slug]/page.tsx', 'utf8')
+    expect(source).toMatch(/<AddToCartForm slug=\{product\.slug\} stock=\{product\.stock\} \/>/)
   })
 })
 
