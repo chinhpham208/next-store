@@ -6,7 +6,7 @@ import { getCartCount } from '@/features/cart/queries'
 
 // Same class and name as CartLink without a number (cart-link.tsx explains why they are repeated, not imported).
 const CART_LINK_CLASS =
-  'inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-md px-2 hover:bg-surface-muted'
+  'inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-md px-1 hover:bg-surface-muted sm:px-2'
 
 const COUNT_UNAVAILABLE_LOG = 'cart: cart count unavailable'
 

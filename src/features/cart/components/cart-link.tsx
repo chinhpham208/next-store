@@ -9,7 +9,7 @@ export type CartLinkProps = { count: number | null }
 // StaticCartLink (cart-badge.tsx) repeats these two: a server file importing a value from a "use client" module gets
 // a client reference, not the string. cart-ui.test.ts checks both links render the same markup. 44 px without a number.
 const CART_LINK_CLASS =
-  'inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-md px-2 hover:bg-surface-muted'
+  'inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-md px-1 hover:bg-surface-muted sm:px-2'
 const CART_LINK_LABEL = 'Giỏ hàng'
 
 const MAX_SHOWN = 99

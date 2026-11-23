@@ -71,7 +71,7 @@ export const AddToCartForm = ({ slug, stock }: AddToCartFormProps) => {
 
   return (
     <section aria-label="Mua hàng" className="flex flex-col gap-4">
-      <form noValidate onSubmit={submit} className="flex items-end gap-4">
+      <form noValidate onSubmit={submit} className="flex flex-wrap items-end gap-4">
         <div className="flex flex-col gap-2">
           <label htmlFor={INPUT_ID} className="text-sm font-medium">
             Số lượng
