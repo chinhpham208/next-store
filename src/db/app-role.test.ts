@@ -124,6 +124,46 @@ describe('scripts/sql/app-role.sql on a migrated database (NS-60)', () => {
     })
   })
 
+  // NS-88 (M4 Task 3): every statement the cart code needs, as the DML-only role; the tables get their grant from
+  // the script (and, on a new branch, from the default privileges: see the parent-branch describe below).
+  it('cart queries run as a DML-only role', async () => {
+    const cartId = '6f1c2a4e-8b3d-4f5a-9c7e-1d2b3a4c5e6f'
+    const categoryId = (await client.query<{ id: number }>(
+      "INSERT INTO categories (slug, name) VALUES ('cart-role', 'Cart') RETURNING id",
+    )).rows[0]?.id
+    const productId = (await client.query<{ id: number }>(
+      "INSERT INTO products (slug, name, description, price, image, category_id) VALUES ('cart-role', 'C', 'd', 1, '/i.svg', $1) RETURNING id",
+      [categoryId],
+    )).rows[0]?.id
+    try {
+      await asApp(client, async () => {
+        await client.query('INSERT INTO carts (id) VALUES ($1)', [cartId])
+        const upsert = `INSERT INTO cart_items (cart_id, product_id, quantity) VALUES ($1, $2, 1)
+          ON CONFLICT (cart_id, product_id) DO UPDATE SET quantity = cart_items.quantity + excluded.quantity`
+        await client.query(upsert, [cartId, productId])
+        await client.query(upsert, [cartId, productId])
+        await client.query('UPDATE carts SET updated_at = now() WHERE id = $1', [cartId])
+        expect((await client.query('SELECT id FROM carts WHERE id = $1 FOR UPDATE', [cartId])).rows).toHaveLength(1)
+        expect(
+          (await client.query('SELECT quantity FROM cart_items WHERE cart_id = $1', [cartId])).rows,
+        ).toEqual([{ quantity: 2 }])
+        await client.query("DELETE FROM carts WHERE id IN (SELECT id FROM carts WHERE updated_at < now() - interval '30 days' ORDER BY updated_at LIMIT 50)")
+        await client.query('DELETE FROM carts WHERE id = $1', [cartId])
+        expect((await client.query('SELECT 1 FROM cart_items WHERE cart_id = $1', [cartId])).rows).toEqual([])
+        for (const statement of ['TRUNCATE carts', 'TRUNCATE cart_items', 'ALTER TABLE carts ADD COLUMN x int']) {
+          expect(await sqlState(() => client.exec(statement)), statement).toBe('42501')
+        }
+      })
+      expect((await explicitGrants(client, 'carts')).sort()).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE'])
+      expect((await explicitGrants(client, 'cart_items')).sort()).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE'])
+      expect(await check(client)).toEqual(DML_ONLY)
+    } finally {
+      await client.query('DELETE FROM carts WHERE id = $1', [cartId])
+      await client.query('DELETE FROM products WHERE id = $1', [productId])
+      await client.query('DELETE FROM categories WHERE id = $1', [categoryId])
+    }
+  })
+
   it.each([
     ['TRUNCATE products'],
     ['DROP TABLE products'],
@@ -370,6 +410,10 @@ describe('scripts/sql/app-role.sql on a parent branch without tables (NS-60)', (
       await runMigrations(connection)
       expect(await check(client)).toEqual(DML_ONLY)
       await asApp(client, () => client.exec("INSERT INTO categories (slug, name) VALUES ('x', 'X')"))
+      // The cart tables (NS-88) get DML from the default privileges alone, as on a new preview branch.
+      expect((await explicitGrants(client, 'carts')).sort()).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE'])
+      expect((await explicitGrants(client, 'cart_items')).sort()).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE'])
+      await asApp(client, () => client.exec("INSERT INTO carts (id) VALUES ('6f1c2a4e-8b3d-4f5a-9c7e-1d2b3a4c5e6f')"))
     } finally {
       await closeConnection(connection)
     }

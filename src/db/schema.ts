@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm'
-import { boolean, check, index, integer, pgTable, serial, text, timestamp } from 'drizzle-orm/pg-core'
+import { boolean, check, index, integer, pgTable, primaryKey, serial, text, timestamp, uuid } from 'drizzle-orm/pg-core'
 
 export const categories = pgTable('categories', {
   id: serial('id').primaryKey(),
@@ -37,5 +37,44 @@ export const products = pgTable(
   ],
 )
 
+// ADR-0014 1A. No serial / identity in either table: the DML-only app role (ADR-0010) has no sequence to need.
+export const carts = pgTable(
+  'carts',
+  {
+    // No default on purpose: the server generates it (crypto.randomUUID()), never the client.
+    id: uuid('id').primaryKey(),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    // Sliding 30-day expiry (ADR-0014 6A); every write of the cart sets it.
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  // Purging expired carts scans by age (ADR-0014 7A).
+  (table) => [index('carts_updated_at_idx').on(table.updatedAt)],
+)
+
+export const cartItems = pgTable(
+  'cart_items',
+  {
+    cartId: uuid('cart_id')
+      .notNull()
+      .references(() => carts.id, { onDelete: 'cascade' }),
+    productId: integer('product_id')
+      .notNull()
+      .references(() => products.id, { onDelete: 'cascade' }),
+    quantity: integer('quantity').notNull(),
+    // Line order in the cart.
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // One line per product per cart: adding again updates the line.
+    primaryKey({ columns: [table.cartId, table.productId] }),
+    // Only the lower bound lives in the DB: the upper limit (ADR-0014 5A) can change without a contract migration.
+    check('cart_items_quantity_positive', sql`${table.quantity} > 0`),
+    // The primary key covers cart_id first; deleting a product (M5) looks lines up by product_id.
+    index('cart_items_product_id_idx').on(table.productId),
+  ],
+)
+
 export type Category = typeof categories.$inferSelect
 export type Product = typeof products.$inferSelect
+export type Cart = typeof carts.$inferSelect
+export type CartItem = typeof cartItems.$inferSelect
