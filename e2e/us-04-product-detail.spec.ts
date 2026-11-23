@@ -100,7 +100,8 @@ for (const product of [IN_STOCK, SOLD_OUT]) {
 }
 
 // M4 Task 8 (Orchestrator, 2026-11-23): 320 px is the narrowest width supported. There the page never scrolls sideways
-// (the add-to-cart row wraps its button below the quantity), and from 360 px the header stays on one line. Read-only:
+// (the add-to-cart row wraps its button below the quantity) and every header target stays 44 px; from 360 px the header
+// stays on one line. Read-only:
 // no cart is created, so the cart link has no number here; the numbered cases are in the PR's measurement table.
 test.describe('khổ hẹp', () => {
   test.skip(({ isMobile }) => isMobile, 'Tự đặt bề rộng: chỉ chạy ở desktop')
@@ -128,8 +129,12 @@ test.describe('khổ hẹp', () => {
       expect(layout.scrollWidth).toBeLessThanOrEqual(width)
       expect(layout.targets).toHaveLength(3)
       for (const target of layout.targets) expect(target).toBeGreaterThanOrEqual(44)
-      expect(layout.logoOneLine).toBe(true)
-      expect(layout.navHeight).toBe(44)
+      // One line is required from 360 px only: at 320 px the header may wrap (it fits by about 1 px without a number,
+      // which depends on the browser's text rendering).
+      if (width >= 360) {
+        expect(layout.logoOneLine).toBe(true)
+        expect(layout.navHeight).toBe(44)
+      }
     })
   }
 })
