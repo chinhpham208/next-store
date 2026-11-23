@@ -318,7 +318,10 @@ check_404() { # check_404 <kind> <path> <label> [header]
     NOT_FOUND_FAILED=1
     return 0
   fi
-  if [ -z "$header" ] && [ "${path%.rsc}" = "$path" ] && ! grep -qF 'Không tìm thấy trang' "$TMP/not-found"; then
+  # An image URL is not a page: its 404 is either the proxy's rewrite to the not-found page or, when the product lookup
+  # failed open (NS-79), the image route's own empty 404. Both are a 404 for the image, so only pages need the text.
+  if [ -z "$header" ] && [ "${path%.rsc}" = "$path" ] && [[ $path != */opengraph-image* ]] &&
+    ! grep -qF 'Không tìm thấy trang' "$TMP/not-found"; then
     echo "smoke: LỖI: HTML $path ($label) không có \"Không tìm thấy trang\"" >&2
     NOT_FOUND_FAILED=1
     return 0
