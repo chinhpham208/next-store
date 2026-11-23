@@ -96,6 +96,9 @@ jobs:
         id: e2e
         env:
           BASE_URL: ${{ env.PRODUCTION_URL }}
+          # Same flag as smoke, same rule (NS-79, NS-100): a well-formed unknown product slug answering 200 is a
+          # `warning` annotation with the time taken (e2e/product-fail-open.ts); everything else must still 404.
+          SMOKE_PRODUCT_FAIL_OPEN: warn
         run: npm run e2e
 
       - name: upload Playwright report

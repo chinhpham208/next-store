@@ -85,8 +85,14 @@ test.beforeEach(async ({ context }) => {
 // The fixtures of e2e/test.ts with the bypass pointed at `base` (set up before the test, after beforeAll). With a
 // bypass set, the fixtures fail any test that records a trace; this secret is fake and the servers local, but the
 // rule has no exception, so tracing is turned off here.
+//
+// baseURL is `base` too: every URL here is absolute, so it only decides whether the fixtures run in Production mode.
+// With BASE_URL set to Production they would, and refuse the POST of the redirect test although it goes to a local
+// server (NS-100). The write guard itself is untouched: the group "cùng bộ chặn ghi của Production" sets the
+// Production baseURL back and checks it (as e2e/production-guard.spec.ts does).
 test.use({
   vercelBypass: async ({}, provide) => provide({ origin: new URL(base).origin, secret: SECRET }),
+  baseURL: async ({}, provide) => provide(base),
   trace: 'off',
 })
 

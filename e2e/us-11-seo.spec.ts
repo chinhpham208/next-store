@@ -4,6 +4,7 @@ import { PRODUCT_SEEDS } from '@/db/seed-data'
 import { POSTS } from '@/features/blog/posts'
 import { POSTS_NEWEST_FIRST } from './blog'
 import { VIEWPORT_INDEPENDENT } from './catalog'
+import { getUnknownProduct } from './product-fail-open'
 import { isProductionUrl } from './production'
 import { fetchImage, pngSize, readMeta, readSitemap } from './seo'
 
@@ -182,10 +183,15 @@ test.describe('Sitemap và robots', () => {
     const sitemapPaths = new Set((await readSitemapOf(request)).map((entry) => new URL(entry.loc).pathname))
     // A random slug each run, so no cached answer from an earlier run can stand in for the 404.
     const unknownProduct = `/products/khong-co-${Date.now()}-${Math.floor(Math.random() * 1e6)}`
-    for (const path of ['/khong-ton-tai', unknownProduct]) {
-      const response = await request.get(path)
-      expect(response.status(), path).toBe(404)
-      expect(readMeta(await response.text()).robots, path).toMatch(/\bnoindex\b/)
+    // `/khong-ton-tai` never reaches the database: always a 404. The product slug does; on Production its fail-open
+    // (200) is only a warning and its body is not checked (NS-79, e2e/product-fail-open.ts).
+    const notFound = await request.get('/khong-ton-tai')
+    expect(notFound.status(), '/khong-ton-tai').toBe(404)
+    for (const [path, response] of [
+      ['/khong-ton-tai', notFound],
+      [unknownProduct, await getUnknownProduct(request, unknownProduct)],
+    ] as const) {
+      if (response) expect(readMeta(await response.text()).robots, path).toMatch(/\bnoindex\b/)
       expect(sitemapPaths.has(path), path).toBe(false)
     }
   })
@@ -201,8 +207,9 @@ test.describe('Sitemap và robots', () => {
       const domain = segment.split('/')[1]
       const swapped = new URL(image)
       swapped.pathname = image.pathname.replace(segment, `/${domain}/${unknown}/`)
-      const response = await fetchImage(request, swapped.toString())
-      expect(response.status(), swapped.pathname).toBe(404)
+      // The product image goes through the slug lookup, like the page (NS-79); the post image never does.
+      if (domain === 'products') await getUnknownProduct(request, `${swapped.pathname}${swapped.search}`)
+      else expect((await fetchImage(request, swapped.toString())).status(), swapped.pathname).toBe(404)
     }
   })
 })
