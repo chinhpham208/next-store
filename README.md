@@ -91,7 +91,7 @@ BASE_URL=https://next-store-dev-ginpham.vercel.app npm run smoke
 BASE_URL=https://<url-preview> npm run smoke
 ```
 
-URL preview của từng deploy có thể bị Vercel Deployment Protection chặn (trang đăng nhập Vercel); khi đó cần `VERCEL_AUTOMATION_BYPASS_SECRET` (script gửi header `x-vercel-protection-bypass`, không in giá trị). Thiếu secret, smoke báo rõ là bị Deployment Protection chặn. `SMOKE_TEXT` đổi chuỗi cần có trên trang chủ. `SMOKE_ROBOTS=disallow` bắt buộc `robots.txt` có `Disallow: /` (workflow `e2e-preview` luôn đặt), `SMOKE_ROBOTS=allow` bắt buộc `Allow: /` (khi kiểm Production); bỏ trống thì chấp nhận một trong hai và in ra. Header `X-Robots-Tag` của `/`, `/robots.txt`, `/sitemap.xml` luôn được in, không bắt buộc.
+URL preview của từng deploy có thể bị Vercel Deployment Protection chặn (trang đăng nhập Vercel); khi đó cần `VERCEL_AUTOMATION_BYPASS_SECRET` (script gửi header `x-vercel-protection-bypass`, không in giá trị). Thiếu secret, smoke báo rõ là bị Deployment Protection chặn. `SMOKE_TEXT` đổi chuỗi cần có trên trang chủ. `SMOKE_ROBOTS=disallow` bắt buộc `robots.txt` có `Disallow: /` (workflow `e2e-preview` luôn đặt), `SMOKE_ROBOTS=allow` bắt buộc `Allow: /` (khi kiểm Production); bỏ trống thì chấp nhận một trong hai và in ra. `SMOKE_PRODUCT_FAIL_OPEN=warn` (chỉ workflow `Production E2E` đặt) biến slug sản phẩm lạ đúng dạng trả 200 (lookup DB của proxy fail-open, NS-79) thành `::warning::` kèm thời gian thay vì lỗi; slug sai dạng, slug bài và ảnh OG của bài vẫn phải 404. Header `X-Robots-Tag` của `/`, `/robots.txt`, `/sitemap.xml` luôn được in, không bắt buộc.
 
 E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMATION_BYPASS_SECRET` (không gửi header bypass khi `BASE_URL` là Production).
 
@@ -120,7 +120,7 @@ gh api repos/chinhpham208/next-store/commits/<sha>/check-runs \
 
 ### Sau release: workflow `Production E2E`
 
-Workflow `Production E2E` (`.github/workflows/production-e2e.yml`, M3 Task 17) chạy smoke (`SMOKE_ROBOTS=allow`: Production phải `Allow: /`) rồi toàn bộ E2E trên `https://next-store-iota-silk.vercel.app`:
+Workflow `Production E2E` (`.github/workflows/production-e2e.yml`, M3 Task 17) chạy smoke (`SMOKE_ROBOTS=allow`: Production phải `Allow: /`; `SMOKE_PRODUCT_FAIL_OPEN=warn`: slug sản phẩm lạ fail-open chỉ cảnh báo, NS-79) rồi toàn bộ E2E trên `https://next-store-iota-silk.vercel.app`:
 
 - Tự chạy khi Vercel báo một deployment thành công có environment đúng bằng `Production` (deployment và status đều do `vercel[bot]` tạo). Vercel gửi `ref` là SHA của commit, không phải tên nhánh, nên workflow kiểm commit đã deploy nằm trên nhánh `production` (`git merge-base --is-ancestor`, NS-78); test lấy từ commit đó. Bản preview được "Promote to Production" hay `vercel --prod` từ nhánh khác làm job đỏ ở bước kiểm này; khi đó dispatch tay. Sau release không thấy lần chạy nào (ví dụ Vercel đổi tên environment) cũng dispatch tay. Chạy tay: `gh api -X POST repos/chinhpham208/next-store/actions/workflows/production-e2e.yml/dispatches -f ref=production` (test lấy từ nhánh `production`).
 - URL ghi cứng trong workflow và `e2e/production.ts`, không lấy từ sự kiện. Không dùng secret nào (Production là domain custom, không có Deployment Protection, nên không gửi header bypass), không `DATABASE_URL`, không `npm run build`, không lệnh `db:*`.
