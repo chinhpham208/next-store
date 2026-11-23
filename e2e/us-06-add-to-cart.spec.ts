@@ -110,7 +110,9 @@ test.describe('ghi vào giỏ', { tag: WRITE_TAG }, () => {
     const status = page.getByRole('region', { name: 'Mua hàng' }).getByRole('status')
     const link = status.getByRole('link', { name: 'Xem giỏ hàng', exact: true })
     await expect(link).toHaveAttribute('href', '/cart')
-    // The success state (status with a link) is part of the main flow too (requirements §5, a11y).
+    // The success state (status with a link) is part of the main flow too (requirements §5, a11y). The action's
+    // render of the route drops <title> for a moment and puts it back (NS-107); axe reads the settled page.
+    await expect(page).toHaveTitle(`${PRODUCT.name} · next-store`)
     await expectNoSeriousA11yViolations(page)
     await waitForHydration(link)
     await link.click()
