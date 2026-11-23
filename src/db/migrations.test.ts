@@ -458,6 +458,16 @@ it('does not flag the existing drizzle/0000_*.sql', () => {
   for (const { file, sql } of initial) expect(findContractStatements(sql), file).toEqual([])
 })
 
+// NS-88 (M4 Task 3): the cart tables ship in the same release as the code that uses them, so expand only.
+it('does not flag drizzle/0001_*.sql (carts, cart_items)', () => {
+  const carts = readMigrations().filter(({ file }) => /^0001_.*\.sql$/.test(file))
+  expect(carts).toHaveLength(1)
+  for (const { file, sql } of carts) {
+    expect(findContractStatements(sql), file).toEqual([])
+    expect(sql, file).not.toMatch(/^-- contract:/m)
+  }
+})
+
 it('every migration with a contract statement names the ticket of its expand step', () => {
   for (const { file, sql } of readMigrations()) {
     if (findContractStatements(sql).length > 0) expect(sql, file).toMatch(/^-- contract: NS-\d+$/m)
