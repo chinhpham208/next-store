@@ -1,17 +1,18 @@
 import { readFile } from 'node:fs/promises'
-import { count, eq, getTableName, type Table } from 'drizzle-orm'
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { count, eq, getTableName, inArray, sql, type Table } from 'drizzle-orm'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cartItems, carts, products } from '@/db'
 import { db } from '@/db/client'
 import { runMigrations } from '@/db/migrate'
 import { seed } from '@/db/seed'
 import { PRODUCT_SEEDS } from '@/db/seed-data'
-import { CART_TTL_DAYS, MAX_CART_LINES, MAX_LINE_QUANTITY } from '@/features/cart/limits'
+import { CART_TTL_DAYS, MAX_CARTS, MAX_CART_LINES, MAX_LINE_QUANTITY } from '@/features/cart/limits'
 import { cartIdSchema, type CartId } from '@/features/cart/schema'
 import {
   addLine,
   cartExpiryCutoff,
   countCartItems,
+  evictOldestCarts,
   purgeExpiredCarts,
   readCartLines,
   removeLine,
@@ -24,6 +25,22 @@ const statements = vi.hoisted(() => ({ log: [] as string[], recording: false }))
 vi.mock('@/db', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/db')>()
   const tableName = (table: unknown) => getTableName(table as Table)
+  // A select's lock clause comes later in the chain (`.where(…).for('update')`): it is added to the select's entry,
+  // so `select carts for update` is what a test sees.
+  const watchLock = <B extends object>(builder: B, entry: number): B => {
+    const watched: B = new Proxy(builder, {
+      get(target, prop, receiver) {
+        const value: unknown = Reflect.get(target, prop, receiver)
+        if (typeof value !== 'function') return value
+        return (...args: unknown[]) => {
+          if (prop === 'for') statements.log[entry] += ` for ${String(args[0])}`
+          const result: unknown = value.apply(target, args)
+          return result === target ? watched : result
+        }
+      },
+    })
+    return watched
+  }
   const record = <T extends object>(tx: T): T =>
     new Proxy(tx, {
       get(target, prop, receiver) {
@@ -44,7 +61,10 @@ vi.mock('@/db', async (importOriginal) => {
               if (innerProp !== 'from' || typeof method !== 'function') return method
               return (table: unknown, ...rest: unknown[]) => {
                 statements.log.push(`select ${tableName(table)}`)
-                return method.apply(inner, [table, ...rest])
+                const selected: unknown = method.apply(inner, [table, ...rest])
+                return typeof selected === 'object' && selected !== null
+                  ? watchLock(selected, statements.log.length - 1)
+                  : selected
               }
             },
           })
@@ -427,15 +447,50 @@ describe('addLine', () => {
 
   it('locks the cart row before reading the line', async () => {
     // Two tabs are two requests running side by side (plan M4 D3): without the lock both could read "0 in the
-    // cart" and each add 2 of 3. UPDATE carts … RETURNING takes the row lock first, so the second transaction
+    // cart" and each add 2 of 3. SELECT … FOR UPDATE takes the row lock first, so the second transaction
     // waits for the first to commit and then reads its line. PGlite runs one transaction at a time, so the race
     // itself cannot be shown here; the order of statements is what the lock depends on.
     const cartId = await makeCart()
     statements.recording = true
     await addLine({ cartId, slug: STOCK_12, quantity: 1, create: false, now: NOW })
-    expect(statements.log[0]).toBe('update carts')
-    expect(statements.log.indexOf('update carts')).toBeLessThan(statements.log.indexOf('select products'))
-    expect(statements.log.indexOf('update carts')).toBeLessThan(statements.log.indexOf('select cart_items'))
+    expect(statements.log[0]).toBe('select carts for update')
+    expect(statements.log.indexOf('select products')).toBeGreaterThan(0)
+    expect(statements.log.indexOf('select cart_items')).toBeGreaterThan(0)
+    // The expiry slides only once every check has passed.
+    expect(statements.log.indexOf('update carts')).toBeGreaterThan(statements.log.indexOf('select cart_items'))
+  })
+
+  it('a refused add does not slide updated_at', async () => {
+    const updatedAt = daysAgo(20)
+    const cartId = await makeCart({ updatedAt, lines: [{ slug: LEFT_3, quantity: 2 }] })
+    const refusals: [string, number][] = [
+      [LEFT_3, 2],
+      [SOLD_OUT, 1],
+      ['khong-ton-tai', 1],
+      [STOCK_12, MAX_LINE_QUANTITY + 1],
+    ]
+    statements.recording = true
+    for (const [slug, quantity] of refusals) {
+      expect(await addLine({ cartId, slug, quantity, create: false, now: NOW })).toMatchObject({ ok: false })
+    }
+    expect(statements.log).not.toContain('update carts')
+    expect(await cartRow(cartId)).toMatchObject({ updatedAt })
+  })
+
+  it('a full cart refusing a new line does not slide updated_at', async () => {
+    const updatedAt = daysAgo(20)
+    const inStock = PRODUCT_SEEDS.filter((product) => (product.stock ?? 0) > 0)
+    const cartId = await makeCart({
+      updatedAt,
+      lines: inStock.slice(0, MAX_CART_LINES).map((product) => ({ slug: product.slug, quantity: 1 })),
+    })
+    const extra = inStock[MAX_CART_LINES]
+    if (extra === undefined) throw new Error('not enough products in stock')
+    expect(await addLine({ cartId, slug: extra.slug, quantity: 1, create: false, now: NOW })).toEqual({
+      ok: false,
+      error: 'cart-full',
+    })
+    expect(await cartRow(cartId)).toMatchObject({ updatedAt })
   })
 
   it('writes the new cart after every check, and its line after it', async () => {
@@ -622,12 +677,38 @@ describe('setLine', () => {
     const cartId = await makeCart({ lines: [{ slug: STOCK_12, quantity: 1 }] })
     statements.recording = true
     await setLine({ cartId, slug: STOCK_12, quantity: 2, now: NOW })
-    expect(statements.log[0]).toBe('update carts')
+    expect(statements.log[0]).toBe('select carts for update')
+    expect(statements.log).toContain('update carts')
     statements.log = []
     await setLine({ cartId, slug: STOCK_12, quantity: 0, now: NOW })
-    expect(statements.log[0]).toBe('update carts')
+    expect(statements.log[0]).toBe('select carts for update')
     expect(statements.log).toContain('delete cart_items')
+    expect(statements.log).toContain('update carts')
     expect(statements.log).not.toContain('insert cart_items')
+  })
+
+  it('a refused set does not slide updated_at', async () => {
+    const updatedAt = daysAgo(20)
+    const cartId = await makeCart({
+      updatedAt,
+      lines: [
+        { slug: LEFT_3, quantity: 2 },
+        { slug: SOLD_OUT, quantity: 1 },
+      ],
+    })
+    const refusals: [string, number][] = [
+      [LEFT_3, 4],
+      [SOLD_OUT, 2],
+      [STOCK_12, 1],
+      ['khong-ton-tai', 0],
+      ['khong-ton-tai', 1],
+    ]
+    statements.recording = true
+    for (const [slug, quantity] of refusals) {
+      expect(await setLine({ cartId, slug, quantity, now: NOW })).toMatchObject({ ok: false })
+    }
+    expect(statements.log).not.toContain('update carts')
+    expect(await cartRow(cartId)).toMatchObject({ updatedAt })
   })
 })
 
@@ -694,8 +775,9 @@ describe('removeLine', () => {
     const cartId = await makeCart({ lines: [{ slug: STOCK_12, quantity: 1 }] })
     statements.recording = true
     await removeLine({ cartId, slug: STOCK_12, now: NOW })
-    expect(statements.log[0]).toBe('update carts')
+    expect(statements.log[0]).toBe('select carts for update')
     expect(statements.log).toContain('delete cart_items')
+    expect(statements.log).toContain('update carts')
   })
 })
 
@@ -728,5 +810,71 @@ describe('purgeExpiredCarts', () => {
     const edge = await makeCart({ updatedAt: daysAgo(CART_TTL_DAYS) })
     await purgeExpiredCarts(NOW)
     expect(await cartRow(edge)).toBeDefined()
+  })
+})
+
+describe('evictOldestCarts', () => {
+  // MAX_CARTS itself, not a smaller number passed in: the filler carts are one INSERT … generate_series, so the
+  // test runs against the constant the action uses. They are a day old, younger than every cart a test names.
+  const fillCarts = async (total: number) => {
+    const at = daysAgo(1).toISOString()
+    await db.execute(
+      sql`INSERT INTO carts (id, created_at, updated_at) SELECT gen_random_uuid(), ${at}::timestamptz, ${at}::timestamptz FROM generate_series(1, ${total})`,
+    )
+  }
+  // Distinct ages, oldest first, all still live: eviction is about the number of carts, not their expiry.
+  const makeOldCarts = async (total: number): Promise<CartId[]> => {
+    const ids: CartId[] = []
+    for (let index = 0; index < total; index += 1) {
+      const updatedAt = new Date(daysAgo(29).getTime() + index * 60_000)
+      ids.push(await makeCart({ updatedAt, lines: [{ slug: STOCK_12, quantity: 1 }] }))
+    }
+    return ids
+  }
+
+  beforeEach(async () => {
+    await db.delete(carts)
+  })
+  afterAll(async () => {
+    await db.delete(carts)
+  })
+
+  it(`deletes the 50 oldest carts and their lines once there are ${MAX_CARTS}`, async () => {
+    const old = await makeOldCarts(60)
+    const keep = await makeCart({ lines: [{ slug: STOCK_12, quantity: 1 }] })
+    await fillCarts(MAX_CARTS - 61)
+    expect(await countCarts()).toBe(MAX_CARTS)
+
+    await evictOldestCarts({ keep })
+
+    expect(await countCarts()).toBe(MAX_CARTS - 50)
+    const remaining = await db.select({ id: carts.id }).from(carts).where(inArray(carts.id, old))
+    expect(new Set(remaining.map((row) => row.id))).toEqual(new Set(old.slice(50)))
+    for (const cartId of old.slice(0, 50)) expect(await linesOf(cartId)).toEqual([])
+    expect(await linesOf(keep)).toHaveLength(1)
+  })
+
+  it(`deletes nothing below ${MAX_CARTS} carts`, async () => {
+    const old = await makeOldCarts(10)
+    const keep = await makeCart()
+    await fillCarts(MAX_CARTS - 12)
+    expect(await countCarts()).toBe(MAX_CARTS - 1)
+
+    await evictOldestCarts({ keep })
+
+    expect(await countCarts()).toBe(MAX_CARTS - 1)
+    for (const cartId of old) expect(await cartRow(cartId)).toBeDefined()
+  })
+
+  it('never deletes the cart being added to, even when it is the oldest', async () => {
+    // Another instance's clock may run ahead: the new cart's updated_at is then older than carts written after it.
+    const keep = await makeCart({ updatedAt: daysAgo(29), lines: [{ slug: STOCK_12, quantity: 1 }] })
+    await fillCarts(MAX_CARTS - 1)
+
+    await evictOldestCarts({ keep })
+
+    expect(await cartRow(keep)).toBeDefined()
+    expect(await linesOf(keep)).toHaveLength(1)
+    expect(await countCarts()).toBe(MAX_CARTS - 50)
   })
 })

@@ -11,6 +11,7 @@ import {
 } from '@/features/cart/schema'
 import {
   addLine,
+  evictOldestCarts,
   purgeExpiredCarts,
   removeLine,
   setLine,
@@ -30,18 +31,25 @@ const UNAVAILABLE: CartActionResult = { ok: false, error: 'unavailable' }
 // The cart id is the only secret here: it is never part of a log line, and neither is an error object.
 const ADD_FAILED_LOG = 'cart: add to cart failed'
 const PURGE_FAILED_LOG = 'cart: purge of expired carts failed'
+const EVICT_FAILED_LOG = 'cart: eviction of the oldest carts failed'
 const SET_FAILED_LOG = 'cart: update of a cart line failed'
 const REMOVE_FAILED_LOG = 'cart: removal of a cart line failed'
 
 const newCartId = (): CartId => cartIdSchema.parse(crypto.randomUUID())
 
-// The purge piggybacks on carts being created (ADR-0014 7A); the add has already succeeded, so its failure only
-// leaves the expired carts for the next new cart.
-const purgeQuietly = async (now: Date): Promise<void> => {
+// The purge and the eviction piggyback on carts being created (ADR-0014 7A, Bổ sung 2026-11-24); the add has
+// already succeeded, so a failure of either only leaves the work for the next new cart. Expired carts go first, so
+// the cap evicts a live cart only when expired ones are not enough. One failing does not skip the other.
+const cleanUpQuietly = async (created: CartId, now: Date): Promise<void> => {
   try {
     await purgeExpiredCarts(now)
   } catch {
     console.error(PURGE_FAILED_LOG)
+  }
+  try {
+    await evictOldestCarts({ keep: created })
+  } catch {
+    console.error(EVICT_FAILED_LOG)
   }
 }
 
@@ -75,14 +83,14 @@ export async function addToCartAction(input: unknown): Promise<CartActionResult>
       result = await addLine({ cartId, slug, quantity, create: true, now })
     }
 
-    // A refusal sets no cookie and asks for no render: nothing changed (C4).
+    // A refusal wrote nothing, not even carts.updated_at: no cookie (its Max-Age stays in step) and no render (C4).
     if (!result.ok) return refused(result)
     if (cartId === null) return UNAVAILABLE
 
     // Set on every success: Max-Age slides with carts.updated_at (6A), and a cookie write makes Next render the
     // current page again in this same response (D2, C4).
     await writeCartId(cartId)
-    if (created) await purgeQuietly(now)
+    if (created) await cleanUpQuietly(cartId, now)
     return { ok: true, count: result.count }
   } catch {
     // dbQuery failed or timed out. A timed-out write may or may not have committed (ADR-0011), so no retry: a
@@ -116,7 +124,8 @@ const writeExistingCart = async (
         await clearCartId()
         return EMPTY_CART
       }
-      // A refusal changed nothing: no cookie, no render (C4).
+      // A refusal wrote nothing, not even carts.updated_at (the lock is a SELECT … FOR UPDATE): no cookie, so the
+      // Max-Age does not slide either, and no render (C4).
       return available === undefined ? { ok: false, error } : { ok: false, error, available }
     }
     if (cartId === null) return UNAVAILABLE
