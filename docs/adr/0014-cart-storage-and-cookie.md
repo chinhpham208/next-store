@@ -1,6 +1,6 @@
 # ADR-0014: Giỏ hàng lưu trong DB, cookie chỉ giữ id giỏ
 
-- Trạng thái: Đề xuất (chủ dự án duyệt trong PR của NS-86)
+- Trạng thái: Đã chấp nhận (chủ dự án duyệt 2026-11-23, PR #66)
 - Ngày: 2026-11-23
 - Quyết định của chủ dự án: 2026-11-23 (plan M4, Cổng 1, quyết định 1, 2, 3, 4, 5, 6, 7, 9, 10, 11)
 - Bổ sung: [ADR-0003](./0003-cache-strategy.md) (gạch đầu dòng "Blog: tĩnh hoàn toàn lúc build"), [ADR-0012](./0012-blog-static-registry.md) (mục Cache: blog vẫn prerender nhưng header có một lỗ động), [ADR-0009](./0009-product-404-in-proxy.md) (proxy bỏ qua request không phải `GET` / `HEAD`)

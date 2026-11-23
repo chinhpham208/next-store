@@ -1,6 +1,6 @@
 # ADR-0015: Giới hạn tốc độ ở biên bằng một quy tắc Vercel WAF cho Server Action
 
-- Trạng thái: Đề xuất (chủ dự án duyệt trong PR của NS-86)
+- Trạng thái: Đã chấp nhận (chủ dự án duyệt 2026-11-23, PR #66)
 - Ngày: 2026-11-23
 - Quyết định của chủ dự án: 2026-11-23 (plan M4, Cổng 1, quyết định 8)
 - Bổ sung: [ADR-0008](./0008-listing-cache-keys.md) (câu "Cần ADR riêng nếu thêm thư viện hoặc kho đếm" ở mục *Giới hạn tần suất*), [ADR-0009](./0009-product-404-in-proxy.md) (gạch đầu dòng "Cần giới hạn tần suất ở biên (chưa làm ở M2)… ADR riêng")
