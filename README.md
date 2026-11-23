@@ -101,6 +101,8 @@ E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMA
 
 `e2e/vercel-bypass.spec.ts` kiểm các điều trên với hai server Node local.
 
+Khi bypass bật, trace luôn tắt vì trace ghi lại mọi header. `playwright.config.ts` đặt `trace: 'off'`; nếu spec bật lại bằng `test.use({ trace })` hoặc chạy với `--trace`, fixture cho test đỏ trước khi gửi request. ESLint cũng cấm `trace` khác `'off'` trong `test.use` của spec.
+
 Không có `BASE_URL`, `npm run e2e` tự chạy ba `next start` từ cùng bản build: cổng 3100; cổng 3101 với `DATABASE_URL` trỏ vào cổng đóng (trang lỗi của US-05); cổng 3102 với `DATABASE_URL` trỏ vào một listener TCP im lặng ở cổng 3103 và `DB_QUERY_TIMEOUT_MS=1000` (DB treo, NS-55). Log của hai server DB hỏng ghi vào `.verify/e2e-broken-db.log`, `.verify/e2e-hung-db.log`. Các nhóm test này bỏ qua khi có `BASE_URL`. `E2E_PORT=<n>` dời bốn cổng sang `n` … `n+3`. `scripts/verify.sh` đọc `E2E_PORT` và `SMOKE_PORT`; chỉ đặt một biến thì biến kia lấy cùng giá trị. Nó chỉ tắt tiến trình do chính nó khởi động; cổng bận bởi tiến trình khác thì dừng với lỗi.
 
 ### Tự chạy sau mỗi deploy: check `e2e-preview`
@@ -122,6 +124,7 @@ gh api repos/chinhpham208/next-store/commits/<sha>/check-runs \
 - Cần bật Vercel → Project → Settings → Git → **deployment_status Events** (bật ngày 2026-11-20, PR #23). Tắt thì Vercel chỉ gửi commit status `Vercel`, không có sự kiện nào và check `e2e-preview` không xuất hiện.
 - Chỉ kiểm URL do Vercel gửi (cả deployment lẫn deployment status đều do `vercel[bot]` tạo), và URL phải là `https://next-store-…-chinhpham208s-projects.vercel.app` hoặc `https://next-store-dev-ginpham.vercel.app`; khác thì job dừng trước khi dùng secret. Production không chạy ở đây.
 - E2E chạy với `--trace off`: trace của Playwright ghi cả header bypass, và report được upload khi bước e2e lỗi.
+- Request API tới preview fail thì Playwright ghi mọi header, kể cả secret bypass, vào message lỗi: secret nằm trong `data/*.md` và trong zip base64 nhúng ở `index.html` của report (audit PR #61 M1). Trước khi upload, `scripts/redact-report.mjs redact` thay secret bằng `***` ở dạng thô, JSON escape, URL encode và HTML escape, mở cả zip và gzip lồng nhau. Sau đó `check` tìm lại mọi dạng đó và cả base64 / base64url (3 cách căn byte). Còn sót, hoặc có zip / gzip không đọc được, thì report **không được upload** và job đỏ. Secret đi vào script qua env `REDACT_SECRET`, không bị in ra. `scripts/redact-report.test.sh` (trong `npm run test:scripts`) tái hiện lỗi bằng server local và secret giả.
 - Chạy tay (gỡ lỗi, hoặc khi không có sự kiện): `gh api -X POST repos/chinhpham208/next-store/actions/workflows/preview-e2e.yml/dispatches -f ref=<nhánh> -f 'inputs[base_url]=<URL trong danh sách trên>'`, hoặc nút "Run workflow" trong tab Actions. Test lấy từ `ref`, nên chọn đúng nhánh của deployment.
 
 ### Sau release: workflow `Production E2E`

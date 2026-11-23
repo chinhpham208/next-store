@@ -14,6 +14,13 @@ const E2E_NAMESPACE_IMPORTS = [
     message: "Không import() '@playwright/test' trong spec: lấy test từ './test'.",
   },
 ];
+// NS-54 (audit PR #61 L1): a trace records the bypass secret; e2e/test.ts also fails such a test while it is set.
+const E2E_TRACE = [
+  {
+    selector: "CallExpression[callee.property.name='use'] > ObjectExpression > Property[key.name='trace']:not([value.value='off'])",
+    message: "Không bật trace trong test.use của spec (chỉ được 'off'): trace ghi lại header bypass Vercel (secret). Dùng --trace khi chạy tại máy.",
+  },
+];
 const E2E_UNGUARDED_CLIENTS = [
   {
     selector: "MemberExpression[property.name='newContext']",
@@ -45,14 +52,14 @@ const eslintConfig = defineConfig([
           ],
         },
       ],
-      "no-restricted-syntax": ["error", ...E2E_NAMESPACE_IMPORTS, ...E2E_UNGUARDED_CLIENTS],
+      "no-restricted-syntax": ["error", ...E2E_NAMESPACE_IMPORTS, ...E2E_TRACE, ...E2E_UNGUARDED_CLIENTS],
     },
   },
   // The guard's own spec (and the bypass spec, NS-54) build contexts and call fetch in the page on purpose, against
   // local servers.
   {
     files: ["e2e/production-guard.spec.ts", "e2e/vercel-bypass.spec.ts"],
-    rules: { "no-restricted-syntax": ["error", ...E2E_NAMESPACE_IMPORTS] },
+    rules: { "no-restricted-syntax": ["error", ...E2E_NAMESPACE_IMPORTS, ...E2E_TRACE] },
   },
   // Override default ignores of eslint-config-next.
   globalIgnores([

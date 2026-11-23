@@ -5,7 +5,7 @@ import {
   type BrowserContext,
   type BrowserContextOptions,
 } from '@playwright/test'
-import { type Bypass, bypassFor, bypassRequest, routeBypass } from './bypass'
+import { type Bypass, bypassRequest, RUN_BYPASS, routeBypass } from './bypass'
 import { isProductionUrl } from './production'
 
 // Every spec imports `test` from here (conventions §7; eslint forbids `test` from @playwright/test in e2e/*.spec.ts,
@@ -99,13 +99,17 @@ export const withWriteGuard = async (
 // bypass of `vercelBypass` and, on Production, the same guard as `context`. Closed and checked at teardown.
 export type NewContext = (options?: BrowserContextOptions) => Promise<BrowserContext>
 
-// The run's bypass: VERCEL_AUTOMATION_BYPASS_SECRET for the origin of BASE_URL, when bypassFor allows it.
-const RUN_BYPASS = bypassFor(process.env.BASE_URL, process.env.VERCEL_AUTOMATION_BYPASS_SECRET)
+
+// A trace records every request header, the bypass header included (audit PR #61 L1). playwright.config.ts turns
+// tracing off when the bypass is on; a spec's test.use({ trace }) or `--trace` would turn it back on, so such a test
+// fails before any context or request client exists instead.
+export const TRACE_WITH_BYPASS_MESSAGE = 'Không bật trace khi có header bypass Vercel: trace ghi lại secret (NS-54)'
 
 type Fixtures = {
   newContext: NewContext
   // An option so e2e/vercel-bypass.spec.ts can point it at a local server; specs otherwise leave it alone.
   vercelBypass: Bypass | undefined
+  bypassWithoutTrace: void
 }
 
 const withBypass = async (context: BrowserContext, bypass: Bypass | undefined, baseURL: string | undefined) => {
@@ -114,6 +118,14 @@ const withBypass = async (context: BrowserContext, bypass: Bypass | undefined, b
 
 export const test = base.extend<Fixtures>({
   vercelBypass: [RUN_BYPASS, { option: true }],
+  bypassWithoutTrace: [
+    async ({ trace, vercelBypass }, provide) => {
+      const mode = typeof trace === 'string' ? trace : trace.mode
+      if (vercelBypass && mode !== 'off') throw new Error(TRACE_WITH_BYPASS_MESSAGE)
+      await provide()
+    },
+    { auto: true },
+  ],
   // `provide` is Playwright's `use`, renamed so the React hooks lint rule does not read it as React's use().
   context: async ({ context, baseURL, vercelBypass }, provide) => {
     await withBypass(context, vercelBypass, baseURL)

@@ -28,6 +28,10 @@ export const bypassFor = (baseUrl: string | undefined, secret: string | undefine
   }
 }
 
+// The run's bypass: VERCEL_AUTOMATION_BYPASS_SECRET for the origin of BASE_URL, when bypassFor allows it. Read by the
+// fixtures of e2e/test.ts and by playwright.config.ts (trace off while it is set).
+export const RUN_BYPASS = bypassFor(process.env.BASE_URL, process.env.VERCEL_AUTOMATION_BYPASS_SECRET)
+
 type FetchOptions = NonNullable<Parameters<APIRequestContext['fetch']>[1]>
 
 const HELPER_METHODS = { get: 'GET', head: 'HEAD', post: 'POST', put: 'PUT', patch: 'PATCH', delete: 'DELETE' } as const
