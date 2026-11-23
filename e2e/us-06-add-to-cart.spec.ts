@@ -13,6 +13,7 @@ import {
   productWithStock,
   purchaseAlert,
   quantityField,
+  waitForActionResponse,
   waitForHydration,
 } from './cart'
 import { WRITE_TAG } from './production'
@@ -45,8 +46,12 @@ test.describe('ghi vào giỏ', { tag: WRITE_TAG }, () => {
     await expect.poll(() => cartCount(page)).toBe(1)
     await expect(cartBadgePending(page)).toBeVisible()
 
+    const answered = waitForActionResponse(page)
     await held.release()
-    await expect(addedStatus(page)).toBeVisible(SERVER_ANSWER)
+    expect((await answered).status(), 'POST của action sau khi thả').toBe(200)
+    await expect(addedStatus(page).or(purchaseAlert(page).getByRole('paragraph'))).toBeVisible(SERVER_ANSWER)
+    await expect(purchaseAlert(page)).toHaveText('')
+    await expect(addedStatus(page)).toBeVisible()
     await expect(cartBadgePending(page)).toHaveCount(0)
     expect(await cartCount(page)).toBe(1)
 

@@ -1,4 +1,4 @@
-import type { Locator, Page, Request, Route } from '@playwright/test'
+import type { Locator, Page, Request, Response, Route } from '@playwright/test'
 import { PRODUCT_SEEDS } from '@/db/seed-data'
 import { expect } from './test'
 
@@ -91,6 +91,10 @@ export type HeldAction = {
 
 const isActionPost = async (request: Request): Promise<boolean> =>
   request.method() === 'POST' && (await request.headerValue('next-action')) !== null
+
+// The response to the next Server Action POST the page sends (or has sent and not yet been answered).
+export const waitForActionResponse = (page: Page): Promise<Response> =>
+  page.waitForResponse(async (response) => isActionPost(response.request()), { timeout: 15_000 })
 
 /**
  * Holds the next Server Action POST (a POST with a `next-action` header) to the origin of `baseURL`, and only that
