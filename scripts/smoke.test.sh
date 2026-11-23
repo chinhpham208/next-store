@@ -24,6 +24,8 @@ OG_PORT=3188
 SOFT_BLOG_PORT=3187
 SOFT_OG_PORT=3186
 POST_SEG_PORT=3185
+FAIL_OPEN_PORT=3184
+MALFORMED_PORT=3183
 
 TMP=$(mktemp -d)
 PIDS=()
@@ -90,7 +92,7 @@ run() {
   rm -f "$TMP/curl-calls"
   : > "$TMP/curl-calls"
   set +e
-  env -u BASE_URL -u VERCEL_AUTOMATION_BYPASS_SECRET -u SMOKE_PORT -u SMOKE_ROBOTS PATH="$TMP/bin:$PATH" "${envs[@]}" "$@" > "$TMP/out" 2>&1
+  env -u BASE_URL -u VERCEL_AUTOMATION_BYPASS_SECRET -u SMOKE_PORT -u SMOKE_ROBOTS -u SMOKE_PRODUCT_FAIL_OPEN PATH="$TMP/bin:$PATH" "${envs[@]}" "$@" > "$TMP/out" 2>&1
   CODE=$?
   set -e
 }
@@ -285,3 +287,65 @@ run BASE_URL="http://127.0.0.1:$POST_SEG_PORT" -- bash scripts/smoke.sh
 [ "$CODE" = 1 ] || fail known-post-segment-404 "thoát $CODE, cần 1"
 grep -qF '(bài: segment prefetch dạng đường dẫn) bị proxy rewrite sang not-found' "$TMP/out" || fail known-post-segment-404 "thông báo không nêu segment prefetch của bài"
 echo "ok known-post-segment-404"
+
+# product-fail-open-warn (NS-79): every well-formed unknown product slug answers 200 (the proxy's lookup fails open
+# from a far edge). SMOKE_PRODUCT_FAIL_OPEN=warn turns each of them — warm-up, fixed slug, fresh slug, RSC, .rsc,
+# segment, product OG image — into a ::warning:: with the time taken and smoke passes; without the flag it fails.
+start_server "$FAIL_OPEN_PORT" "$TMP/fail-open-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/(smoke-warmup-|khong-ton-tai)'
+run BASE_URL="http://127.0.0.1:$FAIL_OPEN_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail product-fail-open-warn "có cờ: thoát $CODE, cần 0"
+grep -qE '^::warning::smoke: 3 slug lạ warm-up đều trả 200, lần cuối sau [0-9]+ ms: lookup DB của proxy fail-open' "$TMP/out" ||
+  fail product-fail-open-warn "thiếu ::warning:: của warm-up"
+for label in 'slug cố định của US-05' 'slug mới' 'request RSC' 'hậu tố .rsc' 'segment prefetch dạng đường dẫn' \
+  'segment prefetch dạng đường dẫn, không header' 'ảnh OG: slug sản phẩm lạ' 'ảnh OG: slug sản phẩm lạ, không hậu tố băm'; do
+  grep -qE "^::warning::smoke: GET /products/[^ ]+ \\($label\\) trả 200 sau [0-9]+ ms" "$TMP/out" ||
+    fail product-fail-open-warn "thiếu ::warning:: có thời gian cho \"$label\""
+done
+[ "$(grep -c '^::warning::smoke: .*SMOKE_PRODUCT_FAIL_OPEN=warn' "$TMP/out")" = 9 ] || fail product-fail-open-warn "cần đúng 9 cảnh báo fail-open"
+grep -qF '(%2D) → 404' "$TMP/out" || fail product-fail-open-warn "ca %2D không còn được kiểm 404"
+grep -qF '(chữ hoa) → 404' "$TMP/out" || fail product-fail-open-warn "ca chữ hoa không còn được kiểm 404"
+run BASE_URL="http://127.0.0.1:$FAIL_OPEN_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail product-fail-open-warn "không cờ: thoát $CODE, cần 1"
+grep -qF 'hơn 2 slug fail-open' "$TMP/out" || fail product-fail-open-warn "không cờ: thiếu lỗi warm-up"
+! grep -q 'SMOKE_PRODUCT_FAIL_OPEN=warn' "$TMP/out" || fail product-fail-open-warn "không cờ mà vẫn cảnh báo"
+echo "ok product-fail-open-warn"
+
+# product-fail-open-warn-single: warm-up fine, only one later product case fails open → warning with the flag, failure
+# without (the existing soft-404 case with the flag added).
+run BASE_URL="http://127.0.0.1:$SOFT_RSC_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail product-fail-open-warn-single "thoát $CODE, cần 0"
+grep -qE '^::warning::smoke: GET /products/khong-ton-tai-suffix-[0-9-]+\.rsc \(hậu tố \.rsc\) trả 200 sau [0-9]+ ms' "$TMP/out" ||
+  fail product-fail-open-warn-single "thiếu ::warning:: cho hậu tố .rsc"
+echo "ok product-fail-open-warn-single"
+
+# fail-open-flag-scope: the flag never covers the cases that do not reach the database. A 200 for a malformed product
+# slug (%2D, upper case), an unknown post or an unknown post's OG image still fails smoke.
+start_server "$MALFORMED_PORT" "$TMP/malformed-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/(KHONG-|khong%2D)'
+run BASE_URL="http://127.0.0.1:$MALFORMED_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail fail-open-flag-scope "slug sai dạng: thoát $CODE, cần 1"
+grep -qF '(%2D) trả 200 ngay lần đầu' "$TMP/out" || fail fail-open-flag-scope "thông báo không nêu %2D"
+grep -qF '(chữ hoa) trả 200 ngay lần đầu' "$TMP/out" || fail fail-open-flag-scope "thông báo không nêu chữ hoa"
+run BASE_URL="http://127.0.0.1:$SOFT_BLOG_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail fail-open-flag-scope "slug bài: thoát $CODE, cần 1"
+grep -qF '(bài: slug mới) trả 200 ngay lần đầu' "$TMP/out" || fail fail-open-flag-scope "thông báo không nêu slug bài"
+run BASE_URL="http://127.0.0.1:$SOFT_OG_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail fail-open-flag-scope "ảnh OG của bài: thoát $CODE, cần 1"
+grep -qF '(ảnh OG: slug bài lạ) trả 200 ngay lần đầu' "$TMP/out" || fail fail-open-flag-scope "thông báo không nêu ảnh OG của bài"
+! grep -q '^::warning::' "$TMP/out" || fail fail-open-flag-scope "ảnh OG của bài: có ::warning:: dù không ca sản phẩm nào fail-open"
+echo "ok fail-open-flag-scope"
+
+# bad-fail-open-flag: SMOKE_PRODUCT_FAIL_OPEN is warn or empty; refused before any request.
+run SMOKE_PRODUCT_FAIL_OPEN=yes -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail bad-fail-open-flag "thoát $CODE, cần 1"
+grep -qF 'SMOKE_PRODUCT_FAIL_OPEN không hợp lệ' "$TMP/out" || fail bad-fail-open-flag "thông báo không nêu biến"
+[ ! -s "$TMP/curl-calls" ] || fail bad-fail-open-flag "curl đã được gọi"
+echo "ok bad-fail-open-flag"
+
+# proxy-timing (NS-79): the time of /robots.txt and of an unknown blog slug (through the proxy, no database) is printed
+# next to each other; information only.
+run BASE_URL="http://127.0.0.1:$PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail proxy-timing "thoát $CODE, cần 0"
+grep -qE '^smoke: thời gian: GET /robots.txt [0-9]+ ms; GET /blog/smoke-proxy-[0-9-]+ \(qua proxy, không chạm DB\) → 404, [0-9]+ ms$' "$TMP/out" ||
+  fail proxy-timing "thiếu dòng thời gian của /robots.txt và slug bài lạ"
+grep -qE '^smoke: GET /products/khong-ton-tai \(slug cố định của US-05\) → 404, [0-9]+ ms$' "$TMP/out" || fail proxy-timing "dòng 404 thiếu thời gian"
+echo "ok proxy-timing"

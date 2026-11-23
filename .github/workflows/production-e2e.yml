@@ -83,6 +83,10 @@ jobs:
           BASE_URL: ${{ env.PRODUCTION_URL }}
           # Production must let crawlers in; left empty, smoke would also accept `Disallow: /` (review PR #42).
           SMOKE_ROBOTS: allow
+          # On Vercel the proxy runs at the edge nearest the runner, far from Neon in Singapore, so a product slug
+          # lookup can outlast its 400 ms bound and fail open (200). Here that is a warning with the time taken; slugs
+          # that never reach the database must still 404. Preview leaves it unset and fails (NS-79, ADR-0009; fix: M5).
+          SMOKE_PRODUCT_FAIL_OPEN: warn
         run: npm run smoke
 
       - name: install Playwright Chromium
