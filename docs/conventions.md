@@ -25,12 +25,17 @@
 | `slug-guard.ts` | Kiểm slug tồn tại, không cache, cho `src/proxy.ts` trước khi render |
 | `posts.ts` | Registry nội dung tĩnh (blog): mảng `as const` và hàm đọc đồng bộ; **không import gì** để `proxy-api.ts` và Vitest dùng được |
 | `content.ts` | Ánh xạ slug → nội dung MDX bằng import tĩnh, kiểu `Record<Slug, MDXContent>`; không test bằng Vitest (không biên dịch MDX), proxy không được chạm |
+| `store.ts` | Đọc / ghi DB của feature theo tham số (ví dụ `cartId`, `now`), không đọc cookie hay header, để test trên PGlite; `server-only`. Ghi nhiều câu dùng `dbQuery({ transaction })` — [ADR-0014](./adr/0014-cart-storage-and-cookie.md) |
+| `cookie.ts` | Nơi **duy nhất** đọc / ghi cookie của feature: tên, thuộc tính, validate giá trị bằng Zod; `server-only` |
+| `messages.ts` | Thông điệp hiển thị cho người dùng theo mã lỗi; chỉ import `limits.ts`, `types.ts`, để client component dùng được |
+| `limits.ts` | Hằng số giới hạn (số lượng, hạn dùng); **không import gì**, để client component và Zod schema dùng chung |
 | `components/` | Component của miền |
 | `*.test.ts` | Test, đặt cạnh file được test |
 
 ## 2. Server và client
 
 - Mặc định là Server Component. Chỉ thêm `"use client"` khi cần state, effect, event handler hoặc API trình duyệt, và đặt nó ở component **nhỏ nhất** có thể.
+- File có `"use client"` (từ M4, [ADR-0014](./adr/0014-cart-storage-and-cookie.md)): chỉ `src/app/(shop)/error.tsx` và `src/features/cart/components/cart-provider.tsx`, `cart-link.tsx`, `add-to-cart-form.tsx`, `cart-line-controls.tsx`. File client chỉ import `react`, `next/link`, `@/components/ui/*`, `@/lib/cn`, `@/lib/format-price`, và trong `src/features/cart` chỉ `actions.ts` (tham chiếu action), `messages.ts`, `types.ts`, `limits.ts`; không `index.ts`, không file có `server-only`. Thêm file client mới → sửa danh sách này cùng PR. *(Vitest `cart-ui.test.ts`, M4 Task 8)*
 - File chạm vào DB, secret hoặc cookie phải bắt đầu bằng `import 'server-only'`.
 - Ngoài `src/db`, truy vấn chỉ chạy qua `dbQuery` của `@/db`; `name` là hằng `<miền>.<việc>`, không chứa dữ liệu người dùng. `run` trả đúng một câu lệnh Drizzle; nhiều câu thì dùng `transaction` *(kiểu `DbStatement`, ADR-0013)*. Ngoài `src/db` chỉ import `@/db` (`src/db/index.ts`); `@/db` không export `db` thô; chỉ test được import `@/db/client`, `migrate`, `seed`, `seed-data`. *(dependency-cruiser `db-public-api-only`)* Chỉ `src/db` import driver (`postgres`, `@electric-sql/pglite`, `drizzle-orm/postgres-js`, `drizzle-orm/pglite`; cả `pg`, `@neondatabase/serverless` và adapter Drizzle của chúng nếu sau này cài), kể cả test. *(dependency-cruiser `db-drivers-stay-in-db`)* — [ADR-0011](./adr/0011-db-query-wrapper.md), [ADR-0013](./adr/0013-db-client-recycle.md).
 - Không fetch phía client (React Query, SWR, `useEffect` + `fetch`) cho dữ liệu lấy được ở server.

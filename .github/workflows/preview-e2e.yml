@@ -110,6 +110,12 @@ jobs:
         env:
           BASE_URL: ${{ steps.url.outputs.base_url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          # expect's diff puts ANSI codes inside a received string, and so possibly inside the secret, where GitHub's
+          # log masking no longer sees it (audit 2 PR #61 L-A). With colours off the runner strips every ANSI code from
+          # what it prints. Only the log: the workers always run with FORCE_COLOR=1, so the report keeps the codes and
+          # scripts/redact-report.mjs matches across them.
+          FORCE_COLOR: '0'
+          NO_COLOR: '1'
         # A trace records request headers, the bypass header included, and the report below embeds traces.
         # playwright.config.ts already turns tracing off while the bypass is on; e2e/test.ts fails a test that turns it
         # back on.

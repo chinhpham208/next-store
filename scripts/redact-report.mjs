@@ -8,6 +8,10 @@
 // Message đó nằm ở data/*.md và trong index.html, nơi report được nhúng dưới dạng zip nén rồi mã hoá base64, nên
 // sed trên file không thấy. Script mở mọi zip (file .zip và data:application/zip;base64 trong file text) và gzip, đệ
 // quy, rồi tìm secret ở dạng thô, JSON escape, URL encode, HTML escape và base64 / base64url (3 cách căn byte).
+// Mã màu ANSI chen giữa secret (diff của `expect` bôi đậm phần khác nhau: `\u001b[7m…\u001b[27m`, audit 2 PR #61 L-A)
+// không che được secret: mọi dạng trên còn được tìm trên văn bản đã bỏ mã ANSI, và khi che thì che cả đoạn, mã chen
+// giữa cũng mất. ESC được nhận ở dạng byte, JSON / JS escape (`\u001b`, `\x1b`, `\033`, mọi số dấu `\`), `^[` và
+// tham chiếu HTML.
 // `check` coi mọi zip / gzip không đọc được là lỗi: không chứng minh được sạch thì không upload.
 // Secret chỉ được đọc từ env và không bao giờ được in; output chỉ có đường dẫn file.
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
@@ -53,6 +57,70 @@ const replaceAll = (buffer, from, to) => {
   if (parts.length === 0) return buffer
   parts.push(buffer.subarray(start))
   return Buffer.concat(parts)
+}
+
+// One ANSI control sequence (CSI: ESC [ params final), with ESC in any of the encodings above.
+const ANSI = /(?:\x1b|\\+(?:u001[bB]|x1[bB]|033)|\^\[|&#(?:27|[xX]0*1[bB]);)\[[0-?]*[ -/]*[@-~]/g
+
+// The layer without its ANSI codes (latin1, so one char per byte), and a map from an index in it back to the layer.
+// undefined when the layer has none.
+const withoutAnsi = (layer) => {
+  const text = layer.toString('latin1')
+  const kept = [] // [index in the stripped text, index in the layer] where each kept run starts
+  let stripped = ''
+  let from = 0
+  for (const match of text.matchAll(ANSI)) {
+    kept.push([stripped.length, from])
+    stripped += text.slice(from, match.index)
+    from = match.index + match[0].length
+  }
+  if (kept.length === 0) return undefined
+  kept.push([stripped.length, from])
+  stripped += text.slice(from)
+  const toLayer = (index) => {
+    let low = 0
+    for (let high = kept.length - 1; low < high; ) {
+      const middle = (low + high + 1) >> 1
+      if (kept[middle][0] <= index) low = middle
+      else high = middle - 1
+    }
+    return kept[low][1] + index - kept[low][0]
+  }
+  return { stripped, toLayer }
+}
+
+// Masks each form also where ANSI codes cut it: the whole span, from its first byte to its last, codes included.
+const maskAcrossAnsi = (layer, forms) => {
+  const view = withoutAnsi(layer)
+  if (!view) return layer
+  const spans = []
+  for (const [form, mask] of forms) {
+    if (!mask) continue
+    const needle = form.toString('latin1')
+    for (let at = view.stripped.indexOf(needle); at !== -1; at = view.stripped.indexOf(needle, at + needle.length))
+      spans.push([view.toLayer(at), view.toLayer(at + needle.length - 1) + 1])
+  }
+  if (spans.length === 0) return layer
+  spans.sort((a, b) => a[0] - b[0])
+  const parts = []
+  let start = 0
+  for (const [from, to] of spans) {
+    if (from < start) {
+      // Overlapping spans (two forms of one secret) become one.
+      if (to > start) start = to
+      continue
+    }
+    parts.push(layer.subarray(start, from), Buffer.from(MASK))
+    start = to
+  }
+  parts.push(layer.subarray(start))
+  return Buffer.concat(parts)
+}
+
+const hasForm = (layer, forms) => {
+  if (forms.some(([form]) => layer.includes(form))) return true
+  const view = withoutAnsi(layer)
+  return view !== undefined && forms.some(([form]) => view.stripped.includes(form.toString('latin1')))
 }
 
 const isZip = (buffer) => buffer.length >= 4 && buffer.readUInt32LE(0) === 0x04034b50
@@ -167,7 +235,7 @@ export const redactBuffer = (buffer, forms, location = '') =>
   walk(buffer, location, (layer) => {
     let next = layer
     for (const [form, mask] of forms) if (mask) next = replaceAll(next, form, mask)
-    return next
+    return maskAcrossAnsi(next, forms)
   })
 
 // Locations (never the secret) where a form of it is left. A container that cannot be read counts as a finding.
@@ -175,7 +243,7 @@ export const findSecret = (buffer, forms, location = '') => {
   const found = []
   try {
     walk(buffer, location, (layer, where) => {
-      if (forms.some(([form]) => layer.includes(form))) found.push(where)
+      if (hasForm(layer, forms)) found.push(where)
       return layer
     })
   } catch (error) {
