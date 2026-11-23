@@ -119,8 +119,7 @@ export const holdNextAction = async (page: Page, baseURL: string | undefined): P
     answered = resolve
   })
   const matcher = (url: URL) => url.origin === origin
-  // The handler answers the held route itself and returns only then: Playwright treats a route whose handler has
-  // returned, or whose route was unrouted, as no longer the spec's to answer.
+  // The handler answers the held route itself and returns only then.
   const handler = async (route: Route) => {
     if (taken || !(await isActionPost(route.request()))) return route.fallback()
     taken = true
@@ -134,11 +133,13 @@ export const holdNextAction = async (page: Page, baseURL: string | undefined): P
   }
   await page.route(matcher, handler)
 
+  // The route stays registered (it hands every later request straight on): unrouting it while the released request
+  // is still in the bypass route's route.fetch makes Playwright also send that request natively, without the bypass
+  // header, so a preview got a second POST and answered it with Deployment Protection's 302.
   const settle = async (answer: (route: Route) => Promise<void>) => {
     await held
     decide(answer)
     await done
-    await page.unroute(matcher, handler)
   }
   return {
     request: held.then((route) => route.request()),
