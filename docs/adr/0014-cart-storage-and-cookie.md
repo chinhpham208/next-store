@@ -177,6 +177,7 @@ Câu trả lời của chủ dự án ở Cổng 1 (plan M4, mục "Cần chủ 
 - **(c) M6 đọc giỏ trong transaction tạo đơn.** Server Action thanh toán đọc `cart_items` + giá hiện tại trong cùng transaction tạo `orders`, chụp giá vào `orders.items` (`architecture.md` §5). Webhook xoá `cart_items` theo `cart_id` của đơn (không cần cookie). Giỏ không giữ hàng: hai người có thể cùng có món cuối trong giỏ; M6 xử lý bằng `needs_refund`. M6 chặn thanh toán khi còn dòng vượt tồn kho (mục 10).
 - **(d) Đường mở rộng khi có tài khoản khách hàng** (ghi chú C của quyết định 2, chỉ là văn bản). Thêm `carts.customer_id` nullable bằng một migration expand (cột nullable, index, khoá ngoại tới bảng khách hàng mới). Khi khách đăng nhập: giỏ của trình duyệt được gắn `customer_id`; nếu khách đã có giỏ cũ thì gộp từng dòng, số lượng cộng lại rồi kẹp theo `MAX_LINE_QUANTITY`, tồn kho và `MAX_CART_LINES`, xoá giỏ còn lại. Quy tắc gộp chi tiết là quyết định của chủ dự án khi làm tính năng đó, ADR mới.
 - **(e) Proxy bỏ qua POST** (bổ sung ADR-0009, nếu C3 đúng). Một POST tới slug sản phẩm lạ không còn nhận 404 từ proxy. Action vẫn tự kiểm sản phẩm (`not-found`), và POST không tạo entry route cache. Ca này được thêm vào `scripts/smoke.sh` (POST không có `next-action` tới `/products/khong-ton-tai` không trả 5xx). Task 7 ghi kết quả đo C3 vào mục này.
+  - *Bổ sung 2026-11-24 (NS-103, audit NS-96):* câu "POST không tạo entry route cache" chỉ đúng với POST có header `next-action`. POST không có header, `PUT`, `DELETE` được Next.js render như `GET` và ghi một entry route cache cho mỗi slug lạ, nên proxy giờ chỉ cho Server Action (`POST` + `next-action`) đi thẳng; mọi request khác kiểm slug như `GET` và nhận 404 với slug lạ. Ca smoke ở trên đổi thành: các request đó tới slug lạ trả 404 ngay lần đầu. Chi tiết và lý do không chọn 405: [ADR-0009](./0009-product-404-in-proxy.md), mục Hệ quả.
 - **Giá có thể đổi mà khách không được báo** (từ M5, khi admin sửa được giá). Muốn báo "Giá đã đổi" (4C) thì thêm cột giá chụp nullable ở M5: expand, không phải viết lại.
 - **Khách ẩn danh tạo được hàng trong DB.** Trần cấu trúc: mỗi giỏ tối đa 20 dòng × 10 cái; chỉ tạo giỏ khi lần thêm đầu thành công; dọn 50 giỏ hết hạn mỗi lần tạo giỏ mới. Trần theo thời gian là quy tắc WAF của [ADR-0015](./0015-edge-rate-limit.md). Task 11 tính trần tăng trưởng thật trên Neon Free (0,5 GB).
 - **CSRF.** Next.js từ chối Server Action có `Origin` lệch host (D4). Request không có `Origin` được cho qua, nhưng trình duyệt luôn gửi `Origin` cho POST khác site, và cookie `SameSite=Lax` không đi kèm POST khác site. Kẻ tấn công vì vậy chỉ ghi được giỏ của chính mình. Task 11 kiểm lại trên Dev.
@@ -184,3 +185,35 @@ Câu trả lời của chủ dự án ở Cổng 1 (plan M4, mục "Cần chủ 
 - **Không log dữ liệu giỏ.** Không `console.*` object lỗi, `cause`, SQL, host, id giỏ hay giá trị cookie; chỉ chuỗi cố định. Tên truy vấn là hằng `cart.<việc>`.
 - **`"use client"` mở rộng** ra đúng bốn file của `src/features/cart/components` (`cart-provider.tsx`, `cart-link.tsx`, `add-to-cart-form.tsx`, `cart-line-controls.tsx`), cộng `src/app/(shop)/error.tsx` đã có (`conventions.md` §2). Có test kiểm danh sách này (Task 8).
 - **Kiểm chứng:** Vitest và E2E liệt kê trong plan M4 (mục "Ánh xạ tiêu chí chấp nhận → test" và "Review Focus"); audit bảo mật Task 11 (cookie, Server Action, CSRF, input, giới hạn tốc độ). Kết quả C1–C4 được ghi vào PR của task kiểm, và vào mục này khi chúng đổi điều đã ghi.
+
+## Bổ sung (2026-11-24): trần tổng số giỏ, `updated_at` chỉ đổi khi ghi thành công (NS-104)
+
+Orchestrator quyết (chủ dự án giao Orchestrator các việc kỹ thuật). Ticket NS-104, bug Major của audit M4 (NS-96).
+
+**Bối cảnh.** Các trần ở mục 5A và 7A chỉ chặn kích thước **một** giỏ: 20 dòng, 10 cái mỗi dòng, lần thêm đầu bị từ chối thì không tạo giỏ. Số giỏ thì không có trần. Audit đo được 66 giỏ/giây từ một client, khoảng 234 byte mỗi giỏ. Không có WAF thì Neon Free (0,5 GB) đầy trong dưới 10 giờ. Có quy tắc WAF 60 request / 60 giây (ADR-0015), một IP vẫn làm đầy Neon sau khoảng 26 ngày, trước khi giỏ đầu tiên đủ 30 ngày để bị dọn.
+
+**Quyết định.**
+
+- **Trần `MAX_CARTS = 100_000`** trong `src/features/cart/limits.ts`, khoảng 23 MB.
+- **Đuổi giỏ cũ nhất, không chặn tạo giỏ.** Khi một action vừa tạo giỏ mới, sau bước dọn giỏ hết hạn (7A), nó chạy thêm **một** câu (`evictOldestCarts`, `dbQuery` tên `cart.evict`):
+
+  ```sql
+  DELETE FROM carts WHERE id IN (
+    SELECT id FROM carts
+    WHERE id <> $giỏ_vừa_tạo
+      AND EXISTS (SELECT 1 FROM carts OFFSET 99999 LIMIT 1)   -- đã có ≥ MAX_CARTS giỏ
+    ORDER BY updated_at ASC LIMIT 50)
+  ```
+
+  - Đủ `MAX_CARTS` giỏ (tính cả giỏ vừa tạo) thì xoá 50 giỏ có `updated_at` cũ nhất. `cart_items` đi theo `ON DELETE CASCADE`. Chưa đủ thì không xoá gì.
+  - Giỏ vừa tạo không bao giờ bị đuổi, kể cả khi đồng hồ của instance khác chạy nhanh hơn làm nó thành giỏ "cũ nhất".
+  - Lỗi của câu này bị nuốt như bước dọn, in một dòng cố định `cart: eviction of the oldest carts failed`. Bước dọn lỗi thì bước đuổi vẫn chạy, và ngược lại.
+- **Không đếm tổng.** `EXISTS (… OFFSET MAX_CARTS - 1 LIMIT 1)` là InitPlan chạy một lần. Nó dừng sau `MAX_CARTS` dòng dù bảng lớn tới đâu, rồi `carts_updated_at_idx` cho 50 giỏ cũ nhất. Đo trên PGlite (PR NS-104) ở khoảng 100 000 giỏ: 4–13 ms. `count(*)` tốn cùng cỡ đó nhưng quét hết bảng. Biến thể `OFFSET` theo `ORDER BY updated_at` (quét index ngược, phải đọc heap khi visibility map chưa đầy) chậm hơn, 7–24 ms. Dưới trần, chi phí chỉ là quét số giỏ đang có: khoảng 0,5 ms ở 1 000 giỏ.
+- **`updated_at` chỉ đổi khi ghi thành công.** Mục "Ghi bằng Server Action" ghi rằng transaction bắt đầu bằng `UPDATE carts SET updated_at … RETURNING id`. Từ bổ sung này, câu khoá là `SELECT id FROM carts WHERE <còn hạn> FOR UPDATE`. `UPDATE carts SET updated_at` chạy ở nhánh thành công, sau mọi kiểm. Thứ tự khoá không đổi: khoá hàng giỏ vẫn là câu đầu tiên, trước khi đọc dòng hay tồn kho. Lần thêm hoặc sửa bị từ chối không ghi gì, kể cả `updated_at`, đúng với việc nó cũng không đặt lại cookie (6A: `Max-Age` và `updated_at` cùng trượt). Xoá dòng luôn thành công (idempotent), nên luôn trượt.
+
+**Đánh đổi.**
+
+- Kẻ tấn công không khoá được khách thật: tạo giỏ không bao giờ bị từ chối vì trần. Tệ nhất là giỏ ít được ghi gần đây nhất bị mất trước 30 ngày. Với WAF (một IP khoảng 1 giỏ/giây), muốn đẩy giỏ của một khách ra thì phải tạo khoảng 100 000 giỏ sau lần ghi cuối của khách đó, tức hơn một ngày cho mỗi IP.
+- Ở trần, mỗi lần tạo giỏ thêm một câu quét tới 100 000 dòng. Chỉ lần tạo giỏ mới mới chịu, không phải mỗi request. Lúc tải bình thường bảng nhỏ nên câu này rẻ.
+- Bảng giữ trong khoảng `MAX_CARTS − 50` tới `MAX_CARTS`, cộng vài giỏ do các lần tạo chạy song song. Đây là trần mềm, không phải ràng buộc của DB.
+- Phương án bị loại: **chặn tạo giỏ khi đầy.** Rẻ hơn, nhưng kẻ tấn công làm đầy bảng là khách mới không thêm được gì vào giỏ. **Bảng đếm riêng.** O(1), nhưng cần migration, và mọi lần tạo hay xoá giỏ đều tranh nhau một hàng. **Ước lượng `pg_class.reltuples`.** Rẻ, nhưng chỉ đúng sau `ANALYZE`, và ở trần (lúc cần) thì vẫn phải quét.

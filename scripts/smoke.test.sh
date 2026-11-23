@@ -26,7 +26,8 @@ SOFT_OG_PORT=3186
 POST_SEG_PORT=3185
 FAIL_OPEN_PORT=3184
 MALFORMED_PORT=3183
-POST_5XX_PORT=3182
+NON_ACTION_PORT=3182
+NON_ACTION_5XX_PORT=3181
 
 TMP=$(mktemp -d)
 PIDS=()
@@ -49,7 +50,7 @@ EOF
 chmod +x "$TMP/bin/curl"
 
 # start_server <port> <header-file> [status] [404-body] [soft-regex] [hard-404-regex]: answers / and the smoke's
-# product page (and its RSC / segment prefetch forms) with the default SMOKE_TEXT, /blog and the smoke's post (and its
+# product page (and its RSC / segment prefetch forms) with the default SMOKE_TEXT, /cart with the empty cart, /blog and the smoke's post (and its
 # RSC / segment prefetch forms) with an article and its h1, the smoke's listing paths with the labelled grid (or with <status>, e.g. 401 like Vercel Deployment Protection), everything else with 404 and
 # <404-body> (default: the app's Vietnamese page). URLs matching <soft-regex> answer 200 with the not-found page, like
 # a page-level notFound() under Cache Components (K3) or a proxy that failed open; URLs matching <hard-404-regex>
@@ -57,7 +58,8 @@ chmod +x "$TMP/bin/curl"
 # answer like the app on <sitemap-origin> (default https://shop.example.test); <robots-tag>, when set, is sent as
 # X-Robots-Tag on every response; <robots-rule> (default `Allow: /`) is the rule line of robots.txt. The pages carry an
 # og:image on http://localhost:3000 (as under next start); its path answers <og-status> (default 200) with a PNG.
-# <post-status>, when set, answers every POST with that status (NS-92).
+# <non-get-status>, when set, answers every request that is not a GET with that status and the not-found page, like a
+# proxy that lets every non-GET through to a page rendered like a GET (NS-92, fixed by NS-103).
 start_server() {
   local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} postStatus=${11:-} ready="$TMP/ready-$1"
   node -e '
@@ -68,13 +70,15 @@ start_server() {
     require("node:http").createServer((req, res) => {
       fs.appendFileSync(headers, JSON.stringify(req.headers) + "\n")
       if (robotsTag) res.setHeader("x-robots-tag", robotsTag)
-      if (postStatus && req.method === "POST") { res.writeHead(Number(postStatus), { "content-type": "text/html" }); res.end("error"); return }
+      if (postStatus && req.method !== "GET") { res.writeHead(Number(postStatus), { "content-type": "text/html; charset=utf-8" }); res.end(body); return }
       const locs = ["/", "/products/ao-404-not-found", "/blog/chao-mung-den-next-store"]
       if (req.url === "/sitemap.xml") { res.writeHead(200, { "content-type": "application/xml" }); res.end(`<urlset>${locs.map((p) => `<url>\n<loc>${p === "/" ? "https://shop.example.test" : origin}${p}</loc>\n</url>`).join("\n")}</urlset>`); return }
       if (req.url === "/robots.txt") { res.writeHead(200, { "content-type": "text/plain" }); res.end(`User-Agent: *\n${robotsRule}\n\nSitemap: https://shop.example.test/sitemap.xml\n`); return }
       if (images.includes(req.url)) { res.writeHead(Number(ogStatus), { "content-type": Number(ogStatus) === 200 ? "image/png" : "text/html" }); res.end("png"); return }
       if (hard && new RegExp(hard).test(req.url)) { res.writeHead(404, { "content-type": "text/html; charset=utf-8", "x-middleware-rewrite": "/_khong-tim-thay" }); res.end(body) }
-      else if (req.url === "/" || ["/products/ao-404-not-found", "/products/ao-404-not-found?_rsc", "/products/ao-404-not-found.rsc", "/products/ao-404-not-found.segments/_tree.segment.rsc"].includes(req.url)) { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end(`<meta property="og:site_name" content="next-store"/>${og(req.url === "/" ? images[0] : images[1])}<h1>Áo thun 404 Not Found</h1>`) }
+      else if (req.url === "/" || ["/products/ao-404-not-found", "/products/ao-404-not-found?_rsc", "/products/ao-404-not-found.rsc", "/products/ao-404-not-found.segments/_tree.segment.rsc"].includes(req.url)) { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end(`<meta property="og:site_name" content="next-store"/>${og(req.url === "/" ? images[0] : images[1])}<h1>Áo thun 404 Not Found</h1><button type="submit" class="x disabled:x">Thêm vào giỏ</button>`) }
+      else if (req.url === "/cart") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<meta name=\"robots\" content=\"noindex\"/><h1>Giỏ hàng</h1><p>Giỏ hàng trống.</p>") }
+      else if (req.url === "/products/ao-tabs-vs-spaces") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<h1>Áo thun Tabs vs Spaces</h1><button type=\"button\" class=\"x\" disabled=\"\">Thêm vào giỏ</button>") }
       else if (["/blog", "/blog/chao-mung-den-next-store", "/blog/chao-mung-den-next-store?_rsc", "/blog/chao-mung-den-next-store.rsc", "/blog/chao-mung-den-next-store.segments/_tree.segment.rsc"].includes(req.url)) { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end(`${og(images[2])}<article><h1>Chào mừng đến next-store</h1></article>`) }
       else if (req.url === "/products" || req.url === "/products?page=abc&sort=xyz") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<ul aria-label=\"Danh sách sản phẩm\"></ul>") }
       else if (soft && new RegExp(soft).test(req.url)) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
@@ -301,27 +305,51 @@ grep -qE '^::warning::smoke: 3 slug lạ warm-up đều trả 200, lần cuối 
   fail product-fail-open-warn "thiếu ::warning:: của warm-up"
 for label in 'slug cố định của US-05' 'slug mới' 'request RSC' 'hậu tố .rsc' 'segment prefetch dạng đường dẫn' \
   'segment prefetch dạng đường dẫn, không header' 'ảnh OG: slug sản phẩm lạ' 'ảnh OG: slug sản phẩm lạ, không hậu tố băm' \
-  'GET sau POST cùng slug'; do
-  grep -qE "^::warning::smoke: GET /products/[^ ]+ \\($label\\) trả 200 sau [0-9]+ ms" "$TMP/out" ||
+  'GET sau POST cùng slug' 'POST không có next-action' 'PUT'; do
+  grep -qE "^::warning::smoke: (GET|POST|PUT) /products/[^ ]+ \\($label\\) trả 200 sau [0-9]+ ms" "$TMP/out" ||
     fail product-fail-open-warn "thiếu ::warning:: có thời gian cho \"$label\""
 done
-[ "$(grep -c '^::warning::smoke: .*SMOKE_PRODUCT_FAIL_OPEN=warn' "$TMP/out")" = 10 ] || fail product-fail-open-warn "cần đúng 10 cảnh báo fail-open"
+[ "$(grep -c '^::warning::smoke: .*SMOKE_PRODUCT_FAIL_OPEN=warn' "$TMP/out")" = 12 ] || fail product-fail-open-warn "cần đúng 12 cảnh báo fail-open"
 grep -qF '(%2D) → 404' "$TMP/out" || fail product-fail-open-warn "ca %2D không còn được kiểm 404"
 grep -qF '(chữ hoa) → 404' "$TMP/out" || fail product-fail-open-warn "ca chữ hoa không còn được kiểm 404"
+grep -qE '^::warning::smoke: POST /products/khong-ton-tai-post-[^ ]+ \(POST không có next-action\) trả 200' "$TMP/out" ||
+  fail product-fail-open-warn "POST không next-action tới slug sản phẩm lạ không đi qua cờ fail-open"
+for label in 'POST không có next-action, chữ hoa' 'bài: POST không có next-action' 'bài: DELETE'; do
+  grep -qF "($label) → 404" "$TMP/out" || fail product-fail-open-warn "ca \"$label\" không còn được kiểm 404"
+done
 run BASE_URL="http://127.0.0.1:$FAIL_OPEN_PORT" -- bash scripts/smoke.sh
 [ "$CODE" = 1 ] || fail product-fail-open-warn "không cờ: thoát $CODE, cần 1"
 grep -qF 'hơn 2 slug fail-open' "$TMP/out" || fail product-fail-open-warn "không cờ: thiếu lỗi warm-up"
 ! grep -q 'SMOKE_PRODUCT_FAIL_OPEN=warn' "$TMP/out" || fail product-fail-open-warn "không cờ mà vẫn cảnh báo"
 echo "ok product-fail-open-warn"
 
-# post-5xx (NS-92): the proxy no longer checks the slug of a POST, so a POST to an unknown product reaches the page;
-# a 5xx there fails smoke.
-start_server "$POST_5XX_PORT" "$TMP/post-5xx-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 500
-run BASE_URL="http://127.0.0.1:$POST_5XX_PORT" -- bash scripts/smoke.sh
-[ "$CODE" = 1 ] || fail post-5xx "thoát $CODE, cần 1"
-grep -qE 'POST /products/khong-ton-tai-post-[^ ]+ \(không có next-action\) trả 500, không được 5xx' "$TMP/out" ||
-  fail post-5xx "thông báo không nêu POST trả 500"
-echo "ok post-5xx"
+# non-action-200 (NS-103): a proxy that lets every non-GET through (the NS-92 behaviour) answers 200 to a POST without
+# next-action, a PUT or a DELETE to an unknown slug; smoke fails, even with SMOKE_PRODUCT_FAIL_OPEN=warn, because the
+# malformed product slug and the blog slugs never reach the database. GET to the same paths is still 404.
+start_server "$NON_ACTION_PORT" "$TMP/non-action-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 200
+for flag in '' warn; do
+  run BASE_URL="http://127.0.0.1:$NON_ACTION_PORT" SMOKE_PRODUCT_FAIL_OPEN="$flag" -- bash scripts/smoke.sh
+  [ "$CODE" = 1 ] || fail non-action-200 "cờ '$flag': thoát $CODE, cần 1"
+  for line in 'POST /products/KHONG-TON-TAI-POST-[^ ]+ \(POST không có next-action, chữ hoa\) trả 200 ngay lần đầu, cần 404' \
+    'POST /blog/khong-ton-tai-post-[^ ]+ \(bài: POST không có next-action\) trả 200 ngay lần đầu, cần 404' \
+    'DELETE /blog/khong-ton-tai-delete-[^ ]+ \(bài: DELETE\) trả 200 ngay lần đầu, cần 404' \
+    'request không phải Server Action tới slug lạ không trả 404'; do
+    grep -qE "$line" "$TMP/out" || fail non-action-200 "cờ '$flag': thiếu dòng: $line"
+  done
+done
+grep -qE 'GET /products/khong-ton-tai-post-[^ ]+ \(GET sau POST cùng slug\) → 404' "$TMP/out" ||
+  fail non-action-200 "GET sau POST không còn được kiểm"
+grep -qF -- "-X POST --data smoke=1" "$TMP/curl-calls" || fail non-action-200 "POST không gửi body cố định"
+! grep -qi 'next-action' "$TMP/curl-calls" "$TMP/non-action-headers" || fail non-action-200 "smoke gửi next-action"
+echo "ok non-action-200"
+
+# non-action-5xx: a 5xx to a request that is not a Server Action fails smoke with the method in the message.
+start_server "$NON_ACTION_5XX_PORT" "$TMP/non-action-5xx-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 500
+run BASE_URL="http://127.0.0.1:$NON_ACTION_5XX_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail non-action-5xx "thoát $CODE, cần 1"
+grep -qE 'PUT /products/khong-ton-tai-put-[^ ]+ \(PUT\) trả 500 ngay lần đầu, cần 404' "$TMP/out" ||
+  fail non-action-5xx "thông báo không nêu PUT trả 500"
+echo "ok non-action-5xx"
 
 # product-fail-open-warn-single: warm-up fine, only one later product case fails open → warning with the flag, failure
 # without (the existing soft-404 case with the flag added).

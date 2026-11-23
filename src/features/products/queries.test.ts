@@ -1,6 +1,6 @@
 import { cacheLife, cacheTag } from 'next/cache'
 import { eq } from 'drizzle-orm'
-import { beforeAll, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { products } from '@/db'
 import { db } from '@/db/client'
 import { runMigrations } from '@/db/migrate'
@@ -91,4 +91,29 @@ it('leaves out a row whose slug is not a valid product slug', async () => {
   } finally {
     await db.update(products).set({ slug: first.slug }).where(eq(products.slug, 'Bad <slug>&'))
   }
+})
+
+// NS-105: a 'use cache' function is also a Server Function, so anyone can call it with a limit of their choice. The
+// limit is part of the cache key: only 1..8 is accepted, checked before the query (a fill that throws is not stored).
+// Reflect.apply bypasses the static type, as an action request does.
+describe('getFeaturedProducts called with arguments the page never passes (NS-105)', () => {
+  it.each([0, -1, 9, 1000, 0.5, Number.NaN, '3', null, [3], { valueOf: () => 3 }])(
+    'refuses limit=%j before querying or tagging',
+    async (limit) => {
+      vi.mocked(cacheTag).mockClear()
+      const select = vi.spyOn(db, 'select')
+      await expect(Reflect.apply(getFeaturedProducts, undefined, [limit])).rejects.toThrow(
+        /^invalid arguments for cached products\.featured$/,
+      )
+      expect(select).not.toHaveBeenCalled()
+      expect(cacheTag).not.toHaveBeenCalled()
+      select.mockRestore()
+    },
+  )
+  it('still accepts every limit from 1 to 8 and the default', async () => {
+    await seed()
+    expect(await getFeaturedProducts(1)).toHaveLength(1)
+    expect(await getFeaturedProducts(8)).toHaveLength(6)
+    expect(await Reflect.apply(getFeaturedProducts, undefined, [undefined])).toHaveLength(6)
+  })
 })

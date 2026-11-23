@@ -5,7 +5,7 @@ Cửa hàng online đồ dùng cho lập trình viên (áo thun, cốc, sticker,
 - Production: https://next-store-iota-silk.vercel.app
 - Dev (nhánh `develop`): https://next-store-dev-ginpham.vercel.app
 
-Tài liệu: [`docs/design.md`](./docs/design.md), [`docs/architecture.md`](./docs/architecture.md), [`docs/conventions.md`](./docs/conventions.md), [`docs/process.md`](./docs/process.md).
+Tài liệu: bắt đầu từ [`docs/overview.md`](./docs/overview.md) (sơ đồ toàn cảnh hạ tầng và quy trình), rồi [`docs/design.md`](./docs/design.md), [`docs/architecture.md`](./docs/architecture.md), [`docs/conventions.md`](./docs/conventions.md), [`docs/process.md`](./docs/process.md).
 
 ## Chạy ở máy
 
@@ -129,7 +129,7 @@ gh api repos/chinhpham208/next-store/commits/<sha>/check-runs \
 
 ### Sau release: workflow `Production E2E`
 
-Workflow `Production E2E` (`.github/workflows/production-e2e.yml`, M3 Task 17) chạy smoke (`SMOKE_ROBOTS=allow`: Production phải `Allow: /`; `SMOKE_PRODUCT_FAIL_OPEN=warn`: slug sản phẩm lạ fail-open chỉ cảnh báo, NS-79) rồi toàn bộ E2E trên `https://next-store-iota-silk.vercel.app`:
+Workflow `Production E2E` (`.github/workflows/production-e2e.yml`, M3 Task 17) chạy smoke (`SMOKE_ROBOTS=allow`: Production phải `Allow: /`; `SMOKE_PRODUCT_FAIL_OPEN=warn`: slug sản phẩm lạ fail-open chỉ cảnh báo, NS-79) rồi toàn bộ E2E trên `https://next-store-iota-silk.vercel.app`. Bước E2E đặt cùng cờ: slug sản phẩm lạ đúng dạng (trang, RSC, `.rsc`, segment, ảnh OG) trả 200 thì test thêm annotation `warning` kèm thời gian thay vì đỏ (`e2e/product-fail-open.ts`, NS-100); cờ chỉ có tác dụng khi `BASE_URL` là Production, các ca không chạm DB vẫn phải 404:
 
 - Tự chạy khi Vercel báo một deployment thành công có environment đúng bằng `Production` (deployment và status đều do `vercel[bot]` tạo). Vercel gửi `ref` là SHA của commit, không phải tên nhánh, nên workflow kiểm commit đã deploy nằm trên nhánh `production` (`git merge-base --is-ancestor`, NS-78); test lấy từ commit đó. Bản preview được "Promote to Production" hay `vercel --prod` từ nhánh khác làm job đỏ ở bước kiểm này; khi đó dispatch tay. Sau release không thấy lần chạy nào (ví dụ Vercel đổi tên environment) cũng dispatch tay. Chạy tay: `gh api -X POST repos/chinhpham208/next-store/actions/workflows/production-e2e.yml/dispatches -f ref=production` (test lấy từ nhánh `production`).
 - URL ghi cứng trong workflow và `e2e/production.ts`, không lấy từ sự kiện. Không dùng secret nào (Production là domain custom, không có Deployment Protection, nên không gửi header bypass), không `DATABASE_URL`, không `npm run build`, không lệnh `db:*`.

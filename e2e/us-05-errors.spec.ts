@@ -4,6 +4,7 @@ import { expect, test } from './test'
 import { BROKEN_DB_LOG, BROKEN_DB_URL, HUNG_DB_LOG, HUNG_DB_URL } from '../playwright.config'
 import { expectNoSeriousA11yViolations } from './axe'
 import { VIEWPORT_INDEPENDENT } from './catalog'
+import { getUnknownProduct } from './product-fail-open'
 
 const NOT_FOUND_TITLE = 'Không tìm thấy trang · next-store'
 const PRERENDERED_SLUG = 'ao-git-push-force'
@@ -71,9 +72,10 @@ test('US-05: trang 404 không có lỗi a11y serious / critical', async ({ page 
 test.describe('HTTP', () => {
   test.skip(({ isMobile }) => isMobile, VIEWPORT_INDEPENDENT)
 
+  // On Production a fail-open (200) of the lookup is only a warning (NS-79, e2e/product-fail-open.ts).
   test('US-05: slug chưa từng được mở vẫn trả 404 ngay lần đầu', async ({ request }) => {
-    const response = await request.get(`/products/${freshSlug()}`)
-    expect(response.status()).toBe(404)
+    const response = await getUnknownProduct(request, `/products/${freshSlug()}`)
+    if (!response) return
     const html = await response.text()
     expect(html.match(/<title>[^<]*<\/title>/g)).toEqual([`<title>${NOT_FOUND_TITLE}</title>`])
     expect(html).toContain('Xem tất cả sản phẩm')
@@ -90,8 +92,7 @@ test.describe('HTTP', () => {
     ['segment prefetch', '.segments/_tree.segment.rsc', { RSC: '1' }, false],
   ] as const) {
     test(`US-05: dạng vận chuyển ${form} của slug lạ trả 404 ngay lần đầu`, async ({ request }) => {
-      const unknown = await request.get(`/products/${freshSlug()}${suffix}`, { headers })
-      expect(unknown.status()).toBe(404)
+      await getUnknownProduct(request, `/products/${freshSlug()}${suffix}`, { headers })
       if (!knownServes) return
       const known = await request.get(`/products/${PRERENDERED_SLUG}${suffix}`, { headers })
       expect(known.status(), 'slug có thật').toBe(200)
@@ -133,6 +134,20 @@ test.describe('DB không đọc được', () => {
     const response = await page.goto(`${BROKEN_DB_URL}/products/${PRERENDERED_SLUG}`)
     expect(response?.status()).toBe(200)
     await expect(page.getByRole('heading', { level: 1 })).toHaveText(PRERENDERED_NAME)
+  })
+
+  // M4 decision 9: the cart icon is a dynamic hole of its own; with a cart cookie it reads the database, and that read
+  // failing must only cost the number, never the page (Review Focus 4). Any well-formed UUID v4 makes it query.
+  test('US-05: DB chết, có cookie giỏ: trang sản phẩm vẫn mở, biểu tượng giỏ không có số', async ({ page, context }) => {
+    await context.addCookies([{ name: 'ns_cart', value: crypto.randomUUID(), url: BROKEN_DB_URL }])
+    const response = await page.goto(`${BROKEN_DB_URL}/products/${PRERENDERED_SLUG}`)
+    expect(response?.status()).toBe(200)
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText(PRERENDERED_NAME)
+    const cartLink = page.getByRole('navigation', { name: 'Chính' }).getByRole('link', { name: /^Giỏ hàng/ })
+    await expect(cartLink).toHaveAccessibleName('Giỏ hàng')
+    await expect(page.getByRole('button', { name: 'Thêm vào giỏ' })).toBeEnabled()
+    await expect(page.getByRole('heading', { level: 1, name: 'Đã có lỗi xảy ra' })).toHaveCount(0)
+    expectCleanLog(BROKEN_DB_LOG, 'cart: cart count unavailable')
   })
 
   test('US-05: DB chết thì slug lạ hiện trang lỗi, không treo', async ({ page }) => {

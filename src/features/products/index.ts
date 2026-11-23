@@ -9,6 +9,7 @@ export {
 } from '@/features/products/queries'
 export { getProductMetadata } from '@/features/products/metadata'
 export { isKnownProductSlug } from '@/features/products/slug-guard'
+export { renderProductName } from '@/features/products/components/product-name'
 export { ProductGrid, type ProductGridProps } from '@/features/products/components/product-grid'
 export {
   ProductCatalog,
@@ -23,6 +24,7 @@ export {
   ProductDetailView,
   type ProductDetailSectionProps,
   type ProductDetailViewProps,
+  type ProductPurchase,
 } from '@/features/products/components/product-detail'
 export type { CategoryOption, ProductDetail, ProductListing, ProductSummary } from '@/features/products/types'
 export {

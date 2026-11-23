@@ -63,14 +63,19 @@ const answerProduct = async (request: NextRequest, slug: string | undefined): Pr
   }
 }
 
-// Only GET and HEAD read a page. A Server Action is a POST to the page that renders it and the matcher cannot filter by
-// method, so without this every action on /products/<slug> waited for the slug lookup (measured on `next start`, M4
-// C3, NS-92). Nothing else is served for an unknown slug: the action checks the product itself, and a route has no
-// handler for PUT, PATCH, DELETE (M4 decision 11, ADR-0009).
-const READS_A_PAGE = new Set(['GET', 'HEAD'])
+// A Server Action is a POST to the page that renders it and the matcher cannot filter by method, so without this every
+// action on /products/<slug> waited for the slug lookup (measured on `next start`, M4 C3, NS-92). Next.js 16.4.6 knows
+// a fetch action by this header on a POST (client/components/app-router-headers.js ACTION_HEADER, read in
+// server/lib/server-action-request-meta.js) and answers it before render; the action checks the product itself.
+// Any other request is rendered like a GET, whatever its method, so it gets the same slug check: passing every
+// non-GET through let PUT, DELETE or a plain POST leave a 200 and a new route cache entry for any path (NS-103).
+// Headers.has ignores case, like Next.js's own read. A form posted before hydration (no header) would also be an
+// action to Next.js; no form here posts without JavaScript (ADR-0014).
+const ACTION_HEADER = 'next-action'
+const isServerAction = (request: NextRequest) => request.method === 'POST' && request.headers.has(ACTION_HEADER)
 
 export const proxy = async (request: NextRequest): Promise<NextResponse> => {
-  if (!READS_A_PAGE.has(request.method)) return NextResponse.next()
+  if (isServerAction(request)) return NextResponse.next()
   const [, section, slug] = SLUG_PATH.exec(request.nextUrl.pathname) ?? []
   if (section === 'products') return answerProduct(request, slug)
   // Blog: posts only change with a deploy, so the static registry is the whole truth (ADR-0012). No query, no

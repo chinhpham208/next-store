@@ -3,6 +3,7 @@ import type { AddressInfo } from 'node:net'
 import { gzipSync } from 'node:zlib'
 import type { APIRequestContext, BrowserContext, Page } from '@playwright/test'
 import { BYPASS_HEADER, bypassFor } from './bypass'
+import { holdNextAction } from './cart'
 import { VIEWPORT_INDEPENDENT } from './catalog'
 import { PRODUCTION_ORIGINS } from './production'
 import { expect, READ_ONLY_MESSAGE, test } from './test'
@@ -85,8 +86,14 @@ test.beforeEach(async ({ context }) => {
 // The fixtures of e2e/test.ts with the bypass pointed at `base` (set up before the test, after beforeAll). With a
 // bypass set, the fixtures fail any test that records a trace; this secret is fake and the servers local, but the
 // rule has no exception, so tracing is turned off here.
+//
+// baseURL is `base` too: every URL here is absolute, so it only decides whether the fixtures run in Production mode.
+// With BASE_URL set to Production they would, and refuse the POST of the redirect test although it goes to a local
+// server (NS-100). The write guard itself is untouched: the group "cùng bộ chặn ghi của Production" sets the
+// Production baseURL back and checks it (as e2e/production-guard.spec.ts does).
 test.use({
   vercelBypass: async ({}, provide) => provide({ origin: new URL(base).origin, secret: SECRET }),
+  baseURL: async ({}, provide) => provide(base),
   trace: 'off',
 })
 
@@ -183,6 +190,25 @@ test.describe('request của trình duyệt', () => {
     await page.goto(`${base}/gzip`)
     await expect(page.getByText('nội dung nén')).toBeVisible()
     expect(withHeader()).toEqual(['base GET /gzip'])
+  })
+
+  // NS-97: holdNextAction (e2e/cart.ts) hands a held Server Action POST back with route.fallback(). It must reach the
+  // server once, through the bypass route: unrouting too early also sent it natively, without the header (a preview
+  // answered that copy with Deployment Protection's 302).
+  test('POST action bị holdNextAction giữ rồi thả chỉ tới server một lần, có header', async ({ page, baseURL }) => {
+    await page.goto(`${base}/page`)
+    received.length = 0
+    const held = await holdNextAction(page, baseURL)
+    const sent = page.evaluate(
+      (url) => fetch(url, { method: 'POST', headers: { 'next-action': 'thu' }, body: 'x' }).then((r) => r.status),
+      `${base}/action`,
+    )
+    await held.request
+    expect(counted()).toEqual([])
+    await held.release()
+    expect(await sent).toBe(200)
+    expect(withHeader()).toEqual(['base POST /action'])
+    expect(withoutHeader()).toEqual([])
   })
 
   test('newContext có cùng cách gắn header', async ({ newContext }) => {

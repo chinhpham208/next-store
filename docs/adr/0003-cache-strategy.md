@@ -1,6 +1,7 @@
 # ADR-0003: Chiến lược cache bằng Cache Components
 
 - Trạng thái: Đã chấp nhận; bổ sung bởi [ADR-0014](./0014-cart-storage-and-cookie.md) (header của mọi trang `(shop)` có lỗ động biểu tượng giỏ; blog không còn "tĩnh hoàn toàn")
+- Bổ sung (2026-11-24, NS-105): mỗi hàm `"use cache"` cũng là một Server Function: client gọi thẳng được bằng action id với đối số tuỳ ý (đối số là khoá cache). Hàm có tham số phải tự kiểm đối số trước khi `cacheTag` / truy vấn: sai dạng thì ném lỗi cố định, đúng dạng mà không có thật (slug, danh mục, trang) thì trả rỗng với `cacheLife` expire 0 để không lưu entry. `getFeaturedProducts` chỉ nhận `limit` 1..8; `product:<slug>` chỉ lưu cho slug có thật. Xem [ADR-0008](./0008-listing-cache-keys.md), `conventions.md` §2.
 - Ngày: 2026-11-19
 
 ## Bối cảnh

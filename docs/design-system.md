@@ -5,6 +5,7 @@ Nguồn: Designer, ticket NS-24 — **chủ dự án duyệt 2026-11-19**. Bản
 - Màn hình trang chủ (390 / 1280 px, sáng / tối / trống): https://claude.ai/artifact/Tjc6tnwX3q96CPSxDk2c2r
 - Màn hình M2 (danh sách, chi tiết, 404, lỗi; 390 / 1280 px, sáng / tối) và đặc tả component M2: https://claude.ai/artifact/MzW3An6ebYKxUjEMT7tuEU — **chủ dự án duyệt 2026-11-20** (Cổng 2, NS-46)
 - Màn hình M3 (blog, bài viết, "Bài viết mới" trên trang chủ, header có "Blog"; 390 / 1280 px, sáng / tối), ảnh Open Graph và nội dung 4 bài: https://claude.ai/artifact/N5Gkua8mA1whwo5PxeHfcX — **chủ dự án duyệt 2026-11-22** (Cổng 2, Task 6 M3)
+- Màn hình M4 (biểu tượng giỏ trên header, nút "Thêm vào giỏ", trang `/cart`; 390 / 1280 px, sáng / tối) và đặc tả component M4: https://claude.ai/artifact/XUBrrWUoY6vpLG1mSaVXMk — **chủ dự án duyệt 2026-11-23** (Cổng 2, Task 2 M4)
 
 Brand gốc: bộ nhận diện **Gin Pham — Smile G** (Ink #0C0F12, Deep Cyan #08959A, Signal Cyan #2EE6EA, Paper #E8EEF0, Slate; font Lexend). File này là bản chép để code đọc; khi lệch nhau, artifact là bản gốc.
 
@@ -68,6 +69,9 @@ Bổ sung M2, cặp mới (sáng / tối): chữ background trên muted-foregrou
 Bổ sung M3, cặp mới (sáng / tối): chữ trong code trong dòng (foreground trên surface-muted) 16,45 / 12,08; chữ trong khối code (foreground trên surface) 19,22 / 14,53; ngày, mô tả, trích dẫn (muted trên background) 6,98 / 7,45; link trong bài (link trên background) 4,79 / 5,29. Không phải chữ: vạch trích dẫn border-strong trên background 4,44 / 4,04; vòng focus của khối code (ring trên background) 4,79 / 5,29. Ảnh Open Graph (một theme, dải đảo): inverse-foreground trên inverse 16,40; inverse-muted trên inverse 7,45; khối con trỏ inverse-accent trên inverse 12,47.
 Link trong bài **chỉ** đặt trên `background` (thân bài không có nền riêng). Không đặt link trong khối code hay trong trích dẫn có nền.
 
+Bổ sung M4, cặp mới (sáng / tối), đo bằng công thức WCAG 2.2: thông báo lỗi (danger trên background) 5,75 / 8,04; số trên biểu tượng giỏ và Badge (background trên foreground) 17,98 / 16,40; số khi đang chờ (foreground trên background) 17,98 / 16,40; số trong ô số lượng (foreground trên surface) 19,22 / 14,53; "Đơn giá", "Đang cập nhật…" (muted trên background) 6,98 / 7,45; link "Xem giỏ hàng" (link trên background) 4,79 / 5,29; nút vô hiệu (muted trên surface-muted) 6,38 / 5,49. Không phải chữ: viền ô số lượng (border-strong) trên background 4,44 / 4,04, trên surface 4,75 / 3,58; focus ring vẽ vào trong ô số (ring trên surface) 5,13 / 4,68; ring trên surface-muted (nút "Xem sản phẩm" trong giỏ trống, nút − / + khi hover) 4,39 / 3,89; khối con trỏ trên surface-muted 3,11 / 9,19.
+`danger` chỉ dùng cho chữ lỗi vừa xảy ra (`role="alert"`) và ô vuông 8 px đi kèm; không dùng cho tồn kho thấp hay hết hàng.
+
 ## 2. Component
 
 - **Container:** `mx-auto w-full max-w-container-page px-4 md:px-6 lg:px-8`.
@@ -84,7 +88,7 @@ Link trong bài **chỉ** đặt trên `background` (thân bài không có nền
   - Link trong h3 → `/products/<slug>`: `after:absolute after:inset-0 after:rounded-md underline-offset-4 hover:underline focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-offset-4 focus-visible:after:outline-ring`. Vùng bấm = cả thẻ; focus ring bao cả thẻ. Hết hàng vẫn là link.
   - Giá: `mt-auto pt-1 md:pt-2`; hết hàng → `text-muted-foreground`.
 - **Lưới:** `ul` có `aria-label` (trang chủ "Sản phẩm nổi bật", danh sách "Danh sách sản phẩm"), `grid grid-cols-2 gap-x-4 gap-y-10 md:grid-cols-3 md:gap-x-8 md:gap-y-16`.
-- **Header:** `border-b border-border h-16` (không nền riêng), chứa Container `flex h-full items-center justify-between gap-4`. Bên trái link logo chữ: `min-h-11 text-2xl/7 font-bold tracking-tight` + `.cursor-block` tĩnh. Bên phải `nav aria-label="Chính"` `-mr-2 flex` gồm hai link theo thứ tự "Sản phẩm" → `/products`, "Blog" → `/blog` (M3), mỗi link `inline-flex min-h-11 items-center px-2 font-medium underline-offset-8 hover:underline` (khoảng chữ–chữ 16 px; `-mr-2` của nav giữ chữ "Blog" thẳng mép container). Ở 390 px (đo bằng metric Lexend): logo + con trỏ ~141 px, hai link kể cả padding ~148 px, còn trống ~70 px giữa hai nhóm; không xuống dòng. Không đánh dấu trang hiện tại (`aria-current`): header là Server Component dùng chung, không biết đường dẫn nếu không thêm Client Component, mà M2 chỉ cho `"use client"` ở `error.tsx` — Orchestrator bỏ yêu cầu này (quyết định ghi trên NS-50); trang `/products` đã có h1 "Sản phẩm".
+- **Header:** `border-b border-border h-16` (không nền riêng), chứa Container `flex h-full items-center justify-between gap-4`. Bên trái link logo chữ: `min-h-11 text-2xl/7 font-bold tracking-tight` + `.cursor-block` tĩnh. Bên phải `nav aria-label="Chính"` `-mr-2 flex` gồm, theo thứ tự: "Sản phẩm" → `/products`, "Blog" → `/blog`, rồi slot `cart` (M4, link giỏ, xem Component M4). Hai link chữ: `inline-flex min-h-11 items-center px-2 font-medium underline-offset-8 hover:underline`. `-mr-2` của nav giữ biểu tượng giỏ thẳng mép container. Ở 390 px (đo trên khung thật): khoảng trống giữa logo và nav còn 40 px khi không có số, 20 px với số một chữ số, 16 px với "99+"; không xuống dòng. **Chỉnh ở M4 Task 8 (Orchestrator quyết, 2026-11-23), dưới `sm`:** logo `text-lg/7` (từ `sm:` trở lên `text-2xl/7` như cũ), Container header `gap-2 sm:gap-4`, nav `-mr-1 sm:-mr-2`, hai link chữ `min-w-11 justify-center px-1 sm:px-2`, link giỏ `px-1 sm:px-2`. Lý do: đo trên build thật (Chrome, Lexend đã tải) ở 390 px, bản hand-off chỉ còn 34 px trống khi không có số và **xuống dòng** khi có "1" hay "99+" (logo 140,4 px, "Sản phẩm" 80, "Blog" 35,6, badge "1" 20, "99+" 31,7). Sau khi chỉnh: một dòng ở mọi trường hợp từ 360 px trở lên (khoảng trống logo–nav ở 360 px: 49 / 37 / 25 px với không số / "1" / "99+"); ở 320 px chỉ vừa khít khi không có số (dư khoảng 1 px, Chromium của CI đã xuống dòng) và xuống dòng khi có số, nhưng không cuộn ngang và vùng chạm vẫn ≥ 44 px (320 px là mức tối thiểu; "99+" ở 320 px không thể vừa một dòng nếu giữ vùng chạm 44 px và logo ≥ `text-lg`). Không token mới. Không đánh dấu trang hiện tại (`aria-current`): header là Server Component dùng chung, không biết đường dẫn nếu không thêm Client Component, mà M2 chỉ cho `"use client"` ở `error.tsx` — Orchestrator bỏ yêu cầu này (quyết định ghi trên NS-50); trang `/products` đã có h1 "Sản phẩm".
 - **Hero:** `pt-14 pb-12 md:pt-28 md:pb-24 gap-6 md:gap-8`; eyebrow "Áo thun · Cốc · Sticker · Sách" (`text-xs uppercase tracking-label text-muted-foreground`); h1 `.hero-title text-5xl md:text-8xl font-bold tracking-tight text-balance` "Đồ dùng cho dân code." + `.cursor-block` nhấp nháy (`motion-reduce` tắt); lead `text-lg md:text-xl text-muted-foreground`.
 - **Section nổi bật:** `border-t border-border pt-10 md:pt-16`; h2 "Sản phẩm nổi bật" `text-2xl md:text-3xl font-bold tracking-tight`. (M2) Dưới lưới: link "Xem tất cả sản phẩm" → `/products`, `buttonVariants({ variant: 'secondary', className: 'w-full md:w-auto' })`.
 - **Empty state:** `rounded-md bg-surface-muted px-6 py-10 md:p-16`, `.cursor-block` tĩnh 32 px, tiêu đề `text-xl md:text-2xl font-semibold` + một dòng phụ `text-muted-foreground`. Không dùng link chữ bên trong (`text-link` trên `surface-muted` chỉ 4,39 / 3,89:1); hành động nếu có là Button.
@@ -175,6 +179,88 @@ Link trong bài **chỉ** đặt trên `background` (thân bài không có nền
   Tiêu đề trong bài không có `id` / anchor (không có mục lục — ngoài phạm vi M3).
 
   Quy tắc "mọi khối code rào ghi ngôn ngữ" được kiểm tự động: Vitest `every fenced code block in a post names its language` (`src/features/blog/posts.test.ts`).
+
+### Component M4
+
+- **CartIcon** (`@/components/ui/cart-icon`, mới, không hook): props `{ className?: string }`; `<svg viewBox="0 0 24 24" className={cn('size-6', className)}` fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">` với
+  `<path d="M2 3h3l2.6 11.2a1 1 0 0 0 1 .8h9.2a1 1 0 0 0 1-.8L21 7H6"/><circle cx="9.5" cy="19.5" r="1.5"/><circle cx="17.5" cy="19.5" r="1.5"/>`.
+  Là biểu tượng duy nhất của site. Chỉ dùng trong link giỏ.
+
+- **CartLink** (`src/features/cart/components/cart-link.tsx`) và **StaticCartLink** (`cart-badge.tsx`, cùng class, không số):
+  - Link `href="/cart"`: `inline-flex min-h-11 min-w-11 items-center justify-center gap-1 rounded-md px-2 hover:bg-surface-muted`. Bên trong là `<CartIcon className="shrink-0" />` rồi badge nếu có. Badge đứng **cạnh** biểu tượng (`gap-1`), không đè lên: bản đè đã thử, "99+" che gần hết hình giỏ. Link rộng 44 px khi không có số, 64 px với "1", 68 px với "99+". **[Cổng 2 #1]** Không có chữ hiện ra; tên truy cập nằm ở `aria-label`.
+  - `aria-label`: `n > 0` → `` `Giỏ hàng, ${n} sản phẩm` `` (số thật, kể cả khi trên 99); còn lại → `"Giỏ hàng"`. Với `n = count + pendingDelta` (count `null` coi là 0).
+  - Badge chỉ render khi `n > 0`: `<span aria-hidden="true" data-pending={pendingDelta > 0 || undefined} className="inline-flex h-5 min-w-5 items-center justify-center rounded-sm border border-foreground bg-foreground px-1 font-mono text-xs font-semibold text-background data-pending:bg-background data-pending:text-foreground">`. Nội dung: `n > 99 ? '99+' : String(n)` **[Cổng 2 #2]**.
+  - Đang chờ server (`pendingDelta > 0`): badge rỗng ruột (nền background, viền và chữ foreground). Server xác nhận thì về dạng đặc **[Cổng 2 #3]**. Hai dạng khác nhau về hình, không chỉ về màu. Không chuyển động.
+  - Không có số trong ba trường hợp, cùng một hình: chưa có giỏ hoặc giỏ có 0 sản phẩm, đang tải (Suspense fallback `<CartLink count={null} />`), và đọc số lỗi (`CartBadge` bắt lỗi).
+  - **Không** đặt `aria-live` trên link hay badge. Link nằm trong vùng live sẽ bị đọc lại mỗi lần render, và lúc đó người dùng đang ở nút "Thêm vào giỏ" chứ không ở header. Kết quả được báo qua vùng status / alert cạnh nút (AddToCartForm) và vùng status ẩn của trang giỏ (CartView).
+
+- **QuantityStepper** (`@/components/ui/quantity-stepper`, mới; component trình bày, **không hook, không `"use client"`**, chỉ được import từ các file client của `src/features/cart`):
+  - Props: `{ inputId: string; name?: string; value: string; min: number; max: number; onValueChange: (value: string) => void; onStep: (next: number) => void; decreaseLabel: string; increaseLabel: string; canIncrease?: boolean; inputLabel?: string; describedBy?: string }`. `value` là chuỗi để ô có thể trống trong lúc gõ. `inputLabel` set thì thành `aria-label` của ô; không set thì caller phải có `<label htmlFor={inputId}>`.
+  - Gốc: `inline-flex w-fit items-stretch rounded-md border border-border-strong bg-surface` (44 + 48 + 44 px, cao 46 px kể cả viền).
+  - Nút "−" (U+2212) và "+": `<button type="button" aria-label={…}>` `inline-flex size-11 items-center justify-center text-xl font-medium text-foreground hover:bg-surface-muted focus-visible:-outline-offset-2 disabled:cursor-not-allowed disabled:bg-transparent disabled:text-muted-foreground`, thêm `rounded-l-md` (−) / `rounded-r-md` (+). "−" có `disabled` khi `Number(value) <= min`. "+" có `disabled` khi `Number(value) >= max || canIncrease === false`. Dùng thuộc tính `disabled` thật.
+  - Ô số: `<input type="number" inputMode="numeric" step={1} min max id={inputId} name={name} aria-describedby={describedBy}>` `quantity-field w-12 border-x border-border bg-transparent text-center font-mono text-base text-foreground focus-visible:-outline-offset-2`. Vai trò `spinbutton` có sẵn; phím mũi tên dùng được.
+  - `globals.css`, `@layer components` (cạnh `.hero-title`):
+    ```css
+    .quantity-field { appearance: textfield; -moz-appearance: textfield; }
+    .quantity-field::-webkit-inner-spin-button,
+    .quantity-field::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    ```
+  - Focus ring vẽ vào trong (`-outline-offset-2`) để nút kế bên không che nó.
+
+- **Thông báo** (không toast **[Cổng 2 #4]**: thông báo đặt ngay dưới điều khiển gây ra nó, không tự biến mất):
+  - Đang gửi: `<p className="flex min-h-11 items-center text-muted-foreground">Đang thêm vào giỏ…</p>`.
+  - Thành công: `<div className="flex flex-wrap items-center gap-x-4">` gồm `<p className="flex min-h-11 items-center gap-2 font-medium before:size-2 before:shrink-0 before:bg-foreground">Đã thêm vào giỏ hàng</p>` và `<Link href="/cart" className="inline-flex min-h-11 items-center text-link underline underline-offset-4 hover:decoration-2">Xem giỏ hàng</Link>`.
+  - Lỗi: `<p className="flex min-h-11 items-center gap-2 font-medium text-danger before:size-2 before:shrink-0 before:bg-danger">{message}</p>`. Trong dòng giỏ thay `min-h-11` bằng `min-h-5 text-sm`.
+  - Cảnh báo tồn kho trên dòng giỏ. Đây là trạng thái của dòng, không phải lỗi, nên không dùng đỏ: `<p id={`cart-warning-${slug}`} className="flex items-center gap-2 text-sm font-medium before:size-2 before:shrink-0 before:bg-foreground">{`Chỉ còn ${stock} sản phẩm`}</p>`.
+  - Mọi chuỗi có giá trị thay vào là **một** template string (như "Còn N sản phẩm" ở M2), để phần tử chứa đúng chuỗi đó.
+
+- **AddToCartForm** (trang chi tiết, slot `purchase` đặt **sau** đoạn mô tả trong cột thông tin `flex flex-col gap-6`):
+  - Gốc: `<section aria-label="Mua hàng" className="flex flex-col gap-4">`.
+  - `stock === 0`: chỉ có `<Button type="button" disabled className="w-full md:w-auto md:self-start">Thêm vào giỏ</Button>`. Không có ô số, không có vùng thông báo. Badge "Hết hàng" của M2 ở hàng giá đã giải thích lý do.
+  - Còn hàng: `<form noValidate className="flex flex-wrap items-end gap-4">`:
+    - `<div className="flex flex-col gap-2"><label htmlFor="quantity" className="text-sm font-medium">Số lượng</label><QuantityStepper inputId="quantity" name="quantity" min={1} max={MAX_LINE_QUANTITY} decreaseLabel="Giảm số lượng" increaseLabel="Tăng số lượng" … /></div>`. `max` là 10, **không** theo tồn kho.
+    - `<Button type="submit" aria-busy={pending || undefined} className="flex-1 md:flex-none">Thêm vào giỏ</Button>`.
+    - `flex-wrap` (M4 Task 8, Orchestrator quyết 2026-11-23): ô số 136 px + 16 + nút ~148 px không vừa 288 px ở 320 px nên trang cuộn ngang 10 px; dưới ~336 px nút xuống hàng riêng và giãn hết bề rộng, từ đó trở lên giữ đúng hàng của hand-off. E2E `US-04: trang chi tiết còn hàng ở 320 px không cuộn ngang…`. Ở 390 px nút giãn hết phần còn lại của hàng (≈ 204 px). Ở desktop nút rộng theo chữ. Chữ nút **không** đổi khi chờ (giữ tên truy cập), nút **không** vô hiệu khi chờ.
+  - Sau form: `<div className="flex flex-col">` gồm `<div role="status">` rồi `<div role="alert">`. Cả hai luôn có trong DOM ngay từ đầu (rỗng). Mỗi lần submit thì xoá nội dung cũ của cả hai.
+    - Đang chờ → status "Đang thêm vào giỏ…". `ok: true` → status thành công. `ok: false` → alert `cartErrorMessage(r)`. Action reject → alert `CART_NETWORK_ERROR`.
+  - Kiểm ở client trước khi gửi **[Cổng 2 #6]**: giá trị không phải số nguyên, trống hoặc < 1 → alert `QUANTITY_RANGE_MESSAGE` ("Nhập số lượng từ 1 đến 10"); > 10 → alert `cartErrorMessage({ error: 'line-limit' })`. Cả hai trường hợp không gọi action và không tăng số lạc quan.
+  - Lỗi thì ô số giữ số khách đã chọn. Số trên biểu tượng tự về giá trị server (`useOptimistic`).
+- **Trang `/cart`** (Task 9):
+  - `page.tsx`: Container `flex flex-col gap-6 pt-10 pb-16 md:gap-8 md:pt-16 md:pb-24` (như `/products`). `<h1 id="cart-heading" tabIndex={-1} className="text-4xl font-bold tracking-tight md:text-5xl">Giỏ hàng</h1>` nằm **ngoài** Suspense, rồi `<Suspense fallback={<CartSkeleton />}><CartSection /></Suspense>`.
+  - `CartView` có hàng: `<div className="flex flex-col gap-6 md:gap-8">` gồm, theo thứ tự:
+    1. `<p role="status" className="sr-only">{`Giỏ hàng có ${count} sản phẩm, tổng cộng ${formatPrice(total)}`}</p>`. Đây là vùng live báo tổng tiền mới sau mỗi lần sửa / xoá (US-07). Nó phải ở **cùng vị trí trong cây** ở cả nhánh có hàng và nhánh trống, để React giữ nguyên phần tử khi giỏ về trống.
+    2. `<p className="text-muted-foreground">{`${count} sản phẩm`}</p>` (count = tổng số lượng).
+    3. `<ul aria-label="Sản phẩm trong giỏ" className="flex flex-col border-b border-border">` chứa các dòng.
+    4. Khối tổng (dưới).
+  - Dòng `li`: `<li data-cart-line={slug} className="flex flex-wrap gap-4 border-t border-border py-6 md:flex-nowrap md:gap-x-6">`. Có 3 con:
+    - Ảnh: `<div className="size-20 shrink-0 overflow-hidden rounded-md bg-surface-muted outline outline-1 -outline-offset-1 outline-border md:size-24">` + `next/image` 96 × 96, `alt=""` (tên sản phẩm đã là link ngay cạnh; ảnh không phải link). Với file `.svg` thì `unoptimized`.
+    - Thông tin: `<div className="flex min-w-0 flex-1 flex-col gap-2">`:
+      - `<h2 className="text-base font-semibold text-pretty break-words md:text-lg"><Link href={`/products/${slug}`} className="inline-flex min-h-11 items-center underline-offset-4 hover:underline">{renderProductName(name)}</Link></h2>`.
+      - `<p className="text-sm text-muted-foreground">Đơn giá <span className="font-mono">{formatPrice(price)}</span></p>`.
+      - Nếu `stock === 0`: `<p id={`cart-warning-${slug}`}><Badge variant="sold-out">Hết hàng</Badge></p>`. Nếu `quantity > stock > 0`: cảnh báo "Chỉ còn N sản phẩm" (Thông báo, ở trên).
+    - Điều khiển: `<CartLineControls slug name quantity stock lineTotal />` (client), render `<div aria-busy={pending || undefined} className="group/line flex w-full flex-col gap-2 md:w-auto md:items-end">`:
+      - Hàng `<div className="flex items-center justify-between gap-4 md:justify-end md:gap-6">` gồm:
+        - `<form noValidate className="flex items-center gap-2">` chứa QuantityStepper (`inputId={`quantity-${slug}`}`, `inputLabel={`Số lượng ${name}`}`, `min={0}`, `max={MAX_LINE_QUANTITY}`, `canIncrease={quantity < Math.min(stock, MAX_LINE_QUANTITY)}`, `decreaseLabel={`Giảm số lượng ${name}`}`, `increaseLabel={`Tăng số lượng ${name}`}`, `describedBy` = id cảnh báo và id alert của dòng nếu có) và nút xoá `<button type="button" className="inline-flex min-h-11 min-w-11 items-center justify-center px-2 text-sm font-medium text-foreground underline underline-offset-4 hover:decoration-2">Xoá<span className="sr-only"> {name}</span></button>`.
+        - `<p className="font-mono text-base font-medium text-right whitespace-nowrap group-aria-busy/line:text-muted-foreground md:w-32"><span className="sr-only">Thành tiền </span>{formatPrice(lineTotal)}</p>`.
+        - **Chỉnh ở M4 Task 9 (NS-94), màn hẹp:** hàng trên thêm `flex-wrap`, thành tiền thêm `ml-auto`. Lý do: đo trên build thật ở 320 px (Chrome, Lexend đã tải), ô số 138 px + 8 + "Xoá" 47 + 16 = 209 px, chỉ còn 79 px trong 288 px của Container, không vừa thành tiền nào ("179.000 ₫" ≈ 86 px, "1.045.000 ₫" ≈ 114 px; lớn nhất có thể 4.500.000 ₫); bản hand-off làm trang cuộn ngang 8 px với thành tiền 7 chữ số và tràn vào lề với 6 chữ số. Khi không vừa, thành tiền xuống hàng riêng ngay dưới, vẫn căn phải: ở 320 px là mọi dòng. Ở 390 px trở lên (khung của hand-off) thành tiền tới 7 chữ số vẫn chung hàng, bố cục giữ đúng hand-off. Không token mới. Cùng cách đã dùng cho form "Thêm vào giỏ" ở Task 8.
+      - `<div role="alert" id={`cart-error-${slug}`}>` (lỗi của dòng), rồi khi chờ `<p className="text-sm text-muted-foreground">Đang cập nhật…</p>`.
+    - 390 px: ảnh và thông tin ở hàng trên. Điều khiển xuống hàng dưới, rộng hết dòng (`w-full`), vì cột thông tin chỉ còn 262 px, không đủ cho 190 px điều khiển + thành tiền. 1280 px: một hàng, thành tiền là cột 128 px căn phải.
+  - Hành vi `CartLineControls`:
+    - "−" / "+": đặt state cục bộ của ô ngay, rồi gọi `setCartQuantityAction({ slug, quantity: next })` trong transition. "−" ở 1 → 0 nghĩa là xoá (US-07).
+    - Gõ tay: gửi khi Enter (submit form) hoặc blur, và chỉ khi giá trị khác số của server. Trống hoặc không phải số nguyên → trả ô về số server, không gửi. > 10 → alert line-limit, không gửi. < 0 → trả ô về số server, không gửi, không thông báo.
+    - Lỗi (`ok: false` hoặc reject): ô về số server, alert của dòng hiện `cartErrorMessage(r)` / `CART_NETWORK_ERROR`.
+    - Không vô hiệu điều khiển khi chờ. Tổng tiền và số trên header không lạc quan: chúng đổi khi route render lại (D2).
+  - **Focus sau khi xoá** (nút "Xoá", hoặc đặt về 0): trước khi gọi action, ghi lại slug của dòng kế (`li.nextElementSibling`), không có thì dòng trước. Sau khi action resolve `ok: true` (route đã render lại), focus `[data-cart-line="<slug đó>"] h2 a`. Không còn dòng nào → focus `#cart-heading`. Lỗi → giữ focus tại chỗ. Vùng status ẩn đọc tổng mới.
+  - Khối tổng: `<div className="flex flex-col gap-4 md:items-end">`:
+    - `<dl className="flex w-full items-baseline justify-between gap-4 md:w-auto md:gap-8"><dt className="text-lg font-semibold">Tổng cộng</dt><dd data-testid="cart-total" className="font-mono text-2xl font-medium">{formatPrice(total)}</dd></dl>`.
+    - Khi có dòng `quantity > stock` **[Cổng 2 #9]**: `<p className="max-w-xl text-sm font-medium">Có sản phẩm không đủ hàng. Giảm số lượng hoặc xoá dòng có cảnh báo.</p>`.
+    - **[Cổng 2 #8]** `<p className="text-sm text-muted-foreground">Thanh toán sẽ mở trong bản cập nhật tới.</p>`. M6 thay dòng này bằng nút primary "Thanh toán" (`w-full md:w-auto`) ở đúng chỗ. M4 **không** có nút thanh toán, kể cả nút vô hiệu.
+    - `<Link href="/products" className={buttonVariants({ variant: 'secondary', className: 'w-full md:w-auto' })}>Tiếp tục mua sắm</Link>`.
+  - Trống (không cookie, giỏ hết hạn, hoặc vừa xoá dòng cuối): `<div className="flex flex-col gap-6 md:gap-8">`:
+    - `<p role="status" className="sr-only">Không còn sản phẩm nào trong giỏ</p>`. Chữ khác "Giỏ hàng trống." để `getByText` không khớp hai phần tử.
+    - Rồi empty state chuẩn `flex flex-col items-start gap-4 rounded-md bg-surface-muted px-6 py-10 md:p-16`: `.cursor-block size-8`, `<p className="text-xl font-semibold md:text-2xl">Giỏ hàng trống.</p>`, `<p className="text-muted-foreground">Sản phẩm bạn thêm được giữ trong giỏ 30 ngày.</p>` **[Cổng 2 #10]**, `<Link href="/products" className={buttonVariants({ variant: 'primary', className: 'w-full md:w-auto' })}>Xem sản phẩm</Link>`.
+  - `CartSkeleton`: `<div aria-busy="true" className="flex flex-col gap-6 md:gap-8"><p className="sr-only">Đang tải…</p>` + `Skeleton h-6 w-24` (dòng đếm). Tiếp theo là `ul aria-hidden="true"` cùng class danh sách, chứa 2 dòng cùng class `li`, mỗi dòng: ảnh `size-20 rounded-md md:size-24`, tên `h-6 w-2/3` (trong hàng `min-h-11 flex items-center`), đơn giá `h-5 w-32`, điều khiển `h-11 w-48 rounded-md`, thành tiền `h-6 w-24`. Cuối cùng là tổng `h-8 w-60` (`md:self-end`).
+  - Lỗi tải: `getCart()` ném → `(shop)/error.tsx` M2, không đổi chữ. Header vẫn còn; biểu tượng giỏ không có số.
 
 ### Ảnh Open Graph (1200 × 630, `src/lib/og-image.tsx`)
 

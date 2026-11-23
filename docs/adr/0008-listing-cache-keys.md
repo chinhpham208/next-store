@@ -3,6 +3,7 @@
 - Trạng thái: Đã chấp nhận; bổ sung bởi [ADR-0011](./0011-db-query-wrapper.md) (cách bọc lỗi truy vấn)
 - Ngày: 2026-11-20
 - Bổ sung: [ADR-0003](./0003-cache-strategy.md) (không thay thế; mọi quyết định của ADR-0003 giữ nguyên)
+- Bổ sung (2026-11-24, NS-105): Next đăng ký mọi hàm `'use cache'` (export hay không, có `server-only` hay không) thành Server Function gọi được bằng POST `next-action` với đối số tuỳ ý, không qua `listProducts`; nên "chỉ caller bên dưới gọi được" không còn là bảo đảm. Bất biến *danh mục × 3 × số trang thật* nay do chính hàm cache giữ: `countCatalog(categoryId)` và `getCatalogPage(categoryId, sort, page)` (đối số theo vị trí, không còn object) kiểm dạng đối số trước khi tag và ném lỗi cố định (lần nạp ném lỗi không được lưu), còn danh mục không có thật hoặc trang quá trang cuối thì trả rỗng không chạm DB với `cacheLife(SKIP_CACHE_ENTRY)` (expire 0, không lưu). Quy tắc chung: `conventions.md` §2, `src/lib/cache-args.ts`.
 
 ## Bối cảnh
 

@@ -1,5 +1,6 @@
 import Image from 'next/image'
 import { notFound } from 'next/navigation'
+import type { ReactNode } from 'react'
 import { Breadcrumb, type BreadcrumbItem } from '@/components/layout/breadcrumb'
 import { Badge } from '@/components/ui/badge'
 import { Container } from '@/components/ui/container'
@@ -11,9 +12,15 @@ import { getProductBySlug } from '@/features/products/queries'
 import { buildProductsHref } from '@/features/products/schema'
 import type { ProductDetail } from '@/features/products/types'
 
-export type ProductDetailViewProps = { product: ProductDetail }
+export type ProductDetailViewProps = { product: ProductDetail; purchase?: ReactNode }
 
-export type ProductDetailSectionProps = { params: Promise<{ slug: string }> }
+export type ProductPurchase = Pick<ProductDetail, 'slug' | 'stock'>
+
+// The page passes the cart's form in (M4 Task 8): products never imports cart, so the dependency stays one-way.
+export type ProductDetailSectionProps = {
+  params: Promise<{ slug: string }>
+  renderPurchase?: (product: ProductPurchase) => ReactNode
+}
 
 const IMAGE_SIZE = 800
 
@@ -34,7 +41,7 @@ const Stock = ({ stock }: { stock: number }) =>
     </p>
   )
 
-export const ProductDetailView = ({ product }: ProductDetailViewProps) => {
+export const ProductDetailView = ({ product, purchase }: ProductDetailViewProps) => {
   const inStock = product.stock > 0
   // The product name is the h1 right below, so the trail stops at the category (design-system §2).
   const crumbs: BreadcrumbItem[] = [
@@ -71,7 +78,7 @@ export const ProductDetailView = ({ product }: ProductDetailViewProps) => {
             <Stock stock={product.stock} />
           </div>
           <p className="border-t border-border pt-6 text-muted-foreground md:text-lg">{product.description}</p>
-          {/* M4 puts the "Thêm vào giỏ" button here; M2 deliberately renders nothing in its place. */}
+          {purchase}
         </div>
       </div>
     </Container>
@@ -81,11 +88,12 @@ export const ProductDetailView = ({ product }: ProductDetailViewProps) => {
 // Runs inside the page's <Suspense>: with a slug that was not prerendered, the read happens at request time
 // after the shell is sent, so this notFound() only swaps the UI — the real 404 status comes from src/proxy.ts
 // (M2 Task 12, K3). A database error is not caught here: it reaches (shop)/error.tsx, which shows fixed text.
-export const ProductDetailSection = async ({ params }: ProductDetailSectionProps) => {
+export const ProductDetailSection = async ({ params, renderPurchase }: ProductDetailSectionProps) => {
   const { slug } = await params
   const product = await getProductBySlug(slug)
   if (!product) notFound()
-  return <ProductDetailView product={product} />
+  const purchase = renderPurchase?.({ slug: product.slug, stock: product.stock })
+  return <ProductDetailView product={product} purchase={purchase} />
 }
 
 // Same blocks as the view, each at the line height of the real content (design-system §2, Skeleton).
