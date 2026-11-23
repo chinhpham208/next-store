@@ -47,6 +47,8 @@ Nhánh, merge method, tag, hotfix và back-merge: [`conventions.md`](./conventio
 | **User Story** | Chưa bắt đầu | Có task đang làm | Mọi task xong, E2E của story xanh | Chủ dự án nghiệm thu |
 | **Epic** | Chưa bắt đầu | Mốc đang chạy | Chờ CỔNG 3 | Chủ dự án nghiệm thu |
 
+- **Phân cấp:** Epic `M<n>` → User Story → Task / Bug, bằng link **subtask of**. Board Development xếp thẻ theo User Story, nên Task / Bug chỉ "relates to" story sẽ rơi vào "Uncategorized Cards". Ticket kỹ thuật (DB, CI, proxy, quy trình, thiết kế) là subtask của story kỹ thuật `M<n>-TECH` ("M<n> — Kỹ thuật & hạ tầng"). `ticket.py tasks` chọn story theo `US-xx` trong tiêu đề task, không có thì `M<n>-TECH`; `ticket.py bug --story` tạo link subtask. Đầu mỗi mốc mới, Orchestrator tạo story `M<n>-TECH` và ghi vào `issue-map.json`.
+- Sau mỗi release, mọi Task / Bug đã lên `production` chuyển Done (bước 8 ở trên), cùng các story đã đủ task.
 - Mỗi lần chuyển trạng thái kèm **một** comment bằng chứng (link PR, kết quả CI, link preview) — không comment từng vòng review.
 - Story trải nhiều mốc (ví dụ US-01: M1 + M3) chỉ sang To Verify khi phần ở mốc cuối xong.
 - Chỉ dùng script `scripts/youtrack/ticket.py` để chuyển trạng thái, không gọi `yt` tuỳ hứng.

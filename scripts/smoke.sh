@@ -16,6 +16,11 @@
 #   SMOKE_ROBOTS                     disallow = robots.txt phải `Disallow: /` (Preview / Dev; workflow e2e-preview đặt),
 #                                    allow = phải `Allow: /` (Production). Bỏ trống: chấp nhận một trong hai, in ra
 #                                    (next start: build ngoài Vercel là disallow). Header X-Robots-Tag luôn chỉ được in
+#   SMOKE_PRODUCT_FAIL_OPEN          warn = slug sản phẩm lạ đúng dạng (cần lookup DB trong proxy) trả 200 thì chỉ in
+#                                    ::warning:: kèm thời gian, không fail; áp cho warm-up và mọi dạng (slug mới, RSC,
+#                                    .rsc, segment, ảnh OG sản phẩm). Chỉ workflow Production E2E đặt (NS-79: proxy chạy
+#                                    ở edge gần người gọi, xa Neon, ADR-0009). Slug sai dạng, blog, ảnh OG của bài không
+#                                    chạm DB nên vẫn phải 404. Bỏ trống (mặc định, Preview / CI): fail-open là lỗi
 #   VERCEL_AUTOMATION_BYPASS_SECRET  có thì gửi header x-vercel-protection-bypass (vượt Deployment Protection),
 #                                    chỉ khi BASE_URL là https://
 set -euo pipefail
@@ -44,17 +49,22 @@ curl_safe() { curl -g --proto "=$SCHEME" --proto-redir "=$SCHEME" "$@"; }
 # `ps` output or in a CI log that echoes commands. It was validated to [A-Za-z0-9_-], so it cannot break out of
 # the quoted config value.
 # <header> is a fixed string from this script (e.g. `rsc: 1`), checked so it cannot break out of the config value.
+# The total time of the request, in seconds as curl prints it, goes to $TMP/last-time (read with last_time_ms).
 fetch() { # fetch <url> <body-file> [header] [response-headers-file] → in mã HTTP
-  local url=$1 body=$2 header=${3:-} dump=${4:-/dev/null} code=0
+  local url=$1 body=$2 header=${3:-} dump=${4:-/dev/null} code=0 out
   if [ -n "$header" ] && ! [[ $header =~ ^[A-Za-z0-9-]+:\ [A-Za-z0-9./-]+$ ]]; then fail "header không hợp lệ"; fi
   xtrace_off
   {
     if [ -n "$SEND_BYPASS" ]; then printf 'header = "x-vercel-protection-bypass: %s"\n' "$BYPASS"; fi
     if [ -n "$header" ]; then printf 'header = "%s"\n' "$header"; fi
-  } | curl_safe -sS -D "$dump" -o "$body" -w '%{http_code}' --max-time 20 --config - --url "$url" || code=$?
+  } | curl_safe -sS -D "$dump" -o "$body" -w '%{http_code} %{time_total}' --max-time 20 --config - --url "$url" > "$TMP/last-write" || code=$?
   xtrace_restore
+  out=$(cat "$TMP/last-write")
+  printf '%s\n' "${out#* }" > "$TMP/last-time"
+  printf '%s' "${out%% *}"
   return "$code"
 }
+last_time_ms() { LC_ALL=C awk '{ printf "%d ms", $1 * 1000 }' "$TMP/last-time"; }
 
 stop_server() {
   [ -n "$SERVER_PID" ] || return 0
@@ -100,6 +110,7 @@ validate_input() {
   [[ $SMOKE_PORT =~ ^[0-9]{1,5}$ ]] && [ "$((10#$SMOKE_PORT))" -ge 1 ] && [ "$((10#$SMOKE_PORT))" -le 65535 ] ||
     fail "SMOKE_PORT không hợp lệ: cần số nguyên 1–65535."
   case ${SMOKE_ROBOTS:-} in ''|allow|disallow) ;; *) fail "SMOKE_ROBOTS không hợp lệ: cần allow, disallow hoặc bỏ trống." ;; esac
+  case ${SMOKE_PRODUCT_FAIL_OPEN:-} in ''|warn) ;; *) fail "SMOKE_PRODUCT_FAIL_OPEN không hợp lệ: cần warn hoặc bỏ trống." ;; esac
   SCHEME=http
   if [ -n "${BASE_URL:-}" ]; then
     if [[ $BASE_URL =~ $https_re ]]; then SCHEME=https
@@ -124,6 +135,7 @@ TMP=$(mktemp -d)
 trap 'stop_server; rm -rf "$TMP"' EXIT
 
 validate_input
+RUN_ID="$(date +%s)-$RANDOM"
 
 if [ -n "${BASE_URL:-}" ]; then
   BASE=${BASE_URL%/}
@@ -143,6 +155,16 @@ fi
 grep -qF -- "$SMOKE_TEXT" "$TMP/home.html" || fail "HTML trang chủ không có \"$SMOKE_TEXT\""
 echo "smoke: GET / → 200, có \"$SMOKE_TEXT\""
 
+# x-vercel-id is <edge POP>::[<function region>::]<request id>. The edge POP is the one nearest the client (iad1 from
+# GitHub's US runners); a function region only appears when a function rendered the response, which a proxy rewrite to
+# the prerendered not-found page does not. Logged as a hint for ADR-0009, not asserted. Third-party text: reduced to
+# [a-z0-9:-] before it reaches the log.
+print_vercel_region() { # print_vercel_region <response-headers-file>
+  local id
+  id=$(tr -d '\r' < "$1" | sed -n 's/^[Xx]-[Vv]ercel-[Ii]d: *//p' | head -n 1 | tr -cd 'a-z0-9:-')
+  [ -n "$id" ] || return 0
+  echo "smoke: x-vercel-id (edge[::function]): ${id%::*}"
+}
 # Owner decision 15 (plan M3) relied on Vercel's `X-Robots-Tag: noindex` on Preview / Dev; NS-65 found Dev without
 # it, so robots.txt now says Disallow: / outside production (checked below). The header is still printed, right after
 # /, so every run records what Vercel sends. Third-party text: reduced to a safe set before it is printed.
@@ -154,6 +176,17 @@ report_robots_tag() { # report_robots_tag <path> <response-headers-file>
 report_robots_tag / "$TMP/home.headers"
 status=$(fetch "$BASE/robots.txt" "$TMP/robots.txt" '' "$TMP/robots.headers") || fail "không kết nối được $BASE/robots.txt"
 report_robots_tag /robots.txt "$TMP/robots.headers"
+ROBOTS_TIME=$(last_time_ms)
+# NS-79: where the proxy runs. An unknown blog slug goes through the proxy but never the database (static registry,
+# ADR-0012), so its time next to /robots.txt (no proxy) shows the cost of the proxy hop alone; x-vercel-id names the
+# edge POP. Information only: the 404 itself is checked with the other blog slugs below.
+PROXY_PROBE=/blog/smoke-proxy-$RUN_ID
+if status_probe=$(fetch "$BASE$PROXY_PROBE" "$TMP/proxy-probe" '' "$TMP/proxy-probe.headers"); then
+  echo "smoke: thời gian: GET /robots.txt $ROBOTS_TIME; GET $PROXY_PROBE (qua proxy, không chạm DB) → $status_probe, $(last_time_ms)"
+  print_vercel_region "$TMP/proxy-probe.headers"
+else
+  echo "smoke: thời gian: GET /robots.txt $ROBOTS_TIME; GET $PROXY_PROBE (qua proxy, không chạm DB): không kết nối được"
+fi
 status_sitemap=$(fetch "$BASE/sitemap.xml" "$TMP/sitemap.xml" '' "$TMP/sitemap.headers") ||
   fail "không kết nối được $BASE/sitemap.xml"
 report_robots_tag /sitemap.xml "$TMP/sitemap.headers"
@@ -263,10 +296,23 @@ POST_OG_PATH=$OG_PATH
 # URL (RSC request, .rsc suffix) and every non-canonical spelling (%2D, upper case) must be a 404 too.
 # Every case runs before smoke fails: which variants pass tells whether the proxy ran at all (malformed slugs never
 # reach the database) or only its database lookup failed open.
+# A well-formed product slug is the one case that needs the database lookup; with SMOKE_PRODUCT_FAIL_OPEN=warn its
+# fail-open (200) is a CI warning with the time taken, not a failure (NS-79). Every other case never reaches the
+# database, so a 200 there means the proxy did not run: always a failure.
 NOT_FOUND_FAILED=
-expect_404() { # expect_404 <path> <label> [header]
-  local path=$1 label=$2 header=${3:-} status
+PRODUCT_FAIL_OPEN_COUNT=0
+expect_404() { check_404 '' "$@"; } # expect_404 <path> <label> [header]
+expect_product_404() { check_404 product "$@"; } # expect_product_404 <path> <label> [header]: slug đi qua lookup DB
+product_fail_open_warned() { # product_fail_open_warned <status> <message>: 0 = cảnh báo thay cho lỗi
+  [ "$1" = 200 ] && [ "${SMOKE_PRODUCT_FAIL_OPEN:-}" = warn ] || return 1
+  # A workflow command on purpose: visible on the run summary, not only in the log.
+  echo "::warning::smoke: $2 sau $(last_time_ms): lookup DB của proxy fail-open (SMOKE_PRODUCT_FAIL_OPEN=warn, NS-79)"
+  PRODUCT_FAIL_OPEN_COUNT=$((PRODUCT_FAIL_OPEN_COUNT + 1))
+}
+check_404() { # check_404 <kind> <path> <label> [header]
+  local kind=$1 path=$2 label=$3 header=${4:-} status
   status=$(fetch "$BASE$path" "$TMP/not-found" "$header") || fail "không kết nối được $BASE$path"
+  if [ "$kind" = product ] && product_fail_open_warned "$status" "GET $path ($label) trả 200"; then return 0; fi
   if [ "$status" != 404 ]; then
     echo "smoke: LỖI: GET $path ($label) trả $status ngay lần đầu, cần 404" >&2
     NOT_FOUND_FAILED=1
@@ -277,30 +323,22 @@ expect_404() { # expect_404 <path> <label> [header]
     NOT_FOUND_FAILED=1
     return 0
   fi
-  echo "smoke: GET $path ($label) → 404"
+  echo "smoke: GET $path ($label) → 404, $(last_time_ms)"
 }
-RUN_ID="$(date +%s)-$RANDOM"
 # A cold database connection (Neon waking up, new function instance) can outlast the proxy's 400 ms bound; the
 # proxy then fails open and that slug answers 200 (ADR-0009). Measured on the first preview of NS-49: the first two
-# lookups failed open, later ones 404'd (that preview ran in iad1, far from Neon; sin1 since). So first send fresh
-# slugs — each one a first hit — until one gets its 404: more than MAX_WARMUP_FAIL_OPEN fail-opens fail smoke, any
-# fail-open is a CI warning; then every case below must 404 on the first hit.
-# x-vercel-id is <edge POP>::[<function region>::]<request id>. The edge POP is the one nearest the client (iad1 from
-# GitHub's US runners); a function region only appears when a function rendered the response, which a proxy rewrite to
-# the prerendered not-found page does not. Logged as a hint for ADR-0009, not asserted. Third-party text: reduced to
-# [a-z0-9:-] before it reaches the log.
-print_vercel_region() { # print_vercel_region <response-headers-file>
-  local id
-  id=$(tr -d '\r' < "$1" | sed -n 's/^[Xx]-[Vv]ercel-[Ii]d: *//p' | head -n 1 | tr -cd 'a-z0-9:-')
-  [ -n "$id" ] || return 0
-  echo "smoke: x-vercel-id (edge[::function]): ${id%::*}"
-}
+# lookups failed open, later ones 404'd. On Vercel the proxy runs at the edge nearest the caller, not in sin1 beside
+# Neon (NS-79, ADR-0009), so from a far region every lookup can outlast the bound. So first send fresh slugs — each one
+# a first hit — until one gets its 404: more than MAX_WARMUP_FAIL_OPEN fail-opens fail smoke (with
+# SMOKE_PRODUCT_FAIL_OPEN=warn: a warning), any fail-open is a CI warning; then every case below must 404 on the first
+# hit, or, with the flag, at least not answer anything but 404 or a warned 200.
 warm_up_product_lookup() {
   local i status
   for i in $(seq 1 "$((MAX_WARMUP_FAIL_OPEN + 1))"); do
     status=$(fetch "$BASE/products/smoke-warmup-$RUN_ID-$i" "$TMP/warmup" '' "$TMP/warmup.headers") ||
       fail "không kết nối được $BASE/products/smoke-warmup-…"
     print_vercel_region "$TMP/warmup.headers"
+    echo "smoke: warm-up $i → $status, $(last_time_ms)"
     if [ "$status" = 404 ]; then
       echo "smoke: proxy kiểm slug được từ request thứ $i ($((i - 1)) slug lạ fail-open trước đó)"
       # A workflow command on purpose: a fail-open within the limit is visible on the run summary, not only in the log.
@@ -309,19 +347,20 @@ warm_up_product_lookup() {
     fi
     sleep 1
   done
+  if product_fail_open_warned "$status" "$((MAX_WARMUP_FAIL_OPEN + 1)) slug lạ warm-up đều trả 200, lần cuối"; then return 0; fi
   fail "proxy chưa trả 404 cho slug lạ sau $((MAX_WARMUP_FAIL_OPEN + 1)) request: hơn $MAX_WARMUP_FAIL_OPEN slug fail-open (lookup DB lỗi hoặc quá 400 ms; xem log function)"
 }
 warm_up_product_lookup
-expect_404 /products/khong-ton-tai 'slug cố định của US-05'
-expect_404 "/products/khong-ton-tai-smoke-$RUN_ID" 'slug mới'
-expect_404 "/products/khong-ton-tai-rsc-$RUN_ID" 'request RSC' 'rsc: 1'
-expect_404 "/products/khong-ton-tai-suffix-$RUN_ID.rsc" 'hậu tố .rsc'
+expect_product_404 /products/khong-ton-tai 'slug cố định của US-05'
+expect_product_404 "/products/khong-ton-tai-smoke-$RUN_ID" 'slug mới'
+expect_product_404 "/products/khong-ton-tai-rsc-$RUN_ID" 'request RSC' 'rsc: 1'
+expect_product_404 "/products/khong-ton-tai-suffix-$RUN_ID.rsc" 'hậu tố .rsc'
 expect_404 "/products/khong%2Dton%2Dtai%2D$RUN_ID" '%2D'
 expect_404 "/products/KHONG-TON-TAI-$RUN_ID" 'chữ hoa'
 # Segment prefetch (audit PR #26 M1): Next.js fetches <page>.segments/<segment>.segment.rsc; Vercel hands the proxy
 # that path as is.
-expect_404 "/products/khong-ton-tai-seg-$RUN_ID.segments/_tree.segment.rsc" 'segment prefetch dạng đường dẫn' 'rsc: 1'
-expect_404 "/products/khong-ton-tai-seg2-$RUN_ID.segments/_tree.segment.rsc" 'segment prefetch dạng đường dẫn, không header'
+expect_product_404 "/products/khong-ton-tai-seg-$RUN_ID.segments/_tree.segment.rsc" 'segment prefetch dạng đường dẫn' 'rsc: 1'
+expect_product_404 "/products/khong-ton-tai-seg2-$RUN_ID.segments/_tree.segment.rsc" 'segment prefetch dạng đường dẫn, không header'
 
 # US-10 (ADR-0012): an unknown blog slug is checked against the static registry in src/proxy.ts, with no database, so
 # there is no warm-up: the very first request for a fresh slug must be a 404, in every transport form and spelling.
@@ -340,10 +379,13 @@ expect_404 /blog/chao%2Dmung-den-next-store 'bài: %2D trong slug có thật'
 # hash suffix.
 OG_UNKNOWN_PRODUCT="/products/khong-ton-tai-og-$RUN_ID"
 OG_UNKNOWN_POST="/blog/khong-ton-tai-og-$RUN_ID"
-expect_404 "$OG_UNKNOWN_PRODUCT${DETAIL_OG_PATH#"$DETAIL_PATH"}" 'ảnh OG: slug sản phẩm lạ'
-expect_404 "$OG_UNKNOWN_PRODUCT-2/opengraph-image" 'ảnh OG: slug sản phẩm lạ, không hậu tố băm'
+expect_product_404 "$OG_UNKNOWN_PRODUCT${DETAIL_OG_PATH#"$DETAIL_PATH"}" 'ảnh OG: slug sản phẩm lạ'
+expect_product_404 "$OG_UNKNOWN_PRODUCT-2/opengraph-image" 'ảnh OG: slug sản phẩm lạ, không hậu tố băm'
 expect_404 "$OG_UNKNOWN_POST${POST_OG_PATH#"$POST_PATH"}" 'ảnh OG: slug bài lạ'
 expect_404 "$OG_UNKNOWN_POST-2/opengraph-image" 'ảnh OG: slug bài lạ, không hậu tố băm'
+if [ "$PRODUCT_FAIL_OPEN_COUNT" -gt 0 ]; then
+  echo "smoke: $PRODUCT_FAIL_OPEN_COUNT ca slug sản phẩm fail-open, chỉ cảnh báo (SMOKE_PRODUCT_FAIL_OPEN=warn)"
+fi
 [ -z "$NOT_FOUND_FAILED" ] || fail "slug hoặc ảnh OG không tồn tại không trả 404 ngay lần đầu (xem các dòng LỖI ở trên)"
 
 # The proxy must not turn a known product's client navigation (RSC request) into a 404. `?_rsc` is the cache-busting
