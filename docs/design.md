@@ -102,8 +102,8 @@ Lý do chọn cấu trúc này thay vì đặt component cạnh route: dễ mở
 |---|---|
 | `categories` | id, slug, name |
 | `products` | id, slug, name, description, price (số nguyên, VND), image, categoryId, stock, featured, updatedAt |
-| `carts` | id (uuid, lưu trong cookie httpOnly), createdAt |
-| `cart_items` | cartId, productId, quantity |
+| `carts` | id (uuid v4 do server sinh, không default; lưu trong cookie httpOnly), createdAt, updatedAt (hết hạn 30 ngày trượt; index `carts_updated_at_idx`) — [ADR-0014](./adr/0014-cart-storage-and-cookie.md) |
+| `cart_items` | cartId (FK `carts`, `ON DELETE CASCADE`), productId (FK `products`, `ON DELETE CASCADE`; index `cart_items_product_id_idx`), quantity (`CHECK quantity > 0`; trần 10 nằm ở code), createdAt (thứ tự dòng); khoá chính `(cart_id, product_id)`: một dòng mỗi sản phẩm. Không cột giá: giỏ luôn dùng giá hiện tại. Không sequence |
 | `orders` | id (serial — dùng làm mã đơn gửi cổng thanh toán), items (json snapshot), total, status (`pending` \| `paid` \| `needs_refund` \| `cancelled`), provider, paymentRef (unique), createdAt |
 
 Bài blog là file MDX, không nằm trong DB. Schema thay đổi bằng migration của drizzle-kit (file SQL trong `drizzle/`), không sửa DB bằng tay. Quy tắc expand / contract: [conventions.md](./conventions.md) §10.
@@ -111,9 +111,14 @@ Bài blog là file MDX, không nằm trong DB. Schema thay đổi bằng migrati
 ## 5. Các luồng chính
 
 ### Giỏ hàng
-- Lần đầu thêm sản phẩm: tạo `carts`, lưu id vào cookie httpOnly, `SameSite=Lax`, `Secure` trên production.
-- Thêm / sửa / xoá bằng Server Actions; validate bằng Zod; kiểm tra tồn kho.
-- Giao diện dùng `useOptimistic` để cập nhật ngay, rồi đồng bộ với kết quả từ server.
+Chi tiết và lý do: [ADR-0014](./adr/0014-cart-storage-and-cookie.md); giới hạn tốc độ: [ADR-0015](./adr/0015-edge-rate-limit.md).
+- Khách vãng lai, không tài khoản. Giỏ nằm trong DB; trình duyệt chỉ giữ id giỏ (UUID v4 do server sinh bằng `crypto.randomUUID()`) trong cookie `httpOnly`, `SameSite=Lax`, `Path=/`, `Secure` và tên `__Host-ns_cart` khi site chạy HTTPS (`ns_cart` khi không), `Max-Age` 30 ngày, không `Domain`. Cookie sai dạng → coi như không có giỏ, không chạm DB. Server không bao giờ tạo giỏ với id do client gửi.
+- Ba Server Action trong `src/features/cart/actions.ts` (`addToCartAction`, `setCartQuantityAction`, `removeFromCartAction`): parse Zod trước mọi thứ khác; mỗi action một `dbQuery({ transaction })` bắt đầu bằng việc khoá hàng `carts`, để mọi ghi của cùng một giỏ đi tuần tự; đặt lại cookie khi thành công (hạn 30 ngày trượt, cùng `carts.updated_at`). Lỗi nghiệp vụ được **trả về** (`CartActionResult`), không ném. Lỗi DB / hết giờ → `refresh()` rồi `unavailable`, không thử lại.
+- Lần đầu thêm thành công mới tạo `carts` (bị từ chối thì không ghi gì); lúc đó dọn tối đa 50 giỏ quá hạn. Giỏ quá hạn đọc như giỏ trống. Sửa / xoá khi giỏ đã hết hạn không tạo giỏ mới.
+- Tồn kho kiểm trong transaction trên dữ liệu không cache: **đã có trong giỏ + số thêm** không quá tồn kho ("Chỉ còn N sản phẩm"), mỗi dòng tối đa 10 cái, mỗi giỏ tối đa 20 loại (`src/features/cart/limits.ts`). Giảm số lượng luôn được; dòng vượt tồn kho hiện cảnh báo, không tự sửa. M4 không trừ hay giữ chỗ tồn kho.
+- Giá là giá hiện tại của sản phẩm; M6 chụp giá vào `orders.items` lúc tạo đơn.
+- Giao diện: `CartProvider` trong `(shop)/layout.tsx` giữ độ lệch số lượng bằng `useOptimistic`, số trên biểu tượng tăng ngay rồi khớp với RSC mới của action; action lỗi hoặc reject → số về như cũ, thông báo trong `role="alert"`.
+- Proxy không tham gia giỏ hàng; nó bỏ qua request không phải `GET` / `HEAD` (Server Action) trước mọi kiểm slug (ADR-0014, nếu M4 Task 7 xác nhận proxy chạy cho POST). Giới hạn tốc độ ở biên: một quy tắc Vercel WAF cho `POST` theo IP, 60 request / 60 s (ADR-0015).
 
 ### Thanh toán
 1. Khách bấm thanh toán → Server Action kiểm tra tồn kho, tạo `orders` trạng thái `pending`, gọi `PaymentProvider.createCheckout()`.
@@ -144,10 +149,10 @@ Lưu ý trên Vercel: cache của `"use cache"` nằm trong bộ nhớ từng in
 |---|---|
 | Danh mục, danh sách sản phẩm | Danh mục; danh sách không có từ khoá: `"use cache"`, `cacheLife('hours')`, `cacheTag('products')`, khoá gồm danh mục / sắp xếp / trang đã chuẩn hoá. Tìm theo `q`: không cache ([ADR-0008](./adr/0008-listing-cache-keys.md)) |
 | Chi tiết sản phẩm (gồm tồn kho) | `"use cache"`, `cacheTag('product:<slug>')`; làm mới bằng `updateTag` khi admin sửa (Server Action), `revalidateTag` khi webhook trừ kho (Route Handler); `generateStaticParams` để prerender |
-| Số lượng trong giỏ, nút thêm vào giỏ | Đọc cookie → động, bọc `<Suspense>`; vỏ trang vẫn tĩnh |
+| Số lượng trong giỏ, nút thêm vào giỏ | Số trên biểu tượng giỏ ở header của **mọi** trang `(shop)`: đọc cookie + một truy vấn đếm (chỉ khi có cookie hợp lệ) trong `<Suspense>`, vỏ trang vẫn prerender; lỗi DB chỉ làm mất con số. Không bao giờ nằm trong `"use cache"` hay `"use cache: private"`. Nút thêm vào giỏ là client component nhận `stock` từ dữ liệu sản phẩm đã cache (chỉ để vô hiệu khi hết hàng); server kiểm tồn kho lại khi ghi. `app/not-found.tsx` có link "Giỏ hàng" tĩnh không số ([ADR-0014](./adr/0014-cart-storage-and-cookie.md)) |
 | Kiểm slug sản phẩm trong `proxy.ts` | Không cache được (`cacheTag` lỗi ngoài `"use cache"`); truy vấn theo khoá unique, nhớ slug có thật trong bộ nhớ instance, slug lạ truy vấn mỗi lần; quá 400 ms hoặc lỗi → cho đi tiếp ([ADR-0009](./adr/0009-product-404-in-proxy.md)). Áp cho cả ảnh OG của sản phẩm |
 | Mọi truy vấn runtime | Qua `dbQuery` của `@/db`: lỗi thay bằng thông điệp cố định (tên truy vấn + SQLSTATE / errno), quá **5 giây** (`DB_QUERY_TIMEOUT_MS`, 100 → 10000) thì ném lỗi để trang lỗi hiện thay vì chờ `connect_timeout` 10 giây ([ADR-0011](./adr/0011-db-query-wrapper.md)); hết giờ thì dựng lại client Postgres để kết nối bị mạng nuốt gói không giữ pool ([ADR-0013](./adr/0013-db-client-recycle.md)) |
-| Blog | Tĩnh: nội dung MDX biên dịch lúc build, registry `posts.ts` trong repo; `/blog` và mọi `/blog/<slug>` prerender (`generateStaticParams`), không `"use cache"`, không tag — bài chỉ đổi khi deploy. Slug lạ: `proxy.ts` đối chiếu danh sách slug tĩnh, không chạm DB, nên không tạo entry route cache nào cho slug bịa ra — cả trang lẫn ảnh OG ([ADR-0012](./adr/0012-blog-static-registry.md)) |
+| Blog | Tĩnh trừ lỗ biểu tượng giỏ ở header (ADR-0014): nội dung MDX biên dịch lúc build, registry `posts.ts` trong repo; `/blog` và mọi `/blog/<slug>` prerender (`generateStaticParams`), không `"use cache"`, không tag — bài chỉ đổi khi deploy. Slug lạ: `proxy.ts` đối chiếu danh sách slug tĩnh, không chạm DB, nên không tạo entry route cache nào cho slug bịa ra — cả trang lẫn ảnh OG ([ADR-0012](./adr/0012-blog-static-registry.md)) |
 | `sitemap.xml`, `robots.txt` | Sitemap: sản phẩm đọc qua `getProductSitemapEntries` (`"use cache"`, `cacheTag('products')`, `cacheLife('hours')`), bài từ registry; route `○ /sitemap.xml  1h  1d`. `robots.txt` tĩnh (`Disallow: /` ngoài production, §7). Cả hai prerender lúc build: URL tuyệt đối lấy từ `getSiteUrl()` với biến môi trường **lúc build** |
 | Trang admin, giỏ hàng, checkout | Động hoàn toàn |
 

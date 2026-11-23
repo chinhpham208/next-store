@@ -1,13 +1,28 @@
 import 'server-only'
+import type { SQLWrapper } from 'drizzle-orm'
 import { runtime, type Db } from '@/db/client'
 import { MAX_QUERY_WAIT_MS } from '@/db/limits'
 
 /** `<domain>.<operation>`: a constant in code, never built from user input — it is printed as is. */
 export type DbQueryName = `${string}.${string}`
 
-type DbQueryInput<T> = {
+/**
+ * Exactly one SQL statement: a Drizzle builder (select, insert, update, delete, execute, $count), which carries
+ * getSQL. An async function or Promise.all does not, so several statements cannot hide in one `run`.
+ */
+export type DbStatement<T> = PromiseLike<T> & SQLWrapper
+
+type DbTransaction = Parameters<Parameters<Db['transaction']>[0]>[0]
+
+// Audit PR #44 L1: when another request recycles the client between two statements of one `run`, the second meets
+// CONNECTION_ENDED although the database is healthy (ADR-0013). A transaction takes its connection with BEGIN and
+// keeps it until COMMIT, so a recycle in between never touches it. Retrying instead could write twice.
+type DbWork<T> =
+  | { run: (client: Db) => DbStatement<T>; transaction?: never }
+  | { transaction: (tx: DbTransaction) => Promise<T>; run?: never }
+
+type DbQueryInput<T> = DbWork<T> & {
   name: DbQueryName
-  run: (client: Db) => PromiseLike<T>
   timeoutMs?: number
 }
 
@@ -97,7 +112,7 @@ const queryTimedOut = (name: DbQueryName): Error =>
 const TIMED_OUT = Symbol('timed out')
 
 /**
- * The only way code outside src/db reaches the database.
+ * The only way code outside src/db reaches the database: `run` for one statement, `transaction` for several.
  *
  * A timeout abandons the query without cancelling it, and recycles the client the query ran on (ADR-0013): a
  * network that swallows packets on open connections would otherwise keep every pool slot until the socket dies
@@ -105,7 +120,7 @@ const TIMED_OUT = Symbol('timed out')
  * queries still running on the old one keep up to MAX_QUERY_WAIT_MS to finish. A hang on the server side is also
  * bounded by statement_timeout of the app role (ADR-0010).
  */
-export const dbQuery = async <T>({ name, run, timeoutMs }: DbQueryInput<T>): Promise<T> => {
+export const dbQuery = async <T>({ name, run, transaction, timeoutMs }: DbQueryInput<T>): Promise<T> => {
   const limit = timeoutMs === undefined ? resolveQueryTimeout(process.env.DB_QUERY_TIMEOUT_MS) : clampTimeout(timeoutMs)
   let timer: ReturnType<typeof setTimeout> | undefined
   const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
@@ -116,7 +131,9 @@ export const dbQuery = async <T>({ name, run, timeoutMs }: DbQueryInput<T>): Pro
   // Read once: a timeout must recycle the client this query used, not one that replaced it meanwhile.
   const used = runtime.current
   // The executor turns a synchronous throw of `run` into a rejection; resolve() also runs a Drizzle builder's then.
-  const query = new Promise<T>((resolve) => resolve(run(used.db)))
+  const query = new Promise<T>((resolve) =>
+    resolve(run === undefined ? used.db.transaction((tx) => transaction(tx)) : run(used.db)),
+  )
   let result: T | typeof TIMED_OUT
   try {
     // race() keeps a handler on `query`, so a rejection that arrives after the timeout is not unhandled.

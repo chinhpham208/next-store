@@ -110,12 +110,32 @@ jobs:
         env:
           BASE_URL: ${{ steps.url.outputs.base_url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          # expect's diff puts ANSI codes inside a received string, and so possibly inside the secret, where GitHub's
+          # log masking no longer sees it (audit 2 PR #61 L-A). With colours off the runner strips every ANSI code from
+          # what it prints. Only the log: the workers always run with FORCE_COLOR=1, so the report keeps the codes and
+          # scripts/redact-report.mjs matches across them.
+          FORCE_COLOR: '0'
+          NO_COLOR: '1'
         # A trace records request headers, the bypass header included, and the report below embeds traces.
+        # playwright.config.ts already turns tracing off while the bypass is on; e2e/test.ts fails a test that turns it
+        # back on.
         run: npm run e2e -- --trace off
 
-      - name: upload Playwright report
-        # Only a failed e2e has a report; a failed URL check or smoke has nothing to upload.
+      # NS-54 (audit PR #61 M1): when a request to the preview fails, Playwright puts every request header, the bypass
+      # secret included, into the error message, and so into data/*.md and the zip embedded in index.html. GitHub masks
+      # the log, not artifacts. Mask it in every form, then prove nothing is left; otherwise nothing is uploaded.
+      - name: redact Playwright report
+        id: redact
         if: failure() && steps.e2e.outcome == 'failure'
+        env:
+          REDACT_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          node scripts/redact-report.mjs redact playwright-report/
+          node scripts/redact-report.mjs check playwright-report/
+
+      - name: upload Playwright report
+        # Only a failed e2e has a report, and only a report the check above passed is uploaded.
+        if: failure() && steps.e2e.outcome == 'failure' && steps.redact.outcome == 'success'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report-preview

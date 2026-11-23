@@ -72,9 +72,14 @@ module.exports = {
       severity: 'error',
       comment:
         'Only src/db talks to a driver (audit PR #38 L2): a client built elsewhere would skip the URL, TLS and role ' +
-        'checks of client.ts and the timeout and recycling of dbQuery. Tests included.',
+        'checks of client.ts and the timeout and recycling of dbQuery. Tests included. pg, @neondatabase/serverless ' +
+        'and their Drizzle adapters are not installed: listed so that installing one is refused at once (NS-77).',
       from: { path: '^src/', pathNot: '^src/db/' },
-      to: { path: '^node_modules/(postgres|@electric-sql/pglite|drizzle-orm/(postgres-js|pglite))/' },
+      to: {
+        path:
+          '^node_modules/(postgres|pg|@neondatabase/serverless|@electric-sql/pglite|' +
+          'drizzle-orm/(postgres-js|pglite|node-postgres|neon-http|neon-serverless))/',
+      },
     },
     {
       name: 'feature-public-api-only-cross',

@@ -25,14 +25,19 @@
 | `slug-guard.ts` | Kiểm slug tồn tại, không cache, cho `src/proxy.ts` trước khi render |
 | `posts.ts` | Registry nội dung tĩnh (blog): mảng `as const` và hàm đọc đồng bộ; **không import gì** để `proxy-api.ts` và Vitest dùng được |
 | `content.ts` | Ánh xạ slug → nội dung MDX bằng import tĩnh, kiểu `Record<Slug, MDXContent>`; không test bằng Vitest (không biên dịch MDX), proxy không được chạm |
+| `store.ts` | Đọc / ghi DB của feature theo tham số (ví dụ `cartId`, `now`), không đọc cookie hay header, để test trên PGlite; `server-only`. Ghi nhiều câu dùng `dbQuery({ transaction })` — [ADR-0014](./adr/0014-cart-storage-and-cookie.md) |
+| `cookie.ts` | Nơi **duy nhất** đọc / ghi cookie của feature: tên, thuộc tính, validate giá trị bằng Zod; `server-only` |
+| `messages.ts` | Thông điệp hiển thị cho người dùng theo mã lỗi; chỉ import `limits.ts`, `types.ts`, để client component dùng được |
+| `limits.ts` | Hằng số giới hạn (số lượng, hạn dùng); **không import gì**, để client component và Zod schema dùng chung |
 | `components/` | Component của miền |
 | `*.test.ts` | Test, đặt cạnh file được test |
 
 ## 2. Server và client
 
 - Mặc định là Server Component. Chỉ thêm `"use client"` khi cần state, effect, event handler hoặc API trình duyệt, và đặt nó ở component **nhỏ nhất** có thể.
+- File có `"use client"` (từ M4, [ADR-0014](./adr/0014-cart-storage-and-cookie.md)): chỉ `src/app/(shop)/error.tsx` và `src/features/cart/components/cart-provider.tsx`, `cart-link.tsx`, `add-to-cart-form.tsx`, `cart-line-controls.tsx`. File client chỉ import `react`, `next/link`, `@/components/ui/*`, `@/lib/cn`, `@/lib/format-price`, và trong `src/features/cart` chỉ `actions.ts` (tham chiếu action), `messages.ts`, `types.ts`, `limits.ts`; không `index.ts`, không file có `server-only`. Thêm file client mới → sửa danh sách này cùng PR. *(Vitest `cart-ui.test.ts`, M4 Task 8)*
 - File chạm vào DB, secret hoặc cookie phải bắt đầu bằng `import 'server-only'`.
-- Ngoài `src/db`, truy vấn chỉ chạy qua `dbQuery` của `@/db`; `name` là hằng `<miền>.<việc>`, không chứa dữ liệu người dùng. Ngoài `src/db` chỉ import `@/db` (`src/db/index.ts`); `@/db` không export `db` thô; chỉ test được import `@/db/client`, `migrate`, `seed`, `seed-data`. *(dependency-cruiser `db-public-api-only`)* Chỉ `src/db` import driver (`postgres`, `@electric-sql/pglite`, `drizzle-orm/postgres-js`, `drizzle-orm/pglite`), kể cả test. *(dependency-cruiser `db-drivers-stay-in-db`)* — [ADR-0011](./adr/0011-db-query-wrapper.md), [ADR-0013](./adr/0013-db-client-recycle.md).
+- Ngoài `src/db`, truy vấn chỉ chạy qua `dbQuery` của `@/db`; `name` là hằng `<miền>.<việc>`, không chứa dữ liệu người dùng. `run` trả đúng một câu lệnh Drizzle; nhiều câu thì dùng `transaction` *(kiểu `DbStatement`, ADR-0013)*. Ngoài `src/db` chỉ import `@/db` (`src/db/index.ts`); `@/db` không export `db` thô; chỉ test được import `@/db/client`, `migrate`, `seed`, `seed-data`. *(dependency-cruiser `db-public-api-only`)* Chỉ `src/db` import driver (`postgres`, `@electric-sql/pglite`, `drizzle-orm/postgres-js`, `drizzle-orm/pglite`; cả `pg`, `@neondatabase/serverless` và adapter Drizzle của chúng nếu sau này cài), kể cả test. *(dependency-cruiser `db-drivers-stay-in-db`)* — [ADR-0011](./adr/0011-db-query-wrapper.md), [ADR-0013](./adr/0013-db-client-recycle.md).
 - Không fetch phía client (React Query, SWR, `useEffect` + `fetch`) cho dữ liệu lấy được ở server.
 - Ghi dữ liệu bằng Server Actions; Route Handler chỉ dùng cho request từ bên ngoài (webhook).
 - Mọi dữ liệu từ form, URL, cookie, webhook đều validate bằng Zod trước khi dùng.
@@ -80,6 +85,7 @@
 - File test mở PGlite thật (trực tiếp hoặc qua import `@/db/client`) phải nằm trong `DB_TEST_FILES` của `vitest.config.mts` (project `db`, timeout dài hơn vì PGlite khởi động chậm khi máy tải cao). Không tăng timeout chung.
 - Playwright cho E2E trong `e2e/`, mỗi file một user story (`e2e/us-02-filter.spec.ts`), có kiểm tra a11y bằng axe.
 - Spec import `test` và `expect` từ `./test` (`e2e/test.ts`). Context riêng lấy từ fixture `newContext`, HTTP từ fixture `request` hay `page.request`. ESLint cấm trong spec: import `test` hay `import *` từ `@playwright/test`, `browser.newContext` / `request.newContext`, `fetch`. Trên Production, fixture huỷ request ghi của trình duyệt, ném lỗi ở `post` / `put` / `patch` / `delete` của `request` / `context.request` / `page.request`, và cho test đỏ ở teardown. Request ghi đi qua `route.continue()` của chính spec thì **chỉ bị ghi nhận, vẫn tới server**: không dùng `route.continue()` cho request ghi.
+- Header bypass của Vercel (`x-vercel-protection-bypass`) chỉ do fixture của `e2e/test.ts` gắn, chỉ cho request tới đúng origin của `BASE_URL` (https, không phải Production; NS-54, `e2e/bypass.ts`). Không đặt `extraHTTPHeaders` chứa secret trong `playwright.config.ts`, `test.use` hay `newContext`: chúng gửi tới mọi origin và theo mọi redirect. Route của spec cho request tới `BASE_URL` dùng `route.fallback()`; `route.continue()` gửi đi không có header. Bước redirect của trình duyệt không mang header, kể cả cùng origin. Không bật `trace` trong `test.use` của spec (ESLint chỉ cho `'off'`): trace ghi lại secret; khi có bypass, fixture cho test bật trace đỏ.
 - Test ghi dữ liệu (thêm vào giỏ, đặt hàng, sửa sản phẩm — từ M4) gắn `{ tag: '@ghi' }`; trên Production chúng bị bỏ qua (`grepInvert`). Domain production của bộ test chỉ ghi ở `e2e/production.ts` và `.github/workflows/production-e2e.yml`.
 - Test đặt cạnh file được test, tên `*.test.ts`.
 - Tên test mô tả hành vi: `it('rejects quantity above stock')`.
@@ -118,14 +124,19 @@ Chi tiết và lý do: [ADR-0006](./adr/0006-branch-strategy.md).
 
 - `db:migrate` chạy trong bước build của **mọi** deploy, trước khi code mới nhận request. Trong lúc đó và khi rollback, **code cũ vẫn chạy trên schema mới**. Hai build cùng lúc có thể cùng migrate.
 - **Expand** (làm cùng release với code dùng nó): thêm bảng, thêm cột nullable hoặc có `DEFAULT`, thêm index, thêm ràng buộc mà dữ liệu hiện có đã thoả.
+- **Expand** cũng gồm `ALTER COLUMN … DROP NOT NULL` (và `ALTER DOMAIN … DROP NOT NULL`): nới ràng buộc, mọi câu đọc / ghi của code cũ vẫn chạy.
 - **Contract** (chỉ ở release **sau** release cuối cùng còn code đọc / ghi đối tượng đó):
-  - `DROP TABLE`, `DROP COLUMN` (kể cả `ALTER TABLE t DROP c` không có từ `COLUMN`), `RENAME`, đổi kiểu cột (`ALTER COLUMN … TYPE`), `TRUNCATE`.
-  - `ALTER COLUMN … SET NOT NULL`; `ALTER TABLE … ADD [COLUMN] … NOT NULL` không có `DEFAULT`, `GENERATED` hoặc kiểu serial.
-  - `ALTER COLUMN … DROP DEFAULT`, `DROP INDEX`, `DROP CONSTRAINT`, `DROP TYPE / SCHEMA / VIEW / SEQUENCE`, `SET SCHEMA`, `REVOKE`.
-  - `DELETE FROM` và `UPDATE` không có `WHERE` của chính câu đó (kể cả trong CTE, khi bảng có alias hoặc `ONLY`). `WHERE` nằm trong subquery không tính.
-  - `EXECUTE` SQL động (trừ `EXECUTE FUNCTION` / `PROCEDURE` của trigger): không đọc được lúc kiểm nên coi là contract.
+  - **Mọi `DROP`**, trừ allowlist ở trên (chỉ `DROP NOT NULL`). Ví dụ: `DROP TABLE / COLUMN / INDEX / CONSTRAINT / TYPE / SCHEMA / VIEW / MATERIALIZED VIEW / SEQUENCE / POLICY / ROLE / FUNCTION / TRIGGER / DOMAIN / EXTENSION`, `ALTER TABLE t DROP c` không có từ `COLUMN`, `DROP OWNED`, `ALTER TYPE … DROP ATTRIBUTE`. Từ khoá mới thêm vào Postgres cũng rơi vào contract, không cần sửa danh sách.
+  - `ALTER COLUMN … DROP DEFAULT`, `DROP IDENTITY`, `DROP EXPRESSION` **không** nằm trong allowlist, dù trông như nới ràng buộc: code cũ `INSERT` không truyền cột đó vẫn dựa vào giá trị bị bỏ. Sau khi bỏ, cột nhận `NULL`, hoặc `INSERT` lỗi nếu cột `NOT NULL` (drizzle-kit sinh `DROP IDENTITY` khi bỏ `.generatedAlwaysAsIdentity()`).
+  - Allowlist phải hẹp: chỉ thêm một mục khi code release N-1 không thể nhận ra thay đổi, và ghi lý do cạnh mục đó trong `DROP_ALLOWLIST`.
+  - `RENAME`, đổi kiểu cột (`ALTER COLUMN … TYPE`), `TRUNCATE`, `SET SCHEMA`, `REVOKE`.
+  - `ALTER COLUMN … SET NOT NULL`; `ALTER TABLE … ADD [COLUMN] … NOT NULL` (hoặc `PRIMARY KEY`) khi hàng cũ không nhận được giá trị. Chỉ tính là có giá trị khi có `DEFAULT` khác `NULL` (`ON DELETE / UPDATE SET DEFAULT` là hành động của khoá ngoại, không phải default), `GENERATED ALWAYS / BY DEFAULT`, hoặc kiểu serial đứng ngay sau tên cột. Cột tên `serial` hay `generated` không tính.
+  - `DELETE FROM` và `UPDATE` không có `WHERE` của chính câu đó (kể cả trong CTE, khi bảng có alias hoặc `ONLY`, và `CREATE RULE … DO [ALSO | INSTEAD] UPDATE`). `WHERE` nằm trong subquery không tính. `WHERE true` và `WHERE 1 = 1` (không kèm `AND`) coi như không có `WHERE`.
+  - `MERGE … THEN DELETE` hoặc `THEN UPDATE`, kể cả `WHEN NOT MATCHED BY SOURCE` (xoá / sửa mọi hàng không có trong nguồn). `MERGE` chỉ `INSERT` là expand.
+  - `EXECUTE` SQL động: không đọc được lúc kiểm nên coi là contract. Ngoại lệ duy nhất là `EXECUTE FUNCTION` / `PROCEDURE` trong câu `CREATE [OR REPLACE] [CONSTRAINT | EVENT] TRIGGER`; `EXECUTE function;` (biến plpgsql) vẫn là contract.
   - File migration phải có dòng `-- contract: NS-<số>` ghi ticket của bước expand tương ứng. Một dòng cho cả file: Auditor kiểm từng câu lệnh contract trong file khớp ticket đó.
-- `src/db/migrations.test.ts` chỉ là lưới thứ hai: nó dò bằng regex trên SQL đã bỏ comment và chuỗi, nên không hiểu hết cú pháp và có thể lọt câu contract, không chỉ báo nhầm. Thân dollar-quote dừng ở đúng tag đóng của nó. Nếu thân đó đọc được như code thì các câu bên trong được kiểm, nên `$$TRUNCATE$$` bị báo nhầm. Nếu không đọc được thì coi là chuỗi. Chuỗi, tên, comment hay dollar-quote chưa đóng khi hết file thì được báo là contract (`unterminated …`). Auditor vẫn đọc từng câu của mọi `drizzle/*.sql`, test xanh không thay việc đó.
+- `src/db/migrations.test.ts` chỉ là lưới thứ hai: nó dò bằng regex trên SQL đã bỏ comment và chuỗi, nên không hiểu hết cú pháp và có thể lọt câu contract, không chỉ báo nhầm. Thân dollar-quote dừng ở đúng tag đóng của nó. Nếu thân đó đọc được như code thì các câu bên trong được kiểm, nên `$$TRUNCATE$$` bị báo nhầm. Nếu không đọc được thì coi là chuỗi. Chuỗi, tên, comment hay dollar-quote chưa đóng khi hết file thì được báo là contract (`unterminated …`). Báo nhầm đã biết (hướng an toàn): `DROP` trong thân hàm hay `DO` (kể cả bảng tạm), `MERGE … WHEN MATCHED AND … THEN UPDATE`. Auditor vẫn đọc từng câu của mọi `drizzle/*.sql`, test xanh không thay việc đó.
+- Gọi hàm hoặc procedure do mình viết (`SELECT purge_carts();`, `CALL …`): test không đọc được thân hàm đã tạo ở migration trước. Auditor đọc thân hàm và xếp loại câu gọi theo những gì hàm làm.
 - `CREATE INDEX` (không `CONCURRENTLY`) và `ADD CONSTRAINT` khoá bảng khi chạy; không nằm trong danh sách trên nhưng Auditor đánh giá riêng với `orders` và `cart_items` trước khi merge.
 - Backfill dữ liệu là migration riêng, chạy lại được, không nằm chung file với đổi schema.
 - Không sửa hay xoá file `drizzle/*.sql` đã merge; sai thì viết migration mới.

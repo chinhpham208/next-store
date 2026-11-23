@@ -12,7 +12,7 @@ flowchart TB
   payment["Cổng thanh toán<br/>Fake (test) / cổng VN khi mở bán"]
 
   subgraph next["Next.js 16 server"]
-    proxy["proxy.ts<br/>404 cho /products/:slug không tồn tại (M2)<br/>404 cho /blog/:slug không tồn tại, không chạm DB (M3)<br/>chặn /admin khi chưa đăng nhập (M5)"]
+    proxy["proxy.ts<br/>404 cho /products/:slug không tồn tại (M2)<br/>404 cho /blog/:slug không tồn tại, không chạm DB (M3)<br/>bỏ qua request không phải GET/HEAD, tức Server Action (M4)<br/>chặn /admin khi chưa đăng nhập (M5)"]
     subgraph app["src/app — chỉ routing"]
       pages["Pages<br/>Server Components"]
       actions["Server Actions<br/>giỏ hàng, sửa sản phẩm"]
@@ -89,18 +89,23 @@ sequenceDiagram
 
 ```mermaid
 flowchart LR
-  subgraph page["Trang /products/[slug]"]
-    shell["Vỏ trang + thông tin sản phẩm<br/>&quot;use cache&quot; · tag product:&lt;slug&gt;"]
-    hole["Lỗ động trong Suspense<br/>số lượng giỏ, nút thêm vào giỏ<br/>(đọc cookie)"]
+  subgraph layout["Header của mọi trang (shop): /, /products, /products/[slug], /blog, /blog/[slug], /cart"]
+    hole["Lỗ động trong Suspense<br/>số trên biểu tượng giỏ<br/>(đọc cookie + một truy vấn đếm)"]
   end
+  subgraph page["Trang /products/[slug]"]
+    shell["Vỏ trang + thông tin sản phẩm<br/>&quot;use cache&quot; · tag product:&lt;slug&gt;<br/>nút thêm vào giỏ (client, stock từ cache)"]
+  end
+  action["Server Action giỏ hàng<br/>đặt lại cookie"]
   edit["Admin sửa sản phẩm"] -->|updateTag| shell
   paid["Webhook trừ kho"] -->|revalidateTag| shell
   req["Mỗi request"] --> hole
+  action -->|render lại route trong cùng response| hole
 ```
 
 - Phần vỏ và dữ liệu sản phẩm được phục vụ từ cache cho đến khi có sự kiện làm mới.
-- Phần phụ thuộc cookie luôn được tính lại cho từng người xem.
-- Blog được tạo tĩnh lúc build, không cần làm mới.
+- Phần phụ thuộc cookie luôn được tính lại cho từng người xem. Từ M4 đó là số trên biểu tượng giỏ ở header của **mọi** trang `(shop)`; vỏ trang vẫn prerender, lỗi DB chỉ làm mất con số. Dữ liệu giỏ không bao giờ nằm trong `"use cache"` ([ADR-0014](./adr/0014-cart-storage-and-cookie.md)).
+- Server Action của giỏ không gọi `updateTag`: M4 không sửa tồn kho. Đặt lại cookie làm Next.js render lại route hiện tại, nên biểu tượng giỏ cập nhật trong cùng response.
+- Blog được tạo tĩnh lúc build, không cần làm mới; chỉ lỗ biểu tượng giỏ ở header là động.
 
 ## 5. Mô hình dữ liệu
 
@@ -128,13 +133,15 @@ erDiagram
     timestamp updated_at
   }
   carts {
-    uuid id PK "lưu trong cookie httpOnly"
+    uuid id PK "UUID v4 do server sinh, lưu trong cookie httpOnly"
     timestamp created_at
+    timestamp updated_at "hết hạn 30 ngày trượt"
   }
   cart_items {
-    uuid cart_id FK
-    integer product_id FK
-    integer quantity
+    uuid cart_id PK, FK "ON DELETE CASCADE"
+    integer product_id PK, FK "ON DELETE CASCADE"
+    integer quantity "CHECK > 0"
+    timestamp created_at
   }
   orders {
     serial id PK
@@ -147,7 +154,7 @@ erDiagram
   }
 ```
 
-`orders` lưu bản chụp sản phẩm (`items`) thay vì tham chiếu, để đơn cũ không đổi khi giá sản phẩm thay đổi. Bảng `carts`, `cart_items` thêm ở M4; `orders` ở M6.
+`orders` lưu bản chụp sản phẩm (`items`) thay vì tham chiếu, để đơn cũ không đổi khi giá sản phẩm thay đổi. Bảng `carts`, `cart_items` thêm ở M4; `orders` ở M6. Giỏ không lưu giá: luôn dùng giá hiện tại, M6 chụp giá vào `orders.items` lúc tạo đơn ([ADR-0014](./adr/0014-cart-storage-and-cookie.md)).
 
 ## 6. Môi trường và luồng deploy
 

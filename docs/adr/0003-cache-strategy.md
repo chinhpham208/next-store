@@ -1,6 +1,6 @@
 # ADR-0003: Chiến lược cache bằng Cache Components
 
-- Trạng thái: Đã chấp nhận
+- Trạng thái: Đã chấp nhận; bổ sung bởi [ADR-0014](./0014-cart-storage-and-cookie.md) (header của mọi trang `(shop)` có lỗ động biểu tượng giỏ; blog không còn "tĩnh hoàn toàn")
 - Ngày: 2026-11-19
 
 ## Bối cảnh

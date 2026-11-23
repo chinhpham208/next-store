@@ -15,6 +15,7 @@ import {
   createConnection,
   createRuntimeConnection,
   type DatabaseTarget,
+  MIN_RECYCLE_AGE_MS,
   describeError,
   describeTarget,
   neonEndpointIds,
@@ -502,7 +503,7 @@ describe('production endpoint guard (NS-36)', () => {
   )
   it('accepts production on the declared endpoint and trims the value', () => {
     expect(onVercel('production', neon(`${PROD}-pooler`), ` ${PROD} `)()).toMatchObject({ kind: 'postgres' })
-    expect(onVercel('production', neon(PROD.toUpperCase()), PROD)()).toMatchObject({ kind: 'postgres' })
+    expect(onVercel('production', neon(`${PROD.toUpperCase()}-pooler`), PROD)()).toMatchObject({ kind: 'postgres' })
   })
   it.each([
     ['another endpoint', neon(`${BRANCH}-pooler`)],
@@ -598,7 +599,7 @@ describe('production endpoint guard (NS-36)', () => {
     )
   })
   it('still accepts a password that only contains the word endpoint', () => {
-    expect(onVercel('preview', withPassword(BRANCH, 'my-endpoint=x'), PROD)()).toMatchObject({ kind: 'postgres' })
+    expect(onVercel('preview', withPassword(`${BRANCH}-pooler`, 'my-endpoint=x'), PROD)()).toMatchObject({ kind: 'postgres' })
   })
   it.each(['pg.neon.tech', 'proxy.ap-southeast-1.aws.neon.tech', 'PG.NEON.TECH', 'api.c-2.ap-southeast-1.aws.neon.tech.'])(
     'refuses a preview on the Neon host %s that names no endpoint',
@@ -634,6 +635,66 @@ describe('production endpoint guard (NS-36)', () => {
 })
 
 // ADR-0008: DB_LOG=1 prints every statement with its parameters, i.e. customer data, to the function log.
+// Audit PR #44 N1 (NS-77): after a recycle an instance holds up to ~15 sockets. PgBouncer behind the -pooler host
+// absorbs that; a direct host would let them reach max_connections (105 at 0.25 CU) with a handful of instances.
+describe('Neon pooler guard on Vercel (NS-77)', () => {
+  const POOLER_REFUSAL = /DATABASE_URL.*-pooler/
+  it.each(['production', 'preview', 'development'])('refuses a direct Neon host on %s', (vercelEnv) => {
+    const run = onVercel(vercelEnv, neon(BRANCH), vercelEnv === 'production' ? undefined : PROD)
+    expect(run).toThrow(POOLER_REFUSAL)
+    expect(run).toThrow(/^Từ chối kết nối/)
+  })
+  it('refuses the direct production host on production with the endpoint declared', () => {
+    expect(onVercel('production', neon(PROD), PROD)).toThrow(POOLER_REFUSAL)
+  })
+  it('refuses a Neon host that names no endpoint on production', () => {
+    expect(onVercel('production', 'postgresql://u:p@api.c-2.ap-southeast-1.aws.neon.tech/neondb?sslmode=require')).toThrow(
+      POOLER_REFUSAL,
+    )
+  })
+  it('names neither the host, the endpoint nor the credentials', () => {
+    try {
+      onVercel('production', neon(PROD), PROD)()
+    } catch (error) {
+      expect(String(error)).not.toMatch(/npg_FakePass123|neondb_owner|neon\.tech|ep-prod|ap-southeast/)
+      return
+    }
+    throw new Error('expected a refusal')
+  })
+  it.each([`${BRANCH}-pooler`, `${BRANCH}-POOLER`])('accepts the pooled host %s', (host) => {
+    expect(onVercel('preview', neon(host), PROD)()).toMatchObject({ kind: 'postgres' })
+    expect(onVercel('production', neon(host))()).toMatchObject({ kind: 'postgres' })
+  })
+  it('leaves non-Neon hosts alone', () => {
+    expect(onVercel('production', 'postgres://u:p@db.example.com/app?sslmode=require')()).toMatchObject({ kind: 'postgres' })
+  })
+  it('does not check outside Vercel', () => {
+    expect(resolveDatabaseTarget({ DATABASE_URL: neon(BRANCH) })).toMatchObject({ kind: 'postgres' })
+  })
+  it('lets db:migrate ask for the direct host (DATABASE_URL_UNPOOLED)', () => {
+    const env = { VERCEL: '1', VERCEL_ENV: 'preview', DATABASE_URL: neon(BRANCH), NEON_PRODUCTION_ENDPOINT: PROD }
+    expect(resolveDatabaseTarget(env, { requirePooler: false })).toMatchObject({ kind: 'postgres' })
+    expect(() => resolveDatabaseTarget(env)).toThrow(POOLER_REFUSAL)
+  })
+  it('still runs the endpoint guard first', () => {
+    expect(onVercel('preview', neon(PROD), PROD)).toThrow(/NEON_PRODUCTION_ENDPOINT/)
+  })
+  it('refuses the runtime connection before any client exists', async () => {
+    vi.resetModules()
+    vi.stubEnv('VERCEL', '1')
+    vi.stubEnv('VERCEL_ENV', 'production')
+    vi.stubEnv('DATABASE_URL', neon(PROD))
+    const saved = globalThis.nextStoreDbRuntime
+    globalThis.nextStoreDbRuntime = undefined
+    try {
+      await expect(import('@/db/client')).rejects.toThrow(POOLER_REFUSAL)
+      expect(postgresFactory).not.toHaveBeenCalled()
+    } finally {
+      globalThis.nextStoreDbRuntime = saved
+    }
+  })
+})
+
 describe('DB_LOG guard (NS-36 L3)', () => {
   const pg = (url: string): DatabaseTarget => ({ kind: 'postgres', url })
   it.each([
@@ -1038,7 +1099,15 @@ describe('createRuntimeConnection', () => {
     return created
   })
 
+  // A clock of our own: a client younger than MIN_RECYCLE_AGE_MS is never replaced (audit PR #44 L2).
+  let time = 0
+  const now = () => time
+  const age = (ms: number) => {
+    time += ms
+  }
+
   beforeEach(() => {
+    time = 1_000_000
     opened.length = 0
     open.mockClear()
     vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -1049,10 +1118,11 @@ describe('createRuntimeConnection', () => {
   })
 
   it('replaces the client a timed-out query used and lets the old one finish within 10 s', () => {
-    const runtime = createRuntimeConnection(open)
+    const runtime = createRuntimeConnection(open, { now })
     const first = runtime.current
     if (first.kind !== 'postgres') throw new Error('expected a postgres connection')
     const end = vi.spyOn(first.db.$client, 'end')
+    age(MIN_RECYCLE_AGE_MS)
     runtime.recycle(first)
     expect(runtime.current).not.toBe(first)
     expect(open).toHaveBeenCalledTimes(2)
@@ -1061,10 +1131,12 @@ describe('createRuntimeConnection', () => {
   })
 
   it('ignores a client that was already replaced', () => {
-    const runtime = createRuntimeConnection(open)
+    const runtime = createRuntimeConnection(open, { now })
     const first = runtime.current
+    age(MIN_RECYCLE_AGE_MS)
     runtime.recycle(first)
     const second = runtime.current
+    age(MIN_RECYCLE_AGE_MS)
     runtime.recycle(first)
     expect(runtime.current).toBe(second)
     expect(open).toHaveBeenCalledTimes(2)
@@ -1072,9 +1144,10 @@ describe('createRuntimeConnection', () => {
 
   it('never replaces PGlite', () => {
     const openPglite = vi.fn(() => createConnection({ kind: 'pglite', dataDir: 'memory://' }))
-    const runtime = createRuntimeConnection(openPglite)
+    const runtime = createRuntimeConnection(openPglite, { now })
     const only = runtime.current
     expect(only.kind).toBe('pglite')
+    age(MIN_RECYCLE_AGE_MS)
     runtime.recycle(only)
     expect(runtime.current).toBe(only)
     expect(openPglite).toHaveBeenCalledOnce()
@@ -1085,15 +1158,59 @@ describe('createRuntimeConnection', () => {
     const unhandled = vi.fn()
     process.on('unhandledRejection', unhandled)
     try {
-      const runtime = createRuntimeConnection(open)
+      const runtime = createRuntimeConnection(open, { now })
       const first = runtime.current
       if (first.kind !== 'postgres') throw new Error('expected a postgres connection')
       vi.spyOn(first.db.$client, 'end').mockRejectedValue(new Error('end failed'))
+      age(MIN_RECYCLE_AGE_MS)
       runtime.recycle(first)
       await new Promise((resolve) => setTimeout(resolve, 20))
       expect(unhandled).not.toHaveBeenCalled()
     } finally {
       process.off('unhandledRejection', unhandled)
     }
+  })
+  // Audit PR #44 L2: with DB_QUERY_TIMEOUT_MS at 100–300 ms and a slow database, every timeout used to open a new
+  // client, up to ~100 live clients (500 sockets) per instance while the retired ones wait out their 10 s.
+  it('keeps a client younger than MIN_RECYCLE_AGE_MS, then replaces it on a later timeout', () => {
+    const runtime = createRuntimeConnection(open, { now })
+    const first = runtime.current
+    age(MIN_RECYCLE_AGE_MS - 1)
+    runtime.recycle(first)
+    expect(runtime.current).toBe(first)
+    expect(open).toHaveBeenCalledOnce()
+    expect(console.warn).not.toHaveBeenCalled()
+    age(1)
+    runtime.recycle(first)
+    expect(runtime.current).not.toBe(first)
+    expect(open).toHaveBeenCalledTimes(2)
+  })
+
+  it('measures the age from when the replacement was opened, not from the first client', () => {
+    const runtime = createRuntimeConnection(open, { now })
+    age(MIN_RECYCLE_AGE_MS)
+    runtime.recycle(runtime.current)
+    const second = runtime.current
+    age(MIN_RECYCLE_AGE_MS - 1)
+    runtime.recycle(second)
+    expect(runtime.current).toBe(second)
+    age(1)
+    runtime.recycle(second)
+    expect(runtime.current).not.toBe(second)
+    expect(open).toHaveBeenCalledTimes(3)
+  })
+
+  it('opens at most one client per MIN_RECYCLE_AGE_MS however short the query limit', () => {
+    const runtime = createRuntimeConnection(open, { now })
+    // A 100 ms limit against a slow database: a timeout every 100 ms for 10 s (the retire window).
+    for (let elapsed = 0; elapsed < 10_000; elapsed += 100) {
+      age(100)
+      runtime.recycle(runtime.current)
+    }
+    expect(open.mock.calls.length).toBeLessThanOrEqual(1 + 10_000 / MIN_RECYCLE_AGE_MS)
+  })
+
+  it('uses a floor of 2 s', () => {
+    expect(MIN_RECYCLE_AGE_MS).toBe(2000)
   })
 })
