@@ -1,7 +1,7 @@
 import { cacheLife, cacheTag } from 'next/cache'
 import { readFileSync } from 'node:fs'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { db } from '@/db'
+import { db } from '@/db/client'
 import { runMigrations } from '@/db/migrate'
 import { seed } from '@/db/seed'
 import { getAllProductSlugs, getProductBySlug, isKnownProductSlug } from '@/features/products'
@@ -58,6 +58,16 @@ describe('getProductBySlug', () => {
       expect(cacheLife).not.toHaveBeenCalled()
     },
   )
+  it('NS-55: a failed detail query carries neither the SQL nor the slug', async () => {
+    vi.spyOn(db, 'select').mockImplementationOnce(() => {
+      throw Object.assign(new Error('Failed query: select "slug" from "products" params: sticker-git'), {
+        cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9'), { code: 'ECONNREFUSED' }),
+      })
+    })
+    const error: unknown = await getProductBySlug('sticker-git').catch((caught: unknown) => caught)
+    expect(error).toMatchObject({ message: 'database query failed: products.detail (ECONNREFUSED)' })
+    expect(error).not.toHaveProperty('cause')
+  })
   it('tags the cache entry with product:<slug> and an hours lifetime', async () => {
     await getProductBySlug('sticker-git')
     expect(cacheTag).toHaveBeenCalledWith('product:sticker-git')
@@ -99,13 +109,13 @@ describe('isKnownProductSlug', () => {
     vi.spyOn(db, 'select').mockImplementationOnce(() => {
       throw new Error('db down')
     })
-    await expect(isKnownProductSlug('sticker-vit-cao-su')).rejects.toThrow('db down')
+    await expect(isKnownProductSlug('sticker-vit-cao-su')).rejects.toThrow(/^database query failed: products\.slug-guard$/)
   })
   it('does not remember a slug whose lookup failed', async () => {
     vi.spyOn(db, 'select').mockImplementationOnce(() => {
       throw new Error('db down')
     })
-    await expect(isKnownProductSlug('sticker-vit-cao-su')).rejects.toThrow('db down')
+    await expect(isKnownProductSlug('sticker-vit-cao-su')).rejects.toThrow(/^database query failed: products\.slug-guard$/)
     expect(await isKnownProductSlug('sticker-vit-cao-su')).toBe(true)
   })
   it('answers a malformed slug without the database even when the database is down', async () => {

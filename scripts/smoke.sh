@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Smoke test: trang chủ trả 200 và có SMOKE_TEXT; một đường dẫn không tồn tại trả 404 với trang tiếng Việt;
 # một trang chi tiết sản phẩm trả 200 và có tên sản phẩm; /products trả 200 và có lưới sản phẩm, kể cả với
-# tham số không hợp lệ; slug sản phẩm không tồn tại trả 404 ngay lần đầu.
+# tham số không hợp lệ; /blog và một bài blog trả 200 và có nội dung; slug sản phẩm, slug bài và ảnh OG của slug
+# lạ trả 404 ngay lần đầu, bài và sản phẩm có thật vẫn 200 ở mọi dạng vận chuyển; /sitemap.xml và /robots.txt trả 200, cùng một origin tuyệt đối, robots.txt chặn hay cho crawl đúng môi trường;
+# trang chủ có og:site_name; og:image của trang chủ, một sản phẩm và một bài blog tải được, là PNG.
 #
 #   npm run smoke                                   # chạy `next start` từ bản build hiện có (.next/), kiểm rồi tắt
 #   BASE_URL=https://<deploy>.vercel.app npm run smoke   # kiểm một URL đã deploy
@@ -11,6 +13,9 @@
 #   SMOKE_TEXT                       chuỗi phải có trong HTML trang chủ (mặc định: tên một sản phẩm nổi bật trong
 #                                    src/db/seed-data.ts, chứng minh trang đọc được dữ liệu, không chỉ render khung)
 #   SMOKE_PORT                       cổng cho `next start` khi không có BASE_URL (mặc định: 3100); cổng phải trống
+#   SMOKE_ROBOTS                     disallow = robots.txt phải `Disallow: /` (Preview / Dev; workflow e2e-preview đặt),
+#                                    allow = phải `Allow: /` (Production). Bỏ trống: chấp nhận một trong hai, in ra
+#                                    (next start: build ngoài Vercel là disallow). Header X-Robots-Tag luôn chỉ được in
 #   VERCEL_AUTOMATION_BYPASS_SECRET  có thì gửi header x-vercel-protection-bypass (vượt Deployment Protection),
 #                                    chỉ khi BASE_URL là https://
 set -euo pipefail
@@ -94,6 +99,7 @@ validate_input() {
   local http_re='^http://(localhost|127\.0\.0\.1)(:[0-9]{1,5})?/?$'
   [[ $SMOKE_PORT =~ ^[0-9]{1,5}$ ]] && [ "$((10#$SMOKE_PORT))" -ge 1 ] && [ "$((10#$SMOKE_PORT))" -le 65535 ] ||
     fail "SMOKE_PORT không hợp lệ: cần số nguyên 1–65535."
+  case ${SMOKE_ROBOTS:-} in ''|allow|disallow) ;; *) fail "SMOKE_ROBOTS không hợp lệ: cần allow, disallow hoặc bỏ trống." ;; esac
   SCHEME=http
   if [ -n "${BASE_URL:-}" ]; then
     if [[ $BASE_URL =~ $https_re ]]; then SCHEME=https
@@ -127,7 +133,7 @@ else
 fi
 echo "smoke: $BASE"
 
-status=$(fetch "$BASE/" "$TMP/home.html") || fail "không kết nối được $BASE/"
+status=$(fetch "$BASE/" "$TMP/home.html" '' "$TMP/home.headers") || fail "không kết nối được $BASE/"
 # Protection answers 401 (login page) or redirects to vercel.com; say so instead of a bare "expected 200".
 if [ "$status" = 401 ] || [ "$status" = 403 ] || { [ "$status" != 200 ] && grep -q 'vercel\.com/\(sso\|login\)' "$TMP/home.html"; }; then
   [ -n "$SEND_BYPASS" ] && fail "GET / trả $status: Vercel Deployment Protection từ chối bypass secret."
@@ -136,6 +142,54 @@ fi
 [ "$status" = 200 ] || fail "GET / trả $status, cần 200"
 grep -qF -- "$SMOKE_TEXT" "$TMP/home.html" || fail "HTML trang chủ không có \"$SMOKE_TEXT\""
 echo "smoke: GET / → 200, có \"$SMOKE_TEXT\""
+
+# Owner decision 15 (plan M3) relied on Vercel's `X-Robots-Tag: noindex` on Preview / Dev; NS-65 found Dev without
+# it, so robots.txt now says Disallow: / outside production (checked below). The header is still printed, right after
+# /, so every run records what Vercel sends. Third-party text: reduced to a safe set before it is printed.
+report_robots_tag() { # report_robots_tag <path> <response-headers-file>
+  local value
+  value=$(tr -d '\r' < "$2" | sed -n 's/^[Xx]-[Rr][Oo][Bb][Oo][Tt][Ss]-[Tt][Aa][Gg]: *//p' | head -n 1 | tr -cd 'A-Za-z0-9 ,:_-')
+  echo "smoke: GET $1 → x-robots-tag: ${value:-<không có>}"
+}
+report_robots_tag / "$TMP/home.headers"
+status=$(fetch "$BASE/robots.txt" "$TMP/robots.txt" '' "$TMP/robots.headers") || fail "không kết nối được $BASE/robots.txt"
+report_robots_tag /robots.txt "$TMP/robots.headers"
+status_sitemap=$(fetch "$BASE/sitemap.xml" "$TMP/sitemap.xml" '' "$TMP/sitemap.headers") ||
+  fail "không kết nối được $BASE/sitemap.xml"
+report_robots_tag /sitemap.xml "$TMP/sitemap.headers"
+
+# US-11 / NFR SEO: every <loc> is absolute on one origin; on a deployment that origin is https and not localhost
+# (no metadataBase / SITE_URL read at build → localhost, K6, K12). robots.txt points at the sitemap on that origin.
+[ "$status" = 200 ] || fail "GET /robots.txt trả $status, cần 200"
+[ "$status_sitemap" = 200 ] || fail "GET /sitemap.xml trả $status_sitemap, cần 200"
+for SITEMAP_LOC in /products/ao-404-not-found /blog/chao-mung-den-next-store; do
+  grep -qF -- "$SITEMAP_LOC</loc>" "$TMP/sitemap.xml" || fail "/sitemap.xml không có $SITEMAP_LOC</loc>"
+done
+SITEMAP_ORIGINS=$(grep -o '<loc>[^<]*</loc>' "$TMP/sitemap.xml" | sed -E 's#^<loc>([a-z]+://[^/<]+).*#\1#' | sort -u)
+[ "$(printf '%s\n' "$SITEMAP_ORIGINS" | grep -c .)" = 1 ] || fail "/sitemap.xml có <loc> trên nhiều origin hoặc không có <loc> nào"
+[[ $SITEMAP_ORIGINS =~ ^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?$ ]] || fail "/sitemap.xml có <loc> không phải URL tuyệt đối"
+if [ "$SCHEME" = https ] && [[ ! $SITEMAP_ORIGINS =~ ^https:// || $SITEMAP_ORIGINS =~ ^https?://(localhost|127\.0\.0\.1)(:|$) ]]; then
+  fail "/sitemap.xml dùng origin $SITEMAP_ORIGINS trên deployment: cần https và không phải localhost"
+fi
+echo "smoke: GET /sitemap.xml → 200, mọi <loc> trên $SITEMAP_ORIGINS"
+ROBOTS_POLICY=
+if tr -d '\r' < "$TMP/robots.txt" | grep -qx 'Allow: /'; then ROBOTS_POLICY=allow; fi
+if tr -d '\r' < "$TMP/robots.txt" | grep -qx 'Disallow: /'; then
+  if [ -n "$ROBOTS_POLICY" ]; then ROBOTS_POLICY=both; else ROBOTS_POLICY=disallow; fi
+fi
+case $ROBOTS_POLICY in
+  allow|disallow) ;;
+  both) fail "/robots.txt có cả \"Allow: /\" lẫn \"Disallow: /\"" ;;
+  *) fail "/robots.txt không có \"Allow: /\" hay \"Disallow: /\"" ;;
+esac
+if [ -n "${SMOKE_ROBOTS:-}" ] && [ "$ROBOTS_POLICY" != "$SMOKE_ROBOTS" ]; then
+  fail "/robots.txt là $ROBOTS_POLICY, cần $SMOKE_ROBOTS (SMOKE_ROBOTS; ngoài production phải Disallow: /, quyết định 15 plan M3)"
+fi
+tr -d '\r' < "$TMP/robots.txt" | grep -qxF "Sitemap: $SITEMAP_ORIGINS/sitemap.xml" ||
+  fail "/robots.txt không có dòng \"Sitemap: $SITEMAP_ORIGINS/sitemap.xml\""
+echo "smoke: GET /robots.txt → 200, $ROBOTS_POLICY /, Sitemap: $SITEMAP_ORIGINS/sitemap.xml"
+grep -qF -- 'property="og:site_name" content="next-store"' "$TMP/home.html" || fail "HTML trang chủ không có og:site_name"
+echo "smoke: trang chủ có og:site_name"
 
 status=$(fetch "$BASE/khong-ton-tai" "$TMP/404.html") || fail "không kết nối được $BASE/khong-ton-tai"
 [ "$status" = 404 ] || fail "GET /khong-ton-tai trả $status, cần 404"
@@ -163,24 +217,64 @@ for LISTING_PATH in /products '/products?page=abc&sort=xyz'; do
   echo "smoke: GET $LISTING_PATH → 200, có lưới sản phẩm"
 done
 
+# US-10: /blog lists the posts from the registry and a prerendered post renders its MDX under its h1. Unknown blog
+# slugs are checked with the other 404s below.
+BLOG_TEXT='Chào mừng đến next-store'
+status=$(fetch "$BASE/blog" "$TMP/blog.html") || fail "không kết nối được $BASE/blog"
+[ "$status" = 200 ] || fail "GET /blog trả $status, cần 200"
+grep -qF -- "$BLOG_TEXT" "$TMP/blog.html" || fail "HTML /blog không có \"$BLOG_TEXT\""
+echo "smoke: GET /blog → 200, có \"$BLOG_TEXT\""
+POST_PATH=/blog/chao-mung-den-next-store
+status=$(fetch "$BASE$POST_PATH" "$TMP/post.html") || fail "không kết nối được $BASE$POST_PATH"
+[ "$status" = 200 ] || fail "GET $POST_PATH trả $status, cần 200"
+grep -qF -- '<h1' "$TMP/post.html" || fail "HTML $POST_PATH không có <h1"
+grep -qF -- '<article' "$TMP/post.html" || fail "HTML $POST_PATH không có <article"
+echo "smoke: GET $POST_PATH → 200, có <h1 và <article"
+
+# US-11: each page's og:image loads as a PNG. Only the path and query of the tag are fetched, on BASE: the host in the
+# tag is the site URL read at build time (localhost:3000 under next start, K6). A route that built but reads uncached
+# IO answers 500 here (K8). The value comes from the page, so it is reduced to a URL path before it reaches curl.
+# The path is kept in OG_PATH: the 404 checks below swap its slug for an unknown one.
+OG_PATH=
+expect_og_image() { # expect_og_image <page path> <html file>
+  local page=$1 html=$2 url path status type
+  url=$(grep -o '<meta property="og:image" content="[^"]*"' "$html" | head -n 1 | sed -E 's/.*content="([^"]*)"/\1/; s/&amp;/\&/g')
+  [ -n "$url" ] || fail "HTML $page không có og:image"
+  path=$(printf '%s' "$url" | sed -E 's#^https?://[^/]+##')
+  [[ $path =~ ^/[A-Za-z0-9/._?=-]*$ ]] || fail "og:image của $page không phải đường dẫn hợp lệ"
+  status=$(fetch "$BASE$path" "$TMP/og.png" '' "$TMP/og.headers") || fail "không kết nối được $BASE$path"
+  [ "$status" = 200 ] || fail "GET $path (og:image của $page) trả $status, cần 200"
+  type=$(tr -d '\r' < "$TMP/og.headers" | sed -n 's/^[Cc]ontent-[Tt]ype: *//p' | tail -n 1)
+  [ "$type" = image/png ] || fail "GET $path (og:image của $page) có content-type \"$type\", cần image/png"
+  echo "smoke: og:image của $page → GET $path → 200, image/png"
+  OG_PATH=$path
+}
+expect_og_image / "$TMP/home.html"
+expect_og_image "$DETAIL_PATH" "$TMP/detail.html"
+DETAIL_OG_PATH=$OG_PATH
+expect_og_image "$POST_PATH" "$TMP/post.html"
+POST_OG_PATH=$OG_PATH
+[[ $DETAIL_OG_PATH == "$DETAIL_PATH/opengraph-image"* ]] || fail "og:image của $DETAIL_PATH không nằm dưới $DETAIL_PATH/opengraph-image"
+[[ $POST_OG_PATH == "$POST_PATH/opengraph-image"* ]] || fail "og:image của $POST_PATH không nằm dưới $POST_PATH/opengraph-image"
+
 # US-05 (ADR-0009): src/proxy.ts answers an unknown product slug with a real 404 on the very first request, before
 # render; a page-level notFound() would send a 200 shell first (K3). Fresh slugs each run, so no earlier request
 # can have left a cached 404 behind, plus the fixed slug from the acceptance criteria. Every transport form of the
 # URL (RSC request, .rsc suffix) and every non-canonical spelling (%2D, upper case) must be a 404 too.
 # Every case runs before smoke fails: which variants pass tells whether the proxy ran at all (malformed slugs never
 # reach the database) or only its database lookup failed open.
-PRODUCT_404_FAILED=
-expect_product_404() { # expect_product_404 <path> <label> [header]
+NOT_FOUND_FAILED=
+expect_404() { # expect_404 <path> <label> [header]
   local path=$1 label=$2 header=${3:-} status
-  status=$(fetch "$BASE$path" "$TMP/product-404" "$header") || fail "không kết nối được $BASE$path"
+  status=$(fetch "$BASE$path" "$TMP/not-found" "$header") || fail "không kết nối được $BASE$path"
   if [ "$status" != 404 ]; then
     echo "smoke: LỖI: GET $path ($label) trả $status ngay lần đầu, cần 404" >&2
-    PRODUCT_404_FAILED=1
+    NOT_FOUND_FAILED=1
     return 0
   fi
-  if [ -z "$header" ] && [ "${path%.rsc}" = "$path" ] && ! grep -qF 'Không tìm thấy trang' "$TMP/product-404"; then
+  if [ -z "$header" ] && [ "${path%.rsc}" = "$path" ] && ! grep -qF 'Không tìm thấy trang' "$TMP/not-found"; then
     echo "smoke: LỖI: HTML $path ($label) không có \"Không tìm thấy trang\"" >&2
-    PRODUCT_404_FAILED=1
+    NOT_FOUND_FAILED=1
     return 0
   fi
   echo "smoke: GET $path ($label) → 404"
@@ -218,43 +312,72 @@ warm_up_product_lookup() {
   fail "proxy chưa trả 404 cho slug lạ sau $((MAX_WARMUP_FAIL_OPEN + 1)) request: hơn $MAX_WARMUP_FAIL_OPEN slug fail-open (lookup DB lỗi hoặc quá 400 ms; xem log function)"
 }
 warm_up_product_lookup
-expect_product_404 /products/khong-ton-tai 'slug cố định của US-05'
-expect_product_404 "/products/khong-ton-tai-smoke-$RUN_ID" 'slug mới'
-expect_product_404 "/products/khong-ton-tai-rsc-$RUN_ID" 'request RSC' 'rsc: 1'
-expect_product_404 "/products/khong-ton-tai-suffix-$RUN_ID.rsc" 'hậu tố .rsc'
-expect_product_404 "/products/khong%2Dton%2Dtai%2D$RUN_ID" '%2D'
-expect_product_404 "/products/KHONG-TON-TAI-$RUN_ID" 'chữ hoa'
+expect_404 /products/khong-ton-tai 'slug cố định của US-05'
+expect_404 "/products/khong-ton-tai-smoke-$RUN_ID" 'slug mới'
+expect_404 "/products/khong-ton-tai-rsc-$RUN_ID" 'request RSC' 'rsc: 1'
+expect_404 "/products/khong-ton-tai-suffix-$RUN_ID.rsc" 'hậu tố .rsc'
+expect_404 "/products/khong%2Dton%2Dtai%2D$RUN_ID" '%2D'
+expect_404 "/products/KHONG-TON-TAI-$RUN_ID" 'chữ hoa'
 # Segment prefetch (audit PR #26 M1): Next.js fetches <page>.segments/<segment>.segment.rsc; Vercel hands the proxy
 # that path as is.
-expect_product_404 "/products/khong-ton-tai-seg-$RUN_ID.segments/_tree.segment.rsc" 'segment prefetch dạng đường dẫn' 'rsc: 1'
-expect_product_404 "/products/khong-ton-tai-seg2-$RUN_ID.segments/_tree.segment.rsc" 'segment prefetch dạng đường dẫn, không header'
-[ -z "$PRODUCT_404_FAILED" ] || fail "slug sản phẩm không tồn tại không trả 404 ngay lần đầu (xem các dòng LỖI ở trên)"
+expect_404 "/products/khong-ton-tai-seg-$RUN_ID.segments/_tree.segment.rsc" 'segment prefetch dạng đường dẫn' 'rsc: 1'
+expect_404 "/products/khong-ton-tai-seg2-$RUN_ID.segments/_tree.segment.rsc" 'segment prefetch dạng đường dẫn, không header'
+
+# US-10 (ADR-0012): an unknown blog slug is checked against the static registry in src/proxy.ts, with no database, so
+# there is no warm-up: the very first request for a fresh slug must be a 404, in every transport form and spelling.
+expect_404 "/blog/khong-ton-tai-$RUN_ID" 'bài: slug mới'
+expect_404 "/blog/khong-ton-tai-rsc-$RUN_ID" 'bài: request RSC' 'rsc: 1'
+expect_404 "/blog/khong-ton-tai-suffix-$RUN_ID.rsc" 'bài: hậu tố .rsc'
+expect_404 "/blog/khong-ton-tai-seg-$RUN_ID.segments/_tree.segment.rsc" 'bài: segment prefetch dạng đường dẫn' 'rsc: 1'
+expect_404 "/blog/KHONG-TON-TAI-$RUN_ID" 'bài: chữ hoa'
+expect_404 "/blog/khong%2Dton%2Dtai%2D$RUN_ID" 'bài: %2D'
+expect_404 /blog/constructor 'bài: constructor'
+# A percent-encoded spelling of a real post is not decoded by the proxy: 404, never a duplicate URL of the post.
+expect_404 /blog/chao%2Dmung-den-next-store 'bài: %2D trong slug có thật'
+
+# US-11 (K10): the image route of an unknown slug would answer a 200 PNG and leave a cache entry. The paths are the
+# real og:image paths of a product and a post (hash suffix as built) with the slug swapped, and the same without the
+# hash suffix.
+OG_UNKNOWN_PRODUCT="/products/khong-ton-tai-og-$RUN_ID"
+OG_UNKNOWN_POST="/blog/khong-ton-tai-og-$RUN_ID"
+expect_404 "$OG_UNKNOWN_PRODUCT${DETAIL_OG_PATH#"$DETAIL_PATH"}" 'ảnh OG: slug sản phẩm lạ'
+expect_404 "$OG_UNKNOWN_PRODUCT-2/opengraph-image" 'ảnh OG: slug sản phẩm lạ, không hậu tố băm'
+expect_404 "$OG_UNKNOWN_POST${POST_OG_PATH#"$POST_PATH"}" 'ảnh OG: slug bài lạ'
+expect_404 "$OG_UNKNOWN_POST-2/opengraph-image" 'ảnh OG: slug bài lạ, không hậu tố băm'
+[ -z "$NOT_FOUND_FAILED" ] || fail "slug hoặc ảnh OG không tồn tại không trả 404 ngay lần đầu (xem các dòng LỖI ở trên)"
 
 # The proxy must not turn a known product's client navigation (RSC request) into a 404. `?_rsc` is the cache-busting
 # parameter Next.js redirects an RSC request to (307) when it is missing; empty matches a request with no router headers.
 # The transport forms of a known product's URL must reach the page too: `.rsc` and the segment prefetch path
 # (audit PR #26 M1: before the fix the proxy answered the latter with 404, breaking the page's own prefetch).
-expect_known_product_200() { # expect_known_product_200 <path> <label> [header]
+# The same holds for a known post (client navigation between posts and Back use these forms too, Task 13 Step 5).
+expect_known_200() { # expect_known_200 <path> <label> [header]
   local path=$1 label=$2 header=${3:-} status
   status=$(fetch "$BASE$path" "$TMP/known-transport" "$header") || fail "không kết nối được $BASE$path"
   [ "$status" = 200 ] || fail "GET $path ($label) trả $status, cần 200"
   echo "smoke: GET $path ($label) → 200"
 }
-expect_known_product_200 "$DETAIL_PATH?_rsc" 'request RSC' 'rsc: 1'
-expect_known_product_200 "$DETAIL_PATH.rsc" 'hậu tố .rsc'
 # `next start` never serves the path form of a segment prefetch (Next.js 16.4.6 enables that normalizer only in
 # minimal mode, i.e. on Vercel: server/base-server.js), so it answers 404 even for `/`. Locally the check is that the
 # proxy let the request through (no rewrite header); on a deployment the response itself must be 200.
-SEGMENT_PATH="$DETAIL_PATH.segments/_tree.segment.rsc"
-if [ "$SCHEME" = https ]; then
-  expect_known_product_200 "$SEGMENT_PATH" 'segment prefetch dạng đường dẫn' 'rsc: 1'
-else
-  status=$(fetch "$BASE$SEGMENT_PATH" "$TMP/known-segment" 'rsc: 1' "$TMP/known-segment.headers") ||
-    fail "không kết nối được $BASE$SEGMENT_PATH"
-  if tr -d '\r' < "$TMP/known-segment.headers" | grep -qi '^x-middleware-rewrite:'; then
-    fail "GET $SEGMENT_PATH (segment prefetch dạng đường dẫn) bị proxy rewrite sang not-found, cần cho đi tiếp"
+expect_known_segment() { # expect_known_segment <page path> <label>
+  local path="$1.segments/_tree.segment.rsc" label=$2 status
+  if [ "$SCHEME" = https ]; then
+    expect_known_200 "$path" "$label" 'rsc: 1'
+    return 0
   fi
-  echo "smoke: GET $SEGMENT_PATH (segment prefetch dạng đường dẫn) → $status, proxy cho đi tiếp (next start không phục vụ dạng này)"
-fi
+  status=$(fetch "$BASE$path" "$TMP/known-segment" 'rsc: 1' "$TMP/known-segment.headers") ||
+    fail "không kết nối được $BASE$path"
+  if tr -d '\r' < "$TMP/known-segment.headers" | grep -qi '^x-middleware-rewrite:'; then
+    fail "GET $path ($label) bị proxy rewrite sang not-found, cần cho đi tiếp"
+  fi
+  echo "smoke: GET $path ($label) → $status, proxy cho đi tiếp (next start không phục vụ dạng này)"
+}
+expect_known_200 "$DETAIL_PATH?_rsc" 'request RSC' 'rsc: 1'
+expect_known_200 "$DETAIL_PATH.rsc" 'hậu tố .rsc'
+expect_known_segment "$DETAIL_PATH" 'segment prefetch dạng đường dẫn'
+expect_known_200 "$POST_PATH?_rsc" 'bài: request RSC' 'rsc: 1'
+expect_known_200 "$POST_PATH.rsc" 'bài: hậu tố .rsc'
+expect_known_segment "$POST_PATH" 'bài: segment prefetch dạng đường dẫn'
 
 echo "smoke: qua"

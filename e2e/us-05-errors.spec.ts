@@ -1,5 +1,7 @@
-import { expect, test, type Page } from '@playwright/test'
-import { BROKEN_DB_URL } from '../playwright.config'
+import { readFileSync } from 'node:fs'
+import type { Page } from '@playwright/test'
+import { expect, test } from './test'
+import { BROKEN_DB_LOG, BROKEN_DB_URL, HUNG_DB_LOG, HUNG_DB_URL } from '../playwright.config'
 import { expectNoSeriousA11yViolations } from './axe'
 import { VIEWPORT_INDEPENDENT } from './catalog'
 
@@ -148,5 +150,47 @@ test.describe('DB không đọc được', () => {
     await page.goto(`${BROKEN_DB_URL}/products?q=git`)
     await expectErrorPage(page)
     await expectNoSeriousA11yViolations(page)
+  })
+})
+
+// NS-55: what the servers print when the database is down or hangs. Drizzle's own error ("Failed query: <sql>
+// params: <values>", cause "connect ECONNREFUSED 127.0.0.1:9") must never reach the log; only dbQuery's fixed text.
+const LEAKED_QUERY_DETAIL = /Failed query|select |from "|params|127\.0\.0\.1:\d|ECONNREFUSED 127/i
+
+const expectCleanLog = (path: string, expected: string) => {
+  const log = readFileSync(path, 'utf8')
+  expect(log).toContain(expected)
+  expect(log).not.toMatch(LEAKED_QUERY_DETAIL)
+}
+
+test.describe('NS-55: DB chết hoặc treo', () => {
+  test.skip(Boolean(process.env.BASE_URL), 'Chỉ chạy với server local có DATABASE_URL chết / treo')
+
+  test('NS-55: log server không có câu SQL hay host khi DB chết', async ({ page }) => {
+    for (const path of ['/products', '/products?q=git', `/products/${freshSlug()}`]) {
+      await page.goto(`${BROKEN_DB_URL}${path}`)
+      await expect(page.getByRole('heading', { level: 1, name: 'Đã có lỗi xảy ra' }), path).toBeVisible()
+    }
+    expectCleanLog(BROKEN_DB_LOG, 'database query failed: products.')
+  })
+
+  // The hung server runs with DB_QUERY_TIMEOUT_MS=1000 (playwright.config.ts); without the limit a request waits
+  // for connect_timeout (10 s).
+  test('NS-55: DB treo thì trang lỗi hiện trong 4 giây', async ({ page }) => {
+    for (const path of ['/products', '/products?q=git', `/products/${freshSlug()}`]) {
+      const started = Date.now()
+      await page.goto(`${HUNG_DB_URL}${path}`, { timeout: 15_000 })
+      await expect(page.getByRole('heading', { level: 1, name: 'Đã có lỗi xảy ra' }), path).toBeVisible({
+        timeout: 4000,
+      })
+      expect(Date.now() - started, path).toBeLessThan(5000)
+    }
+    expectCleanLog(HUNG_DB_LOG, 'database query timed out: products.')
+  })
+
+  test('NS-55: DB treo thì trang sản phẩm đã prerender vẫn mở được', async ({ page }) => {
+    const response = await page.goto(`${HUNG_DB_URL}/products/${PRERENDERED_SLUG}`)
+    expect(response?.status()).toBe(200)
+    await expect(page.getByRole('heading', { level: 1, name: PRERENDERED_NAME })).toBeVisible()
   })
 })

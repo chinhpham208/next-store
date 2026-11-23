@@ -1,4 +1,5 @@
-import { expect, test, type Page } from '@playwright/test'
+import type { Page } from '@playwright/test'
+import { expect, test } from './test'
 import { PRODUCT_SEEDS } from '@/db/seed-data'
 import {
   categoryNav,
@@ -37,31 +38,21 @@ const pageLink = (page: Page, name: string) => paginationNav(page).getByRole('li
 const markWindow = (page: Page) => page.evaluate(() => Object.assign(window, { __nsNoReload: true }))
 const expectNoReload = async (page: Page) => expect(await page.evaluate(() => '__nsNoReload' in window)).toBe(true)
 
-test('US-03: URL có bộ lọc mở ở trình duyệt khác thấy đúng cùng kết quả', async ({
-  page,
-  browser,
-  baseURL,
-  extraHTTPHeaders,
-}) => {
+test('US-03: URL có bộ lọc mở ở trình duyệt khác thấy đúng cùng kết quả', async ({ page, newContext }) => {
   await page.goto(SHARED)
   await expect(productItems(page)).toHaveCount(6)
   expect(await productPrices(page)).toEqual(SHARED_PRICES)
   const mine = await productNames(page)
 
-  // A fresh context: no cookies, storage or history shared with the first one. It does not inherit the config's
-  // `use`, so the base URL and the preview bypass header are passed on explicitly.
-  const context = await browser.newContext({ baseURL, extraHTTPHeaders })
-  try {
-    const friend = await context.newPage()
-    await friend.goto(SHARED)
-    await expect(productItems(friend)).toHaveCount(6)
-    expect(await productNames(friend)).toEqual(mine)
-    expect(await productPrices(friend)).toEqual(SHARED_PRICES)
-    await expect(categoryLink(friend, 'Sách')).toHaveAttribute('aria-current', 'true')
-    await expect(sortLink(friend, 'Giá giảm dần')).toHaveAttribute('aria-current', 'true')
-  } finally {
-    await context.close()
-  }
+  // A fresh context: no cookies, storage or history shared with the first one. The fixture passes on the base URL
+  // and the preview bypass header, guards it on Production and closes it after the test (e2e/test.ts).
+  const friend = await (await newContext()).newPage()
+  await friend.goto(SHARED)
+  await expect(productItems(friend)).toHaveCount(6)
+  expect(await productNames(friend)).toEqual(mine)
+  expect(await productPrices(friend)).toEqual(SHARED_PRICES)
+  await expect(categoryLink(friend, 'Sách')).toHaveAttribute('aria-current', 'true')
+  await expect(sortLink(friend, 'Giá giảm dần')).toHaveAttribute('aria-current', 'true')
 })
 
 test('US-03: đổi bộ lọc trên giao diện thì URL cập nhật theo', async ({ page }) => {
@@ -191,6 +182,21 @@ test('US-03: nút back / forward trả lại bộ lọc tương ứng với URL'
   await page.goForward()
   await expect(page).toHaveURL(/\/products\?category=sticker&sort=price-asc$/)
   await expect.poll(() => productPrices(page)).toEqual(STICKER_PRICES_ASC)
+})
+
+// The search box is an uncontrolled input, so before NS-57 it kept the last typed text when Back / Forward changed
+// q in the URL (the results followed the URL, the box did not).
+test('US-03 / NS-57: sau Back và Forward, ô tìm khớp với URL', async ({ page }) => {
+  await page.goto('/products')
+  await searchBox(page).fill('cốc')
+  await page.getByRole('button', { name: 'Tìm', exact: true }).click()
+  await expect(resultCount(page)).toHaveText('6 sản phẩm')
+  await page.goBack()
+  await expect(resultCount(page)).toHaveText('24 sản phẩm')
+  await expect(searchBox(page)).toHaveValue('')
+  await page.goForward()
+  await expect(resultCount(page)).toHaveText('6 sản phẩm')
+  await expect(searchBox(page)).toHaveValue('cốc')
 })
 
 // Bad parameters are about what the server parses, not about layout: they run once (review of PR #28).

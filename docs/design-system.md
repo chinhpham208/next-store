@@ -4,6 +4,7 @@ Nguồn: Designer, ticket NS-24 — **chủ dự án duyệt 2026-11-19**. Bản
 - Design system: https://claude.ai/artifact/GmucdqjNPKDzHFY4FWZCUj
 - Màn hình trang chủ (390 / 1280 px, sáng / tối / trống): https://claude.ai/artifact/Tjc6tnwX3q96CPSxDk2c2r
 - Màn hình M2 (danh sách, chi tiết, 404, lỗi; 390 / 1280 px, sáng / tối) và đặc tả component M2: https://claude.ai/artifact/MzW3An6ebYKxUjEMT7tuEU — **chủ dự án duyệt 2026-11-20** (Cổng 2, NS-46)
+- Màn hình M3 (blog, bài viết, "Bài viết mới" trên trang chủ, header có "Blog"; 390 / 1280 px, sáng / tối), ảnh Open Graph và nội dung 4 bài: https://claude.ai/artifact/N5Gkua8mA1whwo5PxeHfcX — **chủ dự án duyệt 2026-11-22** (Cổng 2, Task 6 M3)
 
 Brand gốc: bộ nhận diện **Gin Pham — Smile G** (Ink #0C0F12, Deep Cyan #08959A, Signal Cyan #2EE6EA, Paper #E8EEF0, Slate; font Lexend). File này là bản chép để code đọc; khi lệch nhau, artifact là bản gốc.
 
@@ -64,6 +65,9 @@ Chữ thấp nhất 4,68:1 (link trên surface, theme tối). Sáng: foreground 
 
 Bổ sung M2, cặp mới (sáng / tối): chữ background trên muted-foreground (primary hover) 6,98 / 7,45; foreground trên surface-muted (hover) 16,45 / 12,08; muted trên surface-muted (dòng phụ empty state) 6,38 / 5,49; muted trên surface (placeholder) 7,46 / 6,60; link trên background (breadcrumb) 4,79 / 5,29. Không phải chữ: border-strong trên background 4,44 / 4,04, trên surface 4,75 / 3,58; ring trên surface-muted 4,39 / 3,89. Không dùng: link trên surface-muted 4,39 / 3,89 (dưới 4,5).
 
+Bổ sung M3, cặp mới (sáng / tối): chữ trong code trong dòng (foreground trên surface-muted) 16,45 / 12,08; chữ trong khối code (foreground trên surface) 19,22 / 14,53; ngày, mô tả, trích dẫn (muted trên background) 6,98 / 7,45; link trong bài (link trên background) 4,79 / 5,29. Không phải chữ: vạch trích dẫn border-strong trên background 4,44 / 4,04; vòng focus của khối code (ring trên background) 4,79 / 5,29. Ảnh Open Graph (một theme, dải đảo): inverse-foreground trên inverse 16,40; inverse-muted trên inverse 7,45; khối con trỏ inverse-accent trên inverse 12,47.
+Link trong bài **chỉ** đặt trên `background` (thân bài không có nền riêng). Không đặt link trong khối code hay trong trích dẫn có nền.
+
 ## 2. Component
 
 - **Container:** `mx-auto w-full max-w-container-page px-4 md:px-6 lg:px-8`.
@@ -80,7 +84,7 @@ Bổ sung M2, cặp mới (sáng / tối): chữ background trên muted-foregrou
   - Link trong h3 → `/products/<slug>`: `after:absolute after:inset-0 after:rounded-md underline-offset-4 hover:underline focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-offset-4 focus-visible:after:outline-ring`. Vùng bấm = cả thẻ; focus ring bao cả thẻ. Hết hàng vẫn là link.
   - Giá: `mt-auto pt-1 md:pt-2`; hết hàng → `text-muted-foreground`.
 - **Lưới:** `ul` có `aria-label` (trang chủ "Sản phẩm nổi bật", danh sách "Danh sách sản phẩm"), `grid grid-cols-2 gap-x-4 gap-y-10 md:grid-cols-3 md:gap-x-8 md:gap-y-16`.
-- **Header:** `border-b border-border h-16` (không nền riêng), chứa Container `flex h-full items-center justify-between gap-4`. Bên trái link logo chữ: `min-h-11 text-2xl/7 font-bold tracking-tight` + `.cursor-block` tĩnh. Bên phải (M2) `nav aria-label="Chính"` với link "Sản phẩm" → `/products`: `inline-flex min-h-11 items-center -mr-2 px-2 font-medium underline-offset-8 hover:underline`. Không đánh dấu trang hiện tại (`aria-current`): header là Server Component dùng chung, không biết đường dẫn nếu không thêm Client Component, mà M2 chỉ cho `"use client"` ở `error.tsx` — Orchestrator bỏ yêu cầu này (quyết định ghi trên NS-50); trang `/products` đã có h1 "Sản phẩm".
+- **Header:** `border-b border-border h-16` (không nền riêng), chứa Container `flex h-full items-center justify-between gap-4`. Bên trái link logo chữ: `min-h-11 text-2xl/7 font-bold tracking-tight` + `.cursor-block` tĩnh. Bên phải `nav aria-label="Chính"` `-mr-2 flex` gồm hai link theo thứ tự "Sản phẩm" → `/products`, "Blog" → `/blog` (M3), mỗi link `inline-flex min-h-11 items-center px-2 font-medium underline-offset-8 hover:underline` (khoảng chữ–chữ 16 px; `-mr-2` của nav giữ chữ "Blog" thẳng mép container). Ở 390 px (đo bằng metric Lexend): logo + con trỏ ~141 px, hai link kể cả padding ~148 px, còn trống ~70 px giữa hai nhóm; không xuống dòng. Không đánh dấu trang hiện tại (`aria-current`): header là Server Component dùng chung, không biết đường dẫn nếu không thêm Client Component, mà M2 chỉ cho `"use client"` ở `error.tsx` — Orchestrator bỏ yêu cầu này (quyết định ghi trên NS-50); trang `/products` đã có h1 "Sản phẩm".
 - **Hero:** `pt-14 pb-12 md:pt-28 md:pb-24 gap-6 md:gap-8`; eyebrow "Áo thun · Cốc · Sticker · Sách" (`text-xs uppercase tracking-label text-muted-foreground`); h1 `.hero-title text-5xl md:text-8xl font-bold tracking-tight text-balance` "Đồ dùng cho dân code." + `.cursor-block` nhấp nháy (`motion-reduce` tắt); lead `text-lg md:text-xl text-muted-foreground`.
 - **Section nổi bật:** `border-t border-border pt-10 md:pt-16`; h2 "Sản phẩm nổi bật" `text-2xl md:text-3xl font-bold tracking-tight`. (M2) Dưới lưới: link "Xem tất cả sản phẩm" → `/products`, `buttonVariants({ variant: 'secondary', className: 'w-full md:w-auto' })`.
 - **Empty state:** `rounded-md bg-surface-muted px-6 py-10 md:p-16`, `.cursor-block` tĩnh 32 px, tiêu đề `text-xl md:text-2xl font-semibold` + một dòng phụ `text-muted-foreground`. Không dùng link chữ bên trong (`text-link` trên `surface-muted` chỉ 4,39 / 3,89:1); hành động nếu có là Button.
@@ -120,11 +124,91 @@ Bổ sung M2, cặp mới (sáng / tối): chữ background trên muted-foregrou
   - Vô hiệu (`<span aria-disabled="true">`, không phải link): `border-dashed border-border text-muted-foreground cursor-not-allowed`.
   - Text của link chỉ là "Trang trước" / "Trang sau" / số trang — không icon bên trong.
 - **Trang chi tiết** `/products/<slug>`: Container `flex flex-col gap-4 pt-4 pb-16 md:gap-6 md:pt-6 md:pb-24`.
-  - Breadcrumb: `nav aria-label="Đường dẫn"` > `ol` `flex flex-wrap items-center gap-x-2 text-sm`: "Trang chủ" → `/`, "Sản phẩm" → `/products`, tên danh mục → `/products?category=<slug>` (link danh mục duy nhất của trang). Link `inline-flex min-h-11 items-center text-link underline underline-offset-4 hover:decoration-2`; dấu "/" `text-muted-foreground` `aria-hidden`. Không lặp tên sản phẩm.
+  - Breadcrumb (`@/components/layout/breadcrumb`, dùng chung với trang bài viết từ M3): `nav aria-label="Đường dẫn"` > `ol` `flex flex-wrap items-center gap-x-2 text-sm`: "Trang chủ" → `/`, "Sản phẩm" → `/products`, tên danh mục → `/products?category=<slug>` (link danh mục duy nhất của trang). Link `inline-flex min-h-11 items-center text-link underline underline-offset-4 hover:decoration-2`; dấu "/" `text-muted-foreground` `aria-hidden`. Không lặp tên sản phẩm.
   - Thân: `grid gap-8 md:grid-cols-2 md:items-start md:gap-16`. Ảnh: như ảnh ProductCard, `loading="eager"` + `fetchPriority="high"` (ảnh LCP; `priority` đã bị bỏ ở Next.js 16). Cột thông tin `flex flex-col gap-6`: h1 `text-3xl md:text-4xl font-bold tracking-tight text-balance break-words`; hàng mua `flex flex-wrap items-center gap-4` = Price `text-2xl` (hết hàng thêm `text-muted-foreground`) + tồn kho; mô tả `border-t border-border pt-6 text-muted-foreground md:text-lg`.
   - Tồn kho: `<p className="font-medium">Còn {stock} sản phẩm</p>`, hoặc `<p><Badge variant="sold-out">Hết hàng</Badge></p>` khi `stock === 0`. Không màu cảnh báo khi còn ít.
   - Chỗ cho M4: nút "Thêm vào giỏ" đặt dưới mô tả trong cột thông tin (`w-full md:w-auto`, Button primary; hết hàng → `disabled`). M2 không render gì ở đó.
   - Skeleton: thay toàn bộ (breadcrumb `h-5 w-52` trong hàng `min-h-11`, ảnh, 2 dòng tiêu đề `h-9`, giá `h-8 w-32`, tồn kho `h-6 w-36`, 3 dòng mô tả `h-4`).
+
+### Component M3
+
+- **Thời gian bài viết** (`<time>`): `<time dateTime="YYYY-MM-DD">{formatDate(publishedAt)}</time>` (ví dụ `16 tháng 11, 2026`), `text-sm text-muted-foreground`; ở trang bài `text-sm md:text-base`. Không icon, không chữ "Đăng ngày". Giá trị không đổi theo thời điểm build (chỉ đọc chuỗi trong registry, `timeZone: 'UTC'`).
+
+- **PostList** (`@/features/blog`, dùng ở `/blog` với `headingLevel={2}` và ở trang chủ với `headingLevel={3}`; một bố cục cho cả hai):
+  - `ul` có `aria-label` (`"Danh sách bài viết"` / `"Bài viết mới"`): `flex flex-col border-b border-border`. `posts` rỗng → không render gì.
+  - `li` (mục bài viết): `relative grid gap-2 border-t border-border py-6 md:grid-cols-4 md:gap-x-8 md:py-8`. Thứ tự DOM: tiêu đề, `<time>`, mô tả.
+  - Tiêu đề `h2`/`h3`: `text-xl font-semibold text-balance break-words md:col-span-3 md:col-start-2 md:text-2xl`; text đúng bằng tiêu đề.
+  - Link trong tiêu đề → `/blog/<slug>`: `after:absolute after:inset-0 after:rounded-md underline-offset-4 hover:underline focus-visible:outline-none focus-visible:after:outline-2 focus-visible:after:outline-offset-2 focus-visible:after:outline-ring` (cùng cách của ProductCard: cả hàng là vùng bấm, cao ≥ 100 px; ring bao cả hàng).
+  - `<time>`: `text-sm text-muted-foreground md:col-start-1 md:row-start-1 md:pt-1 md:text-base` (desktop: cột ngày bên trái, thẳng dòng đầu tiêu đề).
+  - Mô tả `<p>`: `text-muted-foreground text-pretty md:col-span-3 md:col-start-2`.
+
+- **Trang `/blog`** (`BlogIndex`): Container `flex flex-col gap-6 pt-10 pb-16 md:gap-8 md:pt-16 md:pb-24` (như `/products`); h1 "Blog" `text-4xl md:text-5xl font-bold tracking-tight`; câu dẫn `max-w-xl text-lg text-muted-foreground md:text-xl` "Ghi chép của next-store về đồ dùng và chuyện nghề của dân code."; rồi PostList (`headingLevel={2}`, `label="Danh sách bài viết"`).
+  - Trống: empty state chuẩn (`flex flex-col items-start gap-4 rounded-md bg-surface-muted px-6 py-10 md:p-16`, `.cursor-block size-8`) với `<p className="text-xl font-semibold md:text-2xl">Chưa có bài viết.</p>` + `<p className="text-muted-foreground">Bài đầu tiên đang được viết, quay lại sau nhé.</p>`. Không link chữ bên trong.
+
+- **Trang chủ, section "Bài viết mới"** (`LatestPosts`, dưới "Sản phẩm nổi bật", chỉ render khi có bài): `<section aria-labelledby="latest-posts-heading">` → Container `pb-16 md:pb-24` → `flex flex-col gap-8 border-t border-border pt-10 md:gap-12 md:pt-16` (giống section nổi bật); h2 `id="latest-posts-heading"` "Bài viết mới" `text-2xl md:text-3xl font-bold tracking-tight`; PostList 3 bài (`headingLevel={3}`, `label="Bài viết mới"`); `<p>` link "Xem tất cả bài viết" → `/blog`, `buttonVariants({ variant: 'secondary', className: 'w-full md:w-auto' })`. Không có bài → không có section (không empty state).
+
+- **Trang bài `/blog/<slug>` (PostView):** Container `flex flex-col gap-6 pt-4 pb-16 md:gap-8 md:pt-6 md:pb-24`.
+  - Breadcrumb dùng chung `@/components/layout/breadcrumb` (như trang chi tiết sản phẩm, `nav aria-label="Đường dẫn"` > `ol`): "Trang chủ" → `/`, "Blog" → `/blog`. Không lặp tiêu đề bài.
+  - `<article className="flex flex-col gap-8 md:gap-12">`: `<header className="flex flex-col gap-4">` gồm h1 `max-w-3xl text-3xl font-bold tracking-tight text-balance break-words md:text-5xl` + `<time>` `text-sm text-muted-foreground md:text-base`; rồi `<Prose>{children}</Prose>`.
+  - Sau `article`: `<p className="max-w-xl border-t border-border pt-8 md:pt-12">` chứa link "Tất cả bài viết" → `/blog`, `buttonVariants({ variant: 'secondary', className: 'w-full md:w-auto' })`.
+  - Cột đọc căn trái, thẳng mép logo và breadcrumb (như trang sản phẩm).
+
+- **Prose** (`@/components/ui/prose`): `Prose` = `<div className="flex max-w-xl flex-col gap-6 text-base md:gap-8 md:text-lg">`. `max-w-xl` (576 px) giữ dòng ở ~67 ký tự tiếng Việt với chữ 18 px (đo bằng metric của Lexend: trung bình 0,476 em / ký tự), ~47 ký tự ở 390 px. Khoảng cách dọc chỉ do `gap` của khối bọc, phần tử con không có margin (trừ `hr`). `PROSE_COMPONENTS`:
+
+  | Phần tử | Lớp | Ghi chú |
+  |---|---|---|
+  | `h2` (và `h1` → `h2`) | `pt-6 text-2xl font-bold tracking-tight text-balance md:pt-4 md:text-3xl` | Trên h2 luôn 48 px (24 + 24 / 32 + 16) |
+  | `h3` | `pt-2 text-xl font-semibold text-balance md:pt-0 md:text-2xl` | Trên h3 luôn 32 px |
+  | `p` | `text-pretty` | |
+  | `a` | `text-link underline underline-offset-4 hover:decoration-2` | `href` bắt đầu bằng `/` → `next/link`; còn lại `<a rel="noopener noreferrer">`, không `target="_blank"`. Link trong dòng được miễn vùng chạm 24 px (WCAG 2.5.8 ngoại lệ inline) |
+  | `strong` | `font-semibold text-foreground` | `text-foreground` để vẫn đậm màu khi nằm trong trích dẫn muted |
+  | `em` | `italic` | Lexend không có bản nghiêng: trình duyệt tự nghiêng, đã kiểm dấu tiếng Việt vẫn đúng |
+  | `ul` | `flex list-disc flex-col gap-2 pl-6 marker:text-muted-foreground` | Bài chỉ dùng danh sách "chặt" (không dòng trống giữa các mục) để `li` không bọc `<p>` |
+  | `ol` | `flex list-decimal flex-col gap-2 pl-6 marker:text-muted-foreground` | |
+  | `li` | (không lớp) | |
+  | `blockquote` | `flex flex-col gap-4 border-l-4 border-border-strong pl-4 text-muted-foreground md:pl-6` | Không nền (link trên surface-muted không đạt 4,5:1), không nghiêng |
+  | `code` trong dòng (không có `className`) | `rounded-sm bg-surface-muted px-1 font-mono text-sm break-words md:text-base` | `break-words` để `--force-with-lease` không tràn ở 390 px |
+  | `code` trong khối (`className="language-…"`) | chỉ giữ `className`, không thêm lớp | Kế thừa từ `pre`. **Mọi khối code rào trong bài phải ghi ngôn ngữ** (```` ```bash ````) — đó là cách duy nhất `code` phân biệt khối với trong dòng |
+  | `pre` | `overflow-x-auto rounded-md border border-border bg-surface p-4 font-mono text-sm md:p-6` + `tabIndex={0}` | Vùng cuộn ngang focus được bằng bàn phím; focus ring là `:focus-visible` toàn cục (2 px `ring`, offset 2). Không `aria-label` (vai trò generic không được đặt tên). Không tô màu cú pháp |
+  | `hr` | `my-4 border-border` | |
+
+  Tiêu đề trong bài không có `id` / anchor (không có mục lục — ngoài phạm vi M3).
+
+  Quy tắc "mọi khối code rào ghi ngôn ngữ" được kiểm tự động: Vitest `every fenced code block in a post names its language` (`src/features/blog/posts.test.ts`).
+
+### Ảnh Open Graph (1200 × 630, `src/lib/og-image.tsx`)
+
+Một theme duy nhất (dải đảo, giống footer) vì ảnh không đổi theo người xem. Chỉ flexbox, không grid, không bóng, không gradient; chỉ Lexend 400 và 700 (TTF tĩnh). Màu là hằng trùng giá trị `--color-inverse*`: nền `#0c0f12`, chữ `#e8eef0`, chữ phụ `#9ba2aa`, đường kẻ / viền `#38424c`, khối con trỏ `#2ee6ea`. Cyan chỉ ở khối con trỏ (và khối con trỏ có sẵn trong hình minh hoạ danh mục). `next-store` + khối con trỏ, **không** logo Smile G hay lockup gin pham.
+
+- Gốc: `display:flex; flex-direction:column; justify-content:space-between; padding:64px 80px; background:#0c0f12; color:#e8eef0; font-family:Lexend`.
+- Hàng trên: chữ `next-store` 40 px / 700, `letter-spacing:-0.02em`, `line-height:1`; khối con trỏ 20 × 20 px `#2ee6ea`, `margin-left:12px`, `margin-bottom:2px`, không bo góc.
+- Hàng giữa: `display:flex; align-items:center; gap:64px`.
+  - Cột chữ (`flex:1`, cột, `gap:24px`): eyebrow 24 px / 400, `line-height:1.33`, `letter-spacing:0.14em`, chữ hoa, `#9ba2aa`; tiêu đề 700, `line-height:1.1`, `letter-spacing:-0.02em`, `display:block` + `lineClamp` theo bảng dưới.
+  - Hình minh hoạ (khi `illustration` có): `<img>` SVG data URI của `public/images/<danh-mục>.svg`, 320 × 320, `border-radius:16px`, `border:2px solid #38424c`.
+- Hàng dưới: `border-top:2px solid #38424c; padding-top:32px`; footer 32 px / 700, `line-height:1.25` (giá `450.000 ₫`, ngày `16 tháng 11, 2026`).
+
+Quy tắc tiêu đề (đếm theo code point: `Array.from(title).length`):
+
+| Có hình minh hoạ (cột chữ 656 px) | Không hình (cột chữ 1040 px) |
+|---|---|
+| ≤ 24 ký tự: 72 px, tối đa 3 dòng | ≤ 24 ký tự: 96 px, tối đa 2 dòng |
+| 25–40: 64 px, 3 dòng | 25–48: 72 px, 3 dòng |
+| > 40: 56 px, 3 dòng | > 48: 60 px, 3 dòng |
+| > 60 ký tự: cắt ở khoảng trắng cuối cùng trước ký tự thứ 60, bỏ dấu câu cuối, thêm `…` | > 75 ký tự: như vậy với 75 |
+
+`lineClamp` giữ làm lưới an toàn (satori cắt giữa từ); phép cắt theo từ chạy trước nên dấu `…` không rơi giữa từ. Bảng và phép cắt nằm trong `fitOgTitle` (`src/lib/og-image.tsx`), kiểm bằng Vitest `fitOgTitle (Task 6 title rules)`. Bài blog có tiêu đề ≤ 70 ký tự nên không bao giờ bị cắt; sản phẩm dài nhất hiện có (`Sticker It's not a bug, it's a feature`, 38 ký tự) ở 64 px vừa 2 dòng.
+
+Ba loại:
+
+| Route | eyebrow | title | footer | illustration |
+|---|---|---|---|---|
+| `app/opengraph-image.tsx` | `Áo thun · Cốc · Sticker · Sách` | `Đồ dùng cho dân code.` | `Cửa hàng online cho lập trình viên` | không |
+| `products/[slug]/opengraph-image.tsx` | tên danh mục | tên sản phẩm | `formatPrice(price)` | slug danh mục nếu thuộc `ao-thun`, `coc`, `sticker`, `sach`; khác → không hình, tiêu đề dùng cột rộng |
+| `blog/[slug]/opengraph-image.tsx` | `Blog` | tiêu đề bài | `formatDate(publishedAt)` | không |
+
+`alt` cố định: mặc định `"next-store: đồ dùng cho dân code"`; sản phẩm `"Ảnh giới thiệu sản phẩm của next-store"`; bài `"Ảnh giới thiệu bài viết trên blog next-store"`.
+
+Bố cục đã dựng thử bằng `ImageResponse` của next 16.4.6 (cùng satori + resvg) với hai file TTF tĩnh ở §3: chữ có dấu, `₫`, `--force`, dấu nháy đều đúng; PNG thật ở artifact M3.
 
 ## 3. Tài nguyên
 
@@ -132,4 +216,13 @@ Bổ sung M2, cặp mới (sáng / tối): chữ background trên muted-foregrou
 |---|---|
 | `public/images/{ao-thun,coc,sticker,sach}.svg` | Designer v2 (chỉ Ink/Paper + một khối cyan, nền xen kẽ sáng/tối) |
 | `src/app/fonts/lexend-full-wght.woff2` | Brand kit `fonts/lexend-full-wght.woff2` (SIL OFL) |
+| `src/app/fonts/lexend-regular.ttf`, `src/app/fonts/lexend-bold.ttf` | Cắt từ `lexend-full-wght.woff2` (SIL OFL) thành TTF **tĩnh** `wght=400` / `wght=700` cho ảnh Open Graph (~78 KB mỗi file; `ImageResponse` không đọc woff2 hay TTF variable — K7) |
 | `public/brand/gin-pham-horizontal-dark.svg` | Brand kit `master/gin-pham-horizontal-dark.svg` (lockup trên nền tối) |
+
+Tái tạo font tĩnh (fontTools ≥ 4.40 + brotli):
+
+    python3 -c "from fontTools.ttLib import TTFont; f=TTFont('src/app/fonts/lexend-full-wght.woff2'); f.flavor=None; f.save('/tmp/lexend-var.ttf')"
+    fonttools varLib.instancer /tmp/lexend-var.ttf wght=400 -o src/app/fonts/lexend-regular.ttf
+    fonttools varLib.instancer /tmp/lexend-var.ttf wght=700 -o src/app/fonts/lexend-bold.ttf
+
+Kết quả: 4 byte đầu `00010000`, không có bảng `fvar`, có đủ chữ tiếng Việt và `₫` (U+20AB).

@@ -1,27 +1,30 @@
 import 'server-only'
 import { pathToFileURL } from 'node:url'
-import { categories, db, products } from '@/db'
-import { closeConnection, connection, describeError, describeTarget, type DatabaseTarget } from '@/db/client'
+import { categories, products } from '@/db'
+import { closeConnection, connection, db, describeError, describeTarget, type DatabaseTarget } from '@/db/client'
 import { CATEGORY_SEEDS, PRODUCT_SEEDS } from '@/db/seed-data'
 
-type SeedOptions = { allowProduction?: boolean }
-
-type SeedGuardInput = { targetKind: DatabaseTarget['kind']; vercelEnv: string | undefined; allowProduction: boolean }
+type SeedGuardInput = { targetKind: DatabaseTarget['kind']; vercel: string | undefined; vercelEnv: string | undefined }
 
 // Allow-list, not deny-list: a Postgres database is production unless Vercel says it is a preview branch.
 // A VPS, a typo ('prod', 'Production') or a missing variable must never be mistaken for a safe target.
-export const assertSeedAllowed = ({ targetKind, vercelEnv, allowProduction }: SeedGuardInput): void => {
+// There is deliberately no override (NS-36, owner decision 3): production is seeded from generated SQL in the
+// Neon SQL Editor, so nobody needs the production DATABASE_URL on a machine that can run this script.
+// VERCEL_ENV counts only when VERCEL is set (audit PR #35 M1): only then has resolveDatabaseTarget checked the URL
+// against NEON_PRODUCTION_ENDPOINT, so off Vercel a hand-set VERCEL_ENV=preview must not open a way in.
+export const assertSeedAllowed = ({ targetKind, vercel, vercelEnv }: SeedGuardInput): void => {
   if (targetKind === 'pglite') return
-  if (vercelEnv === 'preview' || allowProduction) return
+  if (Boolean(vercel) && vercelEnv === 'preview') return
   throw new Error(
-    'Từ chối seed Postgres: chỉ preview (VERCEL_ENV=preview) được seed tự động, mọi trường hợp khác coi là production. ' +
-      'Production chỉ seed một lần, chạy lại với --allow-production.',
+    'Từ chối seed Postgres: chỉ preview trên Vercel (VERCEL có giá trị, VERCEL_ENV=preview) được seed tự động, ' +
+      'mọi trường hợp khác coi là production. ' +
+      'Seed production: npm run -s db:seed:sql rồi chạy SQL đó trong Neon SQL Editor (README, mục Seed production).',
   )
 }
 
-export const seed = async ({ allowProduction = false }: SeedOptions = {}): Promise<void> => {
+export const seed = async (): Promise<void> => {
   // Guard first: no statement may reach a production database before this check.
-  assertSeedAllowed({ targetKind: connection.kind, vercelEnv: process.env.VERCEL_ENV, allowProduction })
+  assertSeedAllowed({ targetKind: connection.kind, vercel: process.env.VERCEL, vercelEnv: process.env.VERCEL_ENV })
 
   await db.transaction(async (tx) => {
     await tx.insert(categories).values(CATEGORY_SEEDS).onConflictDoNothing({ target: categories.slug })
@@ -43,8 +46,9 @@ const isDirectRun = process.argv[1] !== undefined && import.meta.url === pathToF
 
 if (isDirectRun) {
   const main = async () => {
-    console.log(`db:seed: ${describeTarget(connection.target)}`)
-    await seed({ allowProduction: process.argv.includes('--allow-production') })
+    // Shows user=next_store_app once the app role is configured (ADR-0010, Task 5 step 5 reads this line).
+    console.log(`db:seed: ${describeTarget(connection.target, connection.appRole)}`)
+    await seed()
     console.log('db:seed: xong')
     // postgres-js keeps the pool open and PGlite must flush to disk; close both before exiting.
     await closeConnection()

@@ -40,7 +40,7 @@ next-store/
 │  ├─ agents/                    # Định nghĩa vai của các agent (process.md)
 │  ├─ adr/                       # Quyết định kiến trúc
 │  └─ plans/                     # Plan chi tiết từng mốc
-├─ content/blog/*.mdx
+├─ content/blog/*.mdx            # Thân bài; tiêu đề / mô tả / ngày ở src/features/blog/posts.ts (ADR-0012)
 ├─ e2e/                          # Test Playwright, đặt tên theo user story
 ├─ public/images/
 ├─ scripts/
@@ -53,9 +53,9 @@ next-store/
 │  │  │  ├─ page.tsx             → /
 │  │  │  ├─ products/page.tsx    → /products
 │  │  │  ├─ products/[slug]/     → /products/:slug
+│  │  │  ├─ blog/                → /blog, /blog/:slug (trong `(shop)`: chung header, footer, trang lỗi — ADR-0012)
 │  │  │  ├─ cart/                → /cart
 │  │  │  └─ checkout/            → /checkout/success, /checkout/test
-│  │  ├─ blog/                   → /blog, /blog/:slug
 │  │  ├─ admin/                  → /admin/login, /admin/products, /admin/orders
 │  │  ├─ api/webhooks/payment/route.ts
 │  │  ├─ layout.tsx
@@ -66,6 +66,7 @@ next-store/
 │  ├─ db/                        # schema.ts, client.ts, migrate.ts, seed.ts
 │  ├─ components/ui/             # Component giao diện dùng chung (theo design system)
 │  ├─ lib/                       # Tiện ích không gắn nghiệp vụ
+│  ├─ mdx-components.tsx         # Bắt buộc với @next/mdx; trả PROSE_COMPONENTS của components/ui/prose
 │  └─ proxy.ts
 ├─ drizzle/                      # Migration SQL sinh bởi drizzle-kit
 ├─ .dependency-cruiser.cjs
@@ -105,7 +106,7 @@ Lý do chọn cấu trúc này thay vì đặt component cạnh route: dễ mở
 | `cart_items` | cartId, productId, quantity |
 | `orders` | id (serial — dùng làm mã đơn gửi cổng thanh toán), items (json snapshot), total, status (`pending` \| `paid` \| `needs_refund` \| `cancelled`), provider, paymentRef (unique), createdAt |
 
-Bài blog là file MDX, không nằm trong DB. Schema thay đổi bằng migration của drizzle-kit (file SQL trong `drizzle/`), không sửa DB bằng tay.
+Bài blog là file MDX, không nằm trong DB. Schema thay đổi bằng migration của drizzle-kit (file SQL trong `drizzle/`), không sửa DB bằng tay. Quy tắc expand / contract: [conventions.md](./conventions.md) §10.
 
 ## 5. Các luồng chính
 
@@ -127,7 +128,7 @@ Luồng này không phụ thuộc provider cụ thể; xem ADR-0004.
 
 ### Admin
 - Đăng nhập bằng `ADMIN_PASSWORD` → cookie phiên ký HMAC (Web Crypto) bằng `SESSION_SECRET`.
-- `proxy.ts` chặn `/admin/*` (trừ `/admin/login`) nếu cookie không hợp lệ (M5); mọi Server Action của admin kiểm tra lại phiên (không dựa riêng vào proxy). Cùng file này, từ M2, đã trả 404 cho `/products/<slug>` không tồn tại ([ADR-0009](./adr/0009-product-404-in-proxy.md)); M5 mở rộng `matcher`.
+- `proxy.ts` chặn `/admin/*` (trừ `/admin/login`) nếu cookie không hợp lệ (M5); mọi Server Action của admin kiểm tra lại phiên (không dựa riêng vào proxy). Cùng file này, từ M2, đã trả 404 cho `/products/<slug>` không tồn tại ([ADR-0009](./adr/0009-product-404-in-proxy.md)); từ M3 cả `/blog/<slug>` không tồn tại (đối chiếu registry tĩnh, không chạm DB) và đường dẫn ảnh Open Graph `/products|blog/<slug>/opengraph-image[-<băm>]` của slug lạ ([ADR-0012](./adr/0012-blog-static-registry.md)). `matcher` là `['/products/:slug', '/products/:slug/:image', '/blog/:slug', '/blog/:slug/:image']`; `/blog`, `/products`, `/opengraph-image`, sitemap, robots, `/_next/*` không qua proxy. M5 mở rộng `matcher`.
 - Trang admin có `robots: noindex`.
 - Sửa sản phẩm → Server Action cập nhật DB, gọi `updateTag`.
 
@@ -144,8 +145,10 @@ Lưu ý trên Vercel: cache của `"use cache"` nằm trong bộ nhớ từng in
 | Danh mục, danh sách sản phẩm | Danh mục; danh sách không có từ khoá: `"use cache"`, `cacheLife('hours')`, `cacheTag('products')`, khoá gồm danh mục / sắp xếp / trang đã chuẩn hoá. Tìm theo `q`: không cache ([ADR-0008](./adr/0008-listing-cache-keys.md)) |
 | Chi tiết sản phẩm (gồm tồn kho) | `"use cache"`, `cacheTag('product:<slug>')`; làm mới bằng `updateTag` khi admin sửa (Server Action), `revalidateTag` khi webhook trừ kho (Route Handler); `generateStaticParams` để prerender |
 | Số lượng trong giỏ, nút thêm vào giỏ | Đọc cookie → động, bọc `<Suspense>`; vỏ trang vẫn tĩnh |
-| Kiểm slug sản phẩm trong `proxy.ts` | Không cache được (`cacheTag` lỗi ngoài `"use cache"`); truy vấn theo khoá unique, nhớ slug có thật trong bộ nhớ instance, slug lạ truy vấn mỗi lần; quá 400 ms hoặc lỗi → cho đi tiếp ([ADR-0009](./adr/0009-product-404-in-proxy.md)) |
-| Blog | Tĩnh |
+| Kiểm slug sản phẩm trong `proxy.ts` | Không cache được (`cacheTag` lỗi ngoài `"use cache"`); truy vấn theo khoá unique, nhớ slug có thật trong bộ nhớ instance, slug lạ truy vấn mỗi lần; quá 400 ms hoặc lỗi → cho đi tiếp ([ADR-0009](./adr/0009-product-404-in-proxy.md)). Áp cho cả ảnh OG của sản phẩm |
+| Mọi truy vấn runtime | Qua `dbQuery` của `@/db`: lỗi thay bằng thông điệp cố định (tên truy vấn + SQLSTATE / errno), quá **5 giây** (`DB_QUERY_TIMEOUT_MS`, 100 → 10000) thì ném lỗi để trang lỗi hiện thay vì chờ `connect_timeout` 10 giây ([ADR-0011](./adr/0011-db-query-wrapper.md)); hết giờ thì dựng lại client Postgres để kết nối bị mạng nuốt gói không giữ pool ([ADR-0013](./adr/0013-db-client-recycle.md)) |
+| Blog | Tĩnh: nội dung MDX biên dịch lúc build, registry `posts.ts` trong repo; `/blog` và mọi `/blog/<slug>` prerender (`generateStaticParams`), không `"use cache"`, không tag — bài chỉ đổi khi deploy. Slug lạ: `proxy.ts` đối chiếu danh sách slug tĩnh, không chạm DB, nên không tạo entry route cache nào cho slug bịa ra — cả trang lẫn ảnh OG ([ADR-0012](./adr/0012-blog-static-registry.md)) |
+| `sitemap.xml`, `robots.txt` | Sitemap: sản phẩm đọc qua `getProductSitemapEntries` (`"use cache"`, `cacheTag('products')`, `cacheLife('hours')`), bài từ registry; route `○ /sitemap.xml  1h  1d`. `robots.txt` tĩnh (`Disallow: /` ngoài production, §7). Cả hai prerender lúc build: URL tuyệt đối lấy từ `getSiteUrl()` với biến môi trường **lúc build** |
 | Trang admin, giỏ hàng, checkout | Động hoàn toàn |
 
 ## 7. Môi trường
@@ -159,15 +162,21 @@ Lưu ý trên Vercel: cache của `"use cache"` nằm trong bộ nhớ từng in
 | **Production** | `production` | Vercel production (production branch = `production`), domain chính | Neon nhánh chính | Seed lần đầu, sau đó admin quản lý | Fake (đến khi mở bán) |
 
 - Code không kiểm tra tên môi trường; mọi khác biệt nằm trong biến môi trường. Dev là bản preview của Vercel (`VERCEL_ENV=preview`), nhận `DATABASE_URL` / `DATABASE_URL_UNPOOLED` do tích hợp Neon inject cho nhánh git `develop` (cùng một Neon branch qua mọi lần deploy `develop`); không có Neon branch `dev` riêng hay biến ghi đè theo nhánh. Vì seed chạy ở mọi lần build Dev / preview trên một branch có thể đã có dữ liệu, seed phải idempotent (`onConflictDoNothing` theo `slug`). Luồng nhánh: [ADR-0006](./adr/0006-branch-strategy.md).
+- URL công khai (`metadataBase`, sitemap, robots) lấy từ `getSiteUrl()` (`src/lib/site-url.ts`), không ghi cứng domain trong `src/`: `SITE_URL` nếu có (domain riêng, chạy ngoài Vercel; phải là `https://<host>[:cổng]`, hoặc `http://localhost` ngoài build production) → Production: `VERCEL_PROJECT_PRODUCTION_URL` → Preview / Dev: `VERCEL_BRANCH_URL` → `VERCEL_URL` → `http://localhost:3000`. Đọc lúc build. Dev vì vậy dùng domain nhánh `next-store-git-develop-…`, không phải alias Dev, trừ khi đặt `SITE_URL` cho nhánh `develop`.
+- `robots.txt`: `Allow: /` chỉ trên build production của Vercel (`isProductionDeployment`: `VERCEL` có giá trị và `VERCEL_ENV=production`), còn lại `Disallow: /`. Quyết định 15 của plan M3 định dùng một file cho mọi môi trường, dựa vào header `X-Robots-Tag: noindex` của Vercel trên Preview / Dev; NS-65 kiểm Dev (`next-store-dev-ginpham.vercel.app`) thì **không có** header này, nên áp nhánh dự phòng của quyết định. Smoke trong `e2e-preview` bắt buộc `Disallow: /` (`SMOKE_ROBOTS=disallow`) và in header `X-Robots-Tag` mỗi lần chạy. `/admin` (M5) dùng `noindex`, không thêm `Disallow` riêng.
 - Sau này thêm `stg` / `demo`: mỗi cái là một nhánh sống lâu có domain nhánh và Neon branch riêng (Hobby), hoặc Vercel Custom Environments (Pro).
 
 - Bước build trên Vercel: `npm run build:vercel` = migrate → seed (bỏ qua khi `VERCEL_ENV=production`) → `next build`. Production được seed trước lần build đầu tiên có trang đọc DB.
-- Seed **không bao giờ** chạy trên production sau lần khởi tạo. Script seed dùng danh sách cho phép: PGlite luôn được seed; Postgres chỉ được seed khi `VERCEL_ENV=preview` hoặc có cờ `--allow-production` — mọi trường hợp khác (không đặt, sai chính tả, VPS) bị coi là production và bị từ chối trước mọi câu lệnh DB.
+- Seed **không bao giờ** chạy trên production sau lần khởi tạo. Script seed dùng danh sách cho phép: PGlite luôn được seed; Postgres chỉ được seed trên Vercel (`VERCEL` có giá trị) khi `VERCEL_ENV=preview`; không có lối tắt cho production — mọi trường hợp khác (không đặt, sai chính tả, VPS) bị coi là production và bị từ chối trước mọi câu lệnh DB. Seed production chỉ bằng `npm run db:seed:sql` chạy trong Neon SQL Editor (README, mục Seed production).
 - Region: function của Vercel (trang động, Server Action, `proxy.ts`) chạy ở `sin1` (Singapore) theo `vercel.json` `regions`, cạnh Neon `aws-ap-southeast-1`; mặc định của Vercel là `iad1` làm mỗi truy vấn đi qua Thái Bình Dương và proxy fail-open ([ADR-0009](./adr/0009-product-404-in-proxy.md)). Đổi region của Neon thì đổi cả `vercel.json`.
 - Secret chỉ nằm trong biến môi trường của Vercel và GitHub Secrets.
-- Trên Vercel, bản preview / Dev từ chối kết nối khi `NEON_PRODUCTION_ENDPOINT` thiếu hoặc trùng endpoint của `DATABASE_URL`; production từ chối khi biến có mặt mà không khớp. Biến là endpoint id (không bí mật) của Neon branch production, không ghi cứng trong repo; kiểm ở `resolveDatabaseTarget`, chung cho runtime, `db:migrate` (cả URL unpooled) và `db:seed`.
+- Trên Vercel, bản preview / Dev từ chối kết nối khi `NEON_PRODUCTION_ENDPOINT` thiếu hoặc trùng endpoint của `DATABASE_URL`; production từ chối khi biến có mặt mà không khớp. Biến là endpoint id (không bí mật) của Neon branch production, không ghi cứng trong repo; kiểm ở `resolveDatabaseTarget`, chung cho runtime, `db:migrate` (cả URL unpooled) và `db:seed`. Mọi environment trên Vercel còn từ chối mật khẩu bắt đầu bằng `endpoint=` / `project=`, và preview / Dev từ chối host `….neon.tech` không mang endpoint id `ep-…` (không so được với production). Biến chỉ nhận một endpoint: thêm read replica cho production thì phải mở rộng lớp chặn trước.
+- `DB_LOG=1` bị từ chối trên mọi Postgres không phải local trừ Vercel preview / development, và `VERCEL_ENV` chỉ được tin khi `VERCEL` có giá trị (danh sách cho phép, kiểm trong `createConnection` trước khi dựng client; logger và lớp chặn dùng chung `isDbLogOn`): log của Drizzle có cả tham số truy vấn. Preview chỉ an toàn để bật khi database của nó không chứa dữ liệu khách (M3 Task 5).
+- Ngoài Vercel (local, CI, VPS) lớp chặn endpoint không chạy: ở đó không có khái niệm preview; `db:seed` và `DB_LOG` từ chối mọi Postgres không phải local ngoài Vercel dù `VERCEL_ENV` là gì, còn `db:migrate` chạy tay ngoài Vercel là thao tác của người vận hành.
 - Kết nối tới DB không phải local luôn dùng TLS `verify-full`: server phải trình chứng chỉ do CA công khai cấp, khớp đúng hostname trong `DATABASE_URL` (Neon đáp ứng). Host là địa chỉ IP hoặc chứng chỉ tự ký (VPS) cần thêm `sslrootcert=<đường dẫn CA>` — hostname vẫn được kiểm.
 - Host local (`localhost`, `127.0.0.1`, `::1`): `sslrootcert` **không** bật TLS. Thiếu `sslmode` / `ssl` (hoặc `disable` / `false`) nghĩa là không TLS, kể cả khi có `sslrootcert`; muốn TLS tới DB local thì ghi rõ `sslmode=verify-full` (hoặc `require` / `prefer` / `allow`).
+- Hai role DB ([ADR-0010](./adr/0010-app-role-and-preview-data.md)): `db:migrate` dùng role chủ trong `DATABASE_URL` do tích hợp Neon inject (DDL, default privileges); runtime, prerender và `db:seed` dùng `next_store_app` (chỉ DML trên `public`) với user / mật khẩu từ `DATABASE_APP_USER` / `DATABASE_APP_PASSWORD`, host / cổng / database từ URL. Quyền cấp bằng `scripts/sql/app-role.sql`, kiểm bằng `scripts/sql/app-role-check.sql` (README, mục Role app); bảng do migration tạo sau tự có quyền, migration không `GRANT`. Thiếu biến thì dùng role chủ cho tới M3 Task 5, sau đó bắt buộc trên mọi `VERCEL_ENV`.
+  - Ghi chú bổ sung (audit PR #39 L6, không sửa ADR-0010): role app tự đổi được mật khẩu của chính nó (Postgres không cho thu hồi quyền này), nên SQL injection chạy được câu lệnh xếp chồng có thể chiếm role từ ngoài. Phạm vi bảo vệ của ADR-0010 vì vậy không gồm "kẻ có SQL injection không giữ được quyền truy cập"; quy trình đổi mật khẩu của Task 5 (README, mục Role app → Đổi mật khẩu) là cách lấy lại. Role app có `statement_timeout = 6s` (NS-73).
 - Mật khẩu trống trong URL nghĩa là driver lấy `PGPASSWORD` rồi `.pgpass`; URL trên Vercel/Neon phải chứa mật khẩu.
 
 ## 8. Các mốc

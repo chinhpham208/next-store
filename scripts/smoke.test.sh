@@ -18,6 +18,12 @@ SOFT_RSC_PORT=3194
 COLD_PORT=3193
 WARM_PORT=3192
 SEG_PORT=3191
+NOINDEX_PORT=3190
+SITEMAP_PORT=3189
+OG_PORT=3188
+SOFT_BLOG_PORT=3187
+SOFT_OG_PORT=3186
+POST_SEG_PORT=3185
 
 TMP=$(mktemp -d)
 PIDS=()
@@ -40,25 +46,36 @@ EOF
 chmod +x "$TMP/bin/curl"
 
 # start_server <port> <header-file> [status] [404-body] [soft-regex] [hard-404-regex]: answers / and the smoke's
-# product page (and its RSC / segment prefetch forms) with the default SMOKE_TEXT, the smoke's listing paths with the
-# labelled grid (or with <status>, e.g. 401 like Vercel Deployment Protection), everything else with 404 and
+# product page (and its RSC / segment prefetch forms) with the default SMOKE_TEXT, /blog and the smoke's post (and its
+# RSC / segment prefetch forms) with an article and its h1, the smoke's listing paths with the labelled grid (or with <status>, e.g. 401 like Vercel Deployment Protection), everything else with 404 and
 # <404-body> (default: the app's Vietnamese page). URLs matching <soft-regex> answer 200 with the not-found page, like
 # a page-level notFound() under Cache Components (K3) or a proxy that failed open; URLs matching <hard-404-regex>
-# answer 404 with the proxy's rewrite header even when they are a known product's.
+# answer 404 with the proxy's rewrite header even when they are a known product's. /sitemap.xml and /robots.txt
+# answer like the app on <sitemap-origin> (default https://shop.example.test); <robots-tag>, when set, is sent as
+# X-Robots-Tag on every response; <robots-rule> (default `Allow: /`) is the rule line of robots.txt. The pages carry an
+# og:image on http://localhost:3000 (as under next start); its path answers <og-status> (default 200) with a PNG.
 start_server() {
-  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} ready="$TMP/ready-$1"
+  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} ready="$TMP/ready-$1"
   node -e '
-    const [port, headers, ready, status, body, soft, hard] = process.argv.slice(1)
+    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule, ogStatus] = process.argv.slice(1)
+    const og = (path) => `<meta property="og:image" content="http://localhost:3000${path}"/>`
+    const images = ["/opengraph-image?a1b2c3", "/products/ao-404-not-found/opengraph-image-16g1u1?d4e5f6", "/blog/chao-mung-den-next-store/opengraph-image-16g1u1?a7b8c9"]
     const fs = require("node:fs")
     require("node:http").createServer((req, res) => {
       fs.appendFileSync(headers, JSON.stringify(req.headers) + "\n")
+      if (robotsTag) res.setHeader("x-robots-tag", robotsTag)
+      const locs = ["/", "/products/ao-404-not-found", "/blog/chao-mung-den-next-store"]
+      if (req.url === "/sitemap.xml") { res.writeHead(200, { "content-type": "application/xml" }); res.end(`<urlset>${locs.map((p) => `<url>\n<loc>${p === "/" ? "https://shop.example.test" : origin}${p}</loc>\n</url>`).join("\n")}</urlset>`); return }
+      if (req.url === "/robots.txt") { res.writeHead(200, { "content-type": "text/plain" }); res.end(`User-Agent: *\n${robotsRule}\n\nSitemap: https://shop.example.test/sitemap.xml\n`); return }
+      if (images.includes(req.url)) { res.writeHead(Number(ogStatus), { "content-type": Number(ogStatus) === 200 ? "image/png" : "text/html" }); res.end("png"); return }
       if (hard && new RegExp(hard).test(req.url)) { res.writeHead(404, { "content-type": "text/html; charset=utf-8", "x-middleware-rewrite": "/_khong-tim-thay" }); res.end(body) }
-      else if (req.url === "/" || ["/products/ao-404-not-found", "/products/ao-404-not-found?_rsc", "/products/ao-404-not-found.rsc", "/products/ao-404-not-found.segments/_tree.segment.rsc"].includes(req.url)) { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<h1>Áo thun 404 Not Found</h1>") }
+      else if (req.url === "/" || ["/products/ao-404-not-found", "/products/ao-404-not-found?_rsc", "/products/ao-404-not-found.rsc", "/products/ao-404-not-found.segments/_tree.segment.rsc"].includes(req.url)) { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end(`<meta property="og:site_name" content="next-store"/>${og(req.url === "/" ? images[0] : images[1])}<h1>Áo thun 404 Not Found</h1>`) }
+      else if (["/blog", "/blog/chao-mung-den-next-store", "/blog/chao-mung-den-next-store?_rsc", "/blog/chao-mung-den-next-store.rsc", "/blog/chao-mung-den-next-store.segments/_tree.segment.rsc"].includes(req.url)) { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end(`${og(images[2])}<article><h1>Chào mừng đến next-store</h1></article>`) }
       else if (req.url === "/products" || req.url === "/products?page=abc&sort=xyz") { res.writeHead(Number(status), { "content-type": "text/html; charset=utf-8" }); res.end("<ul aria-label=\"Danh sách sản phẩm\"></ul>") }
       else if (soft && new RegExp(soft).test(req.url)) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
       else { res.writeHead(404, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
     }).listen(Number(port), "127.0.0.1", () => fs.writeFileSync(ready, ""))
-  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" &
+  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" "$ogStatus" &
   PIDS+=($!)
   local i
   for i in $(seq 1 50); do [ -f "$ready" ] && return 0; sleep 0.1; done
@@ -73,7 +90,7 @@ run() {
   rm -f "$TMP/curl-calls"
   : > "$TMP/curl-calls"
   set +e
-  env -u BASE_URL -u VERCEL_AUTOMATION_BYPASS_SECRET -u SMOKE_PORT PATH="$TMP/bin:$PATH" "${envs[@]}" "$@" > "$TMP/out" 2>&1
+  env -u BASE_URL -u VERCEL_AUTOMATION_BYPASS_SECRET -u SMOKE_PORT -u SMOKE_ROBOTS PATH="$TMP/bin:$PATH" "${envs[@]}" "$@" > "$TMP/out" 2>&1
   CODE=$?
   set -e
 }
@@ -194,3 +211,77 @@ run BASE_URL="http://127.0.0.1:$SEG_PORT" -- bash scripts/smoke.sh
 [ "$CODE" = 1 ] || fail known-segment-404 "thoát $CODE, cần 1"
 grep -qF '(segment prefetch dạng đường dẫn) bị proxy rewrite sang not-found' "$TMP/out" || fail known-segment-404 "thông báo không nêu segment prefetch"
 echo "ok known-segment-404"
+
+# robots-policy (owner decision 15 fallback, NS-65): SMOKE_ROBOTS=disallow fails on `Allow: /` and passes on
+# `Disallow: /`; unset accepts either and prints it; X-Robots-Tag is only reported, present or not.
+run BASE_URL="http://127.0.0.1:$PORT" SMOKE_ROBOTS=disallow -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail robots-policy "Allow với SMOKE_ROBOTS=disallow: thoát $CODE, cần 1"
+grep -qF '/robots.txt là allow, cần disallow' "$TMP/out" || fail robots-policy "thông báo không nêu chính sách robots"
+run BASE_URL="http://127.0.0.1:$PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail robots-policy "không có cờ: thoát $CODE, cần 0"
+grep -qF 'GET / → x-robots-tag: <không có>' "$TMP/out" || fail robots-policy "không in header thiếu"
+grep -qF 'GET /robots.txt → 200, allow /' "$TMP/out" || fail robots-policy "không in chính sách robots"
+start_server "$NOINDEX_PORT" "$TMP/noindex-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "noindex" "" "Disallow: /"
+run BASE_URL="http://127.0.0.1:$NOINDEX_PORT" SMOKE_ROBOTS=disallow -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail robots-policy "Disallow với SMOKE_ROBOTS=disallow: thoát $CODE, cần 0"
+for path in / /robots.txt /sitemap.xml; do
+  grep -qF "GET $path → x-robots-tag: noindex" "$TMP/out" || fail robots-policy "không in header của $path"
+done
+run BASE_URL="http://127.0.0.1:$NOINDEX_PORT" SMOKE_ROBOTS=allow -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail robots-policy "Disallow với SMOKE_ROBOTS=allow: thoát $CODE, cần 1"
+echo "ok robots-policy"
+
+# bad-robots-flag: SMOKE_ROBOTS is allow, disallow or empty; refused before any request.
+run SMOKE_ROBOTS=yes -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail bad-robots-flag "thoát $CODE, cần 1"
+[ ! -s "$TMP/curl-calls" ] || fail bad-robots-flag "curl đã được gọi"
+echo "ok bad-robots-flag"
+
+# sitemap-two-origins (US-11, K6): a sitemap whose <loc> mix two hosts (e.g. a page left on localhost) fails smoke.
+start_server "$SITEMAP_PORT" "$TMP/sitemap-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" "http://localhost:3000"
+run BASE_URL="http://127.0.0.1:$SITEMAP_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail sitemap-two-origins "thoát $CODE, cần 1"
+grep -qF '/sitemap.xml có <loc> trên nhiều origin' "$TMP/out" || fail sitemap-two-origins "thông báo không nêu nhiều origin"
+echo "ok sitemap-two-origins"
+
+# og-image (US-11, K8): each og:image is fetched by path on BASE, not on the tag's host; an image route that answers
+# 500 at request time fails smoke.
+run BASE_URL="http://127.0.0.1:$PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail og-image "thoát $CODE, cần 0"
+grep -qF 'og:image của /products/ao-404-not-found → GET /products/ao-404-not-found/opengraph-image-16g1u1?d4e5f6 → 200, image/png' "$TMP/out" ||
+  fail og-image "không kiểm og:image của sản phẩm"
+! grep -q 'localhost:3000' "$TMP/curl-calls" || fail og-image "đã gọi host trong thẻ thay vì BASE_URL"
+start_server "$OG_PORT" "$TMP/og-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" "" "" 500
+run BASE_URL="http://127.0.0.1:$OG_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail og-image "ảnh trả 500: thoát $CODE, cần 1"
+grep -qF 'GET /opengraph-image?a1b2c3 (og:image của /) trả 500, cần 200' "$TMP/out" || fail og-image "thông báo không nêu ảnh lỗi"
+echo "ok og-image"
+
+# soft-404-blog (US-10, ADR-0012): an unknown blog slug answered 200 with the not-found page (page-level notFound(),
+# K3) fails smoke, without any warm-up: the blog branch of the proxy has no database lookup to wait for.
+start_server "$SOFT_BLOG_PORT" "$TMP/soft-blog-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/blog/khong-ton-tai-[0-9]'
+run BASE_URL="http://127.0.0.1:$SOFT_BLOG_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail soft-404-blog "thoát $CODE, cần 1"
+grep -qF '(bài: slug mới) trả 200 ngay lần đầu' "$TMP/out" || fail soft-404-blog "thông báo không nêu slug bài trả 200"
+[ "$(grep -c 'blog/smoke-warmup-' "$TMP/curl-calls")" = 0 ] || fail soft-404-blog "có request warm-up cho blog"
+grep -qF -- "--url http://127.0.0.1:$SOFT_BLOG_PORT/blog/constructor" "$TMP/curl-calls" || fail soft-404-blog "không kiểm /blog/constructor"
+echo "ok soft-404-blog"
+
+# soft-og (US-11, K10): the open graph image of an unknown slug answered 200 fails smoke. The unknown path keeps the
+# hash suffix of the real og:image, with the slug swapped.
+start_server "$SOFT_OG_PORT" "$TMP/soft-og-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/blog/khong-ton-tai-og-[0-9-]+/opengraph-image-16g1u1'
+run BASE_URL="http://127.0.0.1:$SOFT_OG_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail soft-og "thoát $CODE, cần 1"
+grep -qF '(ảnh OG: slug bài lạ) trả 200 ngay lần đầu' "$TMP/out" || fail soft-og "thông báo không nêu ảnh OG của slug bài lạ"
+grep -qE -- '--url http://127\.0\.0\.1:[0-9]+/products/khong-ton-tai-og-[0-9-]+/opengraph-image-16g1u1\?d4e5f6' "$TMP/curl-calls" ||
+  fail soft-og "không kiểm ảnh OG có hậu tố băm của slug sản phẩm lạ"
+grep -qE -- '--url http://127\.0\.0\.1:[0-9]+/products/khong-ton-tai-og-[0-9-]+-2/opengraph-image( |$)' "$TMP/curl-calls" ||
+  fail soft-og "không kiểm ảnh OG không hậu tố băm của slug sản phẩm lạ"
+echo "ok soft-og"
+
+# known-post-segment-404: a known post's segment prefetch path rewritten to not-found fails smoke, like a product's.
+start_server "$POST_SEG_PORT" "$TMP/post-seg-headers" 200 "<h1>Không tìm thấy trang</h1>" "" '^/blog/chao-mung-den-next-store\.segments/'
+run BASE_URL="http://127.0.0.1:$POST_SEG_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail known-post-segment-404 "thoát $CODE, cần 1"
+grep -qF '(bài: segment prefetch dạng đường dẫn) bị proxy rewrite sang not-found' "$TMP/out" || fail known-post-segment-404 "thông báo không nêu segment prefetch của bài"
+echo "ok known-post-segment-404"

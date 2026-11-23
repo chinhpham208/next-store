@@ -13,7 +13,7 @@
 | **Implementer** | `implementer` (model tầm trung; việc cấu hình / CI / tài liệu: model nhẹ) | Code một ticket theo TDD, mở PR | Tự đổi phạm vi ticket, thêm thư viện ngoài plan |
 | **Reviewer** | `reviewer` (chỉ đọc) | Review PR theo tiêu chí chấp nhận và `conventions.md` | Sửa code |
 | **QA** | `qa` | Viết E2E theo tiêu chí chấp nhận; test trên preview; mở ticket Bug | Sửa code tính năng |
-| **Security & Architecture auditor** | `auditor` (model mạnh, chỉ đọc) | Soát PR chạm auth, cookie, webhook, thanh toán, cache; soát cả mốc M4–M6 | Sửa code |
+| **Security & Architecture auditor** | `auditor` (model mạnh, chỉ đọc) | Soát PR chạm auth, cookie, webhook, thanh toán, cache, migration (`drizzle/*.sql`), kết nối và quyền DB, workflow dùng secret hoặc chạm Production; soát cả mốc M4–M6 | Sửa code |
 
 Việc DevOps (CI, cấu hình Vercel / Neon, script) là ticket bình thường, do Implementer làm và Reviewer duyệt; thao tác cần tài khoản do chủ dự án làm.
 
@@ -32,7 +32,7 @@ Việc DevOps (CI, cấu hình Vercel / Neon, script) là ticket bình thường
 6. Auditor soát toàn mốc (M4–M6)
 7. Orchestrator mở release PR develop → production, gửi demo: link Dev, link release PR, danh sách ticket, kết quả QA
      ──► [CỔNG 3] chủ dự án nghiệm thu; chủ dự án duyệt bằng lời trong chat là đủ (repo riêng tư, không có branch protection)
-8. Orchestrator merge release PR bằng merge commit, gắn tag v0.<mốc>.<n> (`n` tiếp theo trong mốc; xem conventions §8), smoke trên Production     ticket → Done
+8. Orchestrator merge release PR bằng merge commit, gắn tag v0.<mốc>.<n> (`n` tiếp theo trong mốc; xem conventions §8), smoke trên Production; sau release chạy workflow `Production E2E` (có hiệu lực khi M3 Task 17 merge)     ticket → Done
 ```
 
 Riêng M1: thêm một điểm dừng sau ticket đầu tiên để kiểm tra quy trình chạy đúng.
@@ -53,11 +53,13 @@ Nhánh, merge method, tag, hotfix và back-merge: [`conventions.md`](./conventio
 
 ## 4. Quy tắc an toàn
 
-- **Mỗi người viết một worktree.** `/home/claude/next-store` là của Orchestrator. Mỗi ticket chạy song song có worktree riêng `/home/claude/wt/NS-xx` (`git worktree add -b <nhánh> /home/claude/wt/NS-xx origin/develop`, rồi `npm ci`), do Orchestrator tạo và xoá sau khi merge. Reviewer, Auditor, QA (khi chỉ đọc) dùng worktree tạm `/tmp/<vai>-<số PR>` và tự xoá. Không ai `git checkout` trong worktree của người khác (audit PR #15 từng chạy nhầm code vì workspace chung bị đổi nhánh giữa chừng). `scripts/verify.sh` dùng cổng 3100: nếu bận thì chờ hoặc chạy từng bước với `SMOKE_PORT` khác.
+- **Mỗi người viết một worktree.** `/home/claude/next-store` là của Orchestrator. Mỗi ticket chạy song song có worktree riêng `/home/claude/wt/NS-xx` (`git worktree add -b <nhánh> /home/claude/wt/NS-xx origin/develop`, rồi `npm ci`), do Orchestrator tạo và xoá sau khi merge. Reviewer, Auditor, QA (khi chỉ đọc) dùng worktree tạm `/tmp/<vai>-<số PR>` và tự xoá. Không ai `git checkout` trong worktree của người khác (audit PR #15 từng chạy nhầm code vì workspace chung bị đổi nhánh giữa chừng). `scripts/verify.sh` mặc định dùng cổng 3100 → 3103; worktree chạy song song đặt `E2E_PORT=<n>` (smoke theo cùng cổng, trừ khi đặt `SMOKE_PORT` riêng). Verify chỉ tắt tiến trình do chính nó khởi động; cổng bận thì nó dừng với lỗi.
 - **Giới hạn vòng lặp.** Implementer sửa tối đa 2 vòng theo review; vẫn hỏng → gọi `deep-reasoner` một lần để chẩn đoán → vẫn hỏng → dừng, hỏi chủ dự án.
 - **Leo thang ngay** (không tự quyết) khi: lệch ADR, thêm thư viện ngoài plan, lùi phiên bản, vấn đề bảo mật, cần tài khoản / chi phí, xoá dữ liệu production.
 - **Bằng chứng thật.** Mọi khẳng định "đã chạy / đã qua" phải kèm output thật từ `scripts/verify.sh` hoặc CI; không viết lại bằng trí nhớ.
 - **Kiểm tra API đúng phiên bản.** Khi dùng API Next.js / Drizzle không chắc chắn, đọc tài liệu trong `node_modules/next/dist/docs` hoặc trang docs chính thức của đúng phiên bản trong `package.json`.
+- **Sau mỗi merge**, Orchestrator xoá Neon branch `preview/<nhánh>` của PR vừa merge (chủ dự án đã đồng ý một lần cho việc này; không bao giờ xoá `main`, `preview/develop`, nhánh cha của preview) cho tới khi workflow của NS-53 chạy.
+- **Cài đặt hạ tầng** ghi được vào repo (`vercel.json`, workflow) thì ghi vào repo, không đặt trong console.
 - **Secret** không bao giờ vào repo, log, comment ticket hay mô tả PR.
 
 ## 5. Môi trường làm việc của agent
@@ -67,6 +69,7 @@ Nhánh, merge method, tag, hotfix và back-merge: [`conventions.md`](./conventio
 - Source of truth là GitHub `chinhpham208/next-store` (riêng tư). Máy Mac của chủ dự án kéo code từ GitHub vào một bản clone riêng; chủ dự án không chạy `npm` trong workspace.
 - Shell trên máy ảo Linux; mỗi lệnh tối đa 180 giây → lệnh dài (`npm ci`, `next build`, Playwright) chạy qua `scripts/verify.sh` (chạy nền + đọc log).
 - `yt` (YouTrack CLI) và `gh` đã đăng nhập sẵn trong workspace.
+- Sau release, Orchestrator chạy workflow `Production E2E` (chỉ đọc; có hiệu lực khi M3 Task 17 merge).
 - Preview và Dev được kiểm tự động (E2E, smoke) bằng workflow CI chạy sau mỗi deploy, thêm ở M2. Workflow cần GitHub secret `VERCEL_AUTOMATION_BYPASS_SECRET`; chủ dự án đã tạo secret này ngày 2026-11-20 (có trong Vercel và GitHub Actions).
 - Secret nằm ngoài repo: `/home/claude/secrets/` (workspace); `~/Projects/.youtrack-token`, `~/Projects/.github-token` (trên Mac).
 

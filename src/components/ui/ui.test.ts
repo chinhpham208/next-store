@@ -8,6 +8,7 @@ import { Container } from '@/components/ui/container'
 import { CursorBlock } from '@/components/ui/cursor-block'
 import { Input } from '@/components/ui/input'
 import { Price } from '@/components/ui/price'
+import { Prose, PROSE_COMPONENTS } from '@/components/ui/prose'
 import { Skeleton } from '@/components/ui/skeleton'
 
 const NBSP = ' '
@@ -124,5 +125,73 @@ describe('Skeleton', () => {
     const classes = classOf(render(Skeleton, { className: 'h-6 w-36' }))
     expect(classes).toEqual(expect.arrayContaining(['bg-border', 'h-6', 'w-36']))
     expect(classes.some((c) => c.startsWith('animate-'))).toBe(false)
+  })
+})
+
+describe('Prose', () => {
+  it('Prose wraps children in a 576 px column spaced only by gap', () => {
+    const html = render(Prose, { children: 'x' })
+    expect(html).toMatch(/^<div[^>]*>x<\/div>$/)
+    expect(classOf(html)).toEqual(
+      expect.arrayContaining(['flex', 'max-w-xl', 'flex-col', 'gap-6', 'text-base', 'md:gap-8', 'md:text-lg']),
+    )
+  })
+  it('maps every element the posts use', () => {
+    expect(Object.keys(PROSE_COMPONENTS).sort()).toEqual(
+      ['a', 'blockquote', 'code', 'em', 'h1', 'h2', 'h3', 'hr', 'li', 'ol', 'p', 'pre', 'strong', 'ul'].sort(),
+    )
+  })
+  it('renders an internal link with next/link and no rel', () => {
+    const html = render(PROSE_COMPONENTS.a, { href: '/products', children: 'Sản phẩm' })
+    expect(html).toMatch(/^<a [^>]*href="\/products"[^>]*>Sản phẩm<\/a>$/)
+    expect(html).not.toContain('rel=')
+    expect(html).not.toContain('target=')
+    expect(classOf(html)).toEqual(expect.arrayContaining(['text-link', 'underline', 'underline-offset-4']))
+  })
+  it('renders an external link with rel="noopener noreferrer" and no new tab', () => {
+    const html = render(PROSE_COMPONENTS.a, { href: 'https://git-scm.com/docs/git-push', children: 'git push' })
+    expect(html).toContain('href="https://git-scm.com/docs/git-push"')
+    expect(html).toContain('rel="noopener noreferrer"')
+    expect(html).not.toContain('target=')
+  })
+  it('treats a protocol-relative URL as external', () => {
+    expect(render(PROSE_COMPONENTS.a, { href: '//example.com', children: 'x' })).toContain('rel="noopener noreferrer"')
+  })
+  it('makes a code block a keyboard-focusable horizontal scroll area', () => {
+    const html = render(PROSE_COMPONENTS.pre, { children: 'git reflog' })
+    expect(html).toMatch(/^<pre [^>]*tabindex="0"/)
+    expect(html).not.toContain('aria-label')
+    expect(classOf(html)).toEqual(expect.arrayContaining(['overflow-x-auto', 'rounded-md', 'border', 'bg-surface', 'font-mono']))
+  })
+  it('styles inline code but leaves code inside a block to the pre', () => {
+    expect(classOf(render(PROSE_COMPONENTS.code, { children: '--force' }))).toEqual(
+      expect.arrayContaining(['bg-surface-muted', 'font-mono', 'break-words']),
+    )
+    expect(render(PROSE_COMPONENTS.code, { className: 'language-bash', children: 'git reflog' })).toBe(
+      '<code class="language-bash">git reflog</code>',
+    )
+  })
+  it('renders an h1 from a post as h2, since the page already has its h1', () => {
+    const html = render(PROSE_COMPONENTS.h1, { children: 'Tiêu đề' })
+    expect(html).toMatch(/^<h2[^>]*>Tiêu đề<\/h2>$/)
+    expect(html).toBe(render(PROSE_COMPONENTS.h2, { children: 'Tiêu đề' }))
+  })
+  it('renders each remaining element as its own tag with the spec classes', () => {
+    const cases = [
+      ['h3', 'text-xl'],
+      ['p', 'text-pretty'],
+      ['ul', 'list-disc'],
+      ['ol', 'list-decimal'],
+      ['blockquote', 'border-l-4'],
+      ['strong', 'font-semibold'],
+      ['em', 'italic'],
+    ] as const
+    for (const [tag, token] of cases) {
+      const html = render(PROSE_COMPONENTS[tag], { children: 'x' })
+      expect(html, tag).toMatch(new RegExp(`^<${tag}[ >][\\s\\S]*</${tag}>$`))
+      expect(classOf(html), tag).toContain(token)
+    }
+    expect(render(PROSE_COMPONENTS.li, { children: 'x' })).toBe('<li>x</li>')
+    expect(render(PROSE_COMPONENTS.hr, {})).toMatch(/^<hr class="[^"]*my-4[^"]*"\/>$/)
   })
 })

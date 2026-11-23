@@ -1,6 +1,6 @@
 # ADR-0008: Khoá cache của danh sách sản phẩm
 
-- Trạng thái: Đã chấp nhận
+- Trạng thái: Đã chấp nhận; bổ sung bởi [ADR-0011](./0011-db-query-wrapper.md) (cách bọc lỗi truy vấn)
 - Ngày: 2026-11-20
 - Bổ sung: [ADR-0003](./0003-cache-strategy.md) (không thay thế; mọi quyết định của ADR-0003 giữ nguyên)
 

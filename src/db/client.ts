@@ -6,12 +6,15 @@ import type { PgDatabase, PgQueryResultHKT } from 'drizzle-orm/pg-core'
 import { drizzle as drizzlePglite } from 'drizzle-orm/pglite'
 import { drizzle as drizzlePostgres } from 'drizzle-orm/postgres-js'
 import postgres from 'postgres'
+import { MAX_QUERY_WAIT_MS } from '@/db/limits'
 import * as schema from '@/db/schema'
 
 export type Db = PgDatabase<PgQueryResultHKT, typeof schema>
 
 type DatabaseEnv = {
   DATABASE_URL?: string
+  DATABASE_APP_USER?: string
+  DATABASE_APP_PASSWORD?: string
   VERCEL?: string
   VERCEL_ENV?: string
   PGLITE_DATA_DIR?: string
@@ -21,7 +24,10 @@ type DatabaseEnv = {
 export type DatabaseTarget = { kind: 'postgres'; url: string } | { kind: 'pglite'; dataDir: string }
 
 const DEFAULT_PGLITE_DATA_DIR = '.data/pglite'
-const VERCEL_ENVS = ['production', 'preview', 'development']
+// One source for both lists, so a new Vercel environment cannot be valid for resolveDatabaseTarget yet unknown to
+// the endpoint and DB_LOG guards (which treat anything not listed here as production).
+const NON_PRODUCTION_VERCEL_ENVS = ['preview', 'development']
+const VERCEL_ENVS = ['production', ...NON_PRODUCTION_VERCEL_ENVS]
 // Compared after `new URL`, which serialises `[0:0:0:0:0:0:0:1]` as `[::1]`; the brackets are stripped below.
 const LOCAL_HOSTS = ['localhost', '127.0.0.1', '::1']
 const DEFAULT_PORT = 5432
@@ -184,7 +190,8 @@ export const resolveSsl = (url: ParsedPostgresUrl, name = 'DATABASE_URL'): SslPo
 
 const POOLER_SUFFIX = '-pooler'
 const NEON_ENDPOINT_ID = /^ep-[a-z0-9]+(?:-[a-z0-9]+)*$/
-const NON_PRODUCTION_VERCEL_ENVS = ['preview', 'development']
+// Neon's fallback for clients without SNI: `endpoint=<id>;<password>` or `project=<id>$<password>`.
+const NEON_PASSWORD_ENDPOINT = /^(?:endpoint|project)=/i
 
 // Fixed text: the endpoint id, host and URL never appear, so a refusal in a public build log reveals nothing.
 const ENDPOINT_MALFORMED_MESSAGE =
@@ -196,12 +203,23 @@ const ENDPOINT_MISSING_MESSAGE =
 const ENDPOINT_IS_PRODUCTION_MESSAGE =
   'Từ chối kết nối: database của bản preview / development trỏ tới endpoint production ' +
   '(trùng NEON_PRODUCTION_ENDPOINT); kiểm tra Neon branch mà tích hợp Neon gán cho nhánh git này.'
+const ENDPOINT_IN_PASSWORD_MESSAGE =
+  'Từ chối kết nối: mật khẩu trong URL database bắt đầu bằng endpoint= hoặc project=, tức Neon có thể định tuyến ' +
+  'tới endpoint khác với host đã kiểm theo NEON_PRODUCTION_ENDPOINT; dùng URL do tích hợp Neon cấp.'
+const ENDPOINT_UNKNOWN_NEON_HOST_MESSAGE =
+  'Từ chối kết nối: host Neon của bản preview / development không mang endpoint id (ep-…), nên không so được với ' +
+  'NEON_PRODUCTION_ENDPOINT; dùng URL do tích hợp Neon cấp.'
 const ENDPOINT_NOT_PRODUCTION_MESSAGE =
   'Từ chối kết nối: database của production không nằm trên endpoint khai báo trong NEON_PRODUCTION_ENDPOINT; ' +
   'sửa giá trị biến hoặc DATABASE_URL trên Vercel.'
 
-const withoutPooler = (label: string): string =>
-  label.endsWith(POOLER_SUFFIX) ? label.slice(0, -POOLER_SUFFIX.length) : label
+// Strips every trailing -pooler, not just one (audit PR #35 L2): whether Neon strips once or repeatedly is not
+// verified, so `<prod>-pooler-pooler` must count as production rather than as an unknown endpoint.
+const withoutPooler = (label: string): string => {
+  let id = label
+  while (id.endsWith(POOLER_SUFFIX)) id = id.slice(0, -POOLER_SUFFIX.length)
+  return id
+}
 
 // Neon hostnames are `ep-<id>[-pooler].<region>.aws.neon.tech`; anything else has no endpoint in its host.
 const hostEndpointId = (url: ParsedPostgresUrl): string | undefined => {
@@ -217,20 +235,35 @@ export const neonEndpointIds = (url: ParsedPostgresUrl): string[] => {
   return [...new Set([fromHost, fromOptions].filter((id) => id !== undefined))]
 }
 
+// A trailing dot is the same DNS name, so `api.….neon.tech.` must not slip past the suffix check.
+const isNeonHost = (host: string): boolean => {
+  const name = host.toLowerCase().replace(/\.+$/, '')
+  return name === 'neon.tech' || name.endsWith('.neon.tech')
+}
+
 type EndpointGuardInput = { url: ParsedPostgresUrl; vercelEnv: string; productionEndpoint: string | undefined }
 
 // Why a missing variable is fatal on preview / development but not on production: preview builds run
 // migrate and seed, so silently losing the guard there is exactly the accident we prevent (fail closed).
 // Production must keep deploying while the variable is being rolled out; once it is set, a wrong value
 // stops production right away, which also verifies what the owner typed.
+// The variable holds exactly one endpoint id (audit PR #15 L2). A read replica on the production branch is a
+// second compute with its own id: before enabling one, widen this to a list, otherwise production refuses the
+// replica and a preview pointed at it is not recognised as production.
+// Password and host checks (audit PR #15 L1): Neon routes clients without SNI by an `endpoint=` / `project=`
+// prefix in the password, and a Neon host without an `ep-` label names no endpoint, so in both cases the host we
+// compared is not necessarily where the connection lands.
 export const assertEndpointAllowed = ({ url, vercelEnv, productionEndpoint }: EndpointGuardInput): void => {
   const production = productionEndpoint?.trim() ?? ''
   if (production !== '' && (!NEON_ENDPOINT_ID.test(production) || production.endsWith(POOLER_SUFFIX))) {
     throw new Error(ENDPOINT_MALFORMED_MESSAGE)
   }
+  // trimStart (audit PR #35 L2): a leading space must not hide the prefix from us if the proxy ignores it.
+  if (NEON_PASSWORD_ENDPOINT.test(url.password.trimStart())) throw new Error(ENDPOINT_IN_PASSWORD_MESSAGE)
   const ids = neonEndpointIds(url)
   if (NON_PRODUCTION_VERCEL_ENVS.includes(vercelEnv)) {
     if (production === '') throw new Error(ENDPOINT_MISSING_MESSAGE)
+    if (isNeonHost(url.host) && hostEndpointId(url) === undefined) throw new Error(ENDPOINT_UNKNOWN_NEON_HOST_MESSAGE)
     if (ids.includes(production)) throw new Error(ENDPOINT_IS_PRODUCTION_MESSAGE)
     return
   }
@@ -261,19 +294,84 @@ export const resolveDatabaseTarget = (env: DatabaseEnv): DatabaseTarget => {
     // One choke point for runtime, db:migrate and db:seed. Off Vercel (local, CI, VPS) there is no preview
     // concept to protect, so the check would only add configuration.
     if (onVercel) {
-      assertEndpointAllowed({ url: parsed, vercelEnv: env.VERCEL_ENV ?? '', productionEndpoint: env.NEON_PRODUCTION_ENDPOINT })
+      assertEndpointAllowed({
+        url: parsed,
+        vercelEnv: env.VERCEL_ENV ?? '',
+        productionEndpoint: env.NEON_PRODUCTION_ENDPOINT,
+      })
     }
     return { kind: 'postgres', url }
   }
   return { kind: 'pglite', dataDir: env.PGLITE_DATA_DIR || DEFAULT_PGLITE_DATA_DIR }
 }
 
+export type RoleCredentials = { username: string; password: string }
+
+/**
+ * Expand step of ADR-0010 decision A (NS-60): while the owner rolls the role out, missing DATABASE_APP_* variables
+ * keep the owner role of DATABASE_URL. The contract step (M3 Task 5) sets this to true, which makes the app role
+ * mandatory on every Vercel deployment whatever VERCEL_ENV says; off Vercel it stays optional.
+ */
+export const APP_ROLE_REQUIRED_ON_VERCEL: boolean = false
+
+// The only role the SQL scripts grant to and check (scripts/sql/app-role*.sql). Any other name, even a valid one,
+// could be a role with wider rights that nothing has checked (audit PR #39 L7).
+export const APP_ROLE_NAME = 'next_store_app'
+
+// Fixed text: the variable names only, never the user name, password or URL.
+const APP_ROLE_MISSING_MESSAGE =
+  'DATABASE_APP_USER and DATABASE_APP_PASSWORD are required on Vercel (VERCEL is set); refusing to run the app as ' +
+  'the owner role of DATABASE_URL (ADR-0010).'
+const APP_USER_MISSING_MESSAGE =
+  'DATABASE_APP_USER is empty while DATABASE_APP_PASSWORD is set; set both (app role) or neither (owner role).'
+const APP_PASSWORD_MISSING_MESSAGE =
+  'DATABASE_APP_PASSWORD is empty while DATABASE_APP_USER is set; set both (app role) or neither (owner role).'
+const APP_USER_INVALID_MESSAGE =
+  `DATABASE_APP_USER is refused: it must be exactly ${APP_ROLE_NAME}, the role scripts/sql/app-role.sql grants to ` +
+  'and app-role-check.sql checks, and differ from the user in DATABASE_URL.'
+const APP_PASSWORD_INVALID_MESSAGE =
+  'DATABASE_APP_PASSWORD is refused: it must not contain control characters or start with endpoint= / project= ' +
+  '(Neon would route by it instead of by the checked host).'
+
+type AppRoleInput = { env: DatabaseEnv; url: ParsedPostgresUrl; requiredOnVercel?: boolean }
+
+// Host, port and database stay those of the injected URL (already checked by the endpoint guard); only the login
+// changes. The password goes through the same checks as the URL password: postgres-js writes it NUL-terminated, and
+// Neon's SNI fallback reads an endpoint from it (audit PR #15 L1).
+export const resolveAppRole = ({
+  env,
+  url,
+  requiredOnVercel = APP_ROLE_REQUIRED_ON_VERCEL,
+}: AppRoleInput): RoleCredentials | undefined => {
+  const username = env.DATABASE_APP_USER?.trim() ?? ''
+  const password = env.DATABASE_APP_PASSWORD?.trim() ?? ''
+  if (username === '' && password === '') {
+    // Any non-empty VERCEL counts, as in resolveDatabaseTarget, so a format change cannot switch the check off.
+    if (requiredOnVercel && Boolean(env.VERCEL)) throw new Error(APP_ROLE_MISSING_MESSAGE)
+    return undefined
+  }
+  if (username === '') throw new Error(APP_USER_MISSING_MESSAGE)
+  if (password === '') throw new Error(APP_PASSWORD_MISSING_MESSAGE)
+  // The owner check still matters if the integration ever injected next_store_app itself as the URL user.
+  if (username !== APP_ROLE_NAME || username === url.username.toLowerCase()) {
+    throw new Error(APP_USER_INVALID_MESSAGE)
+  }
+  if (DECODED_FORBIDDEN_CHARS.test(password) || NEON_PASSWORD_ENDPOINT.test(password)) {
+    throw new Error(APP_PASSWORD_INVALID_MESSAGE)
+  }
+  return { username, password }
+}
+
+// PGlite has no login, so the app role applies to Postgres targets only.
+const resolveCredentials = (target: DatabaseTarget, env: DatabaseEnv): RoleCredentials | undefined =>
+  target.kind === 'postgres' ? resolveAppRole({ env, url: parsePostgresUrl(target.url) }) : undefined
+
 // One log line for CLI scripts: enough to see which database is about to change, never credentials or query.
-export const describeTarget = (target: DatabaseTarget): string => {
+export const describeTarget = (target: DatabaseTarget, appRole?: Pick<RoleCredentials, 'username'>): string => {
   if (target.kind === 'pglite') return `pglite dir=${target.dataDir}`
   const url = parsePostgresUrl(target.url)
-  // The user tells which role DDL runs as (owner vs app role); the password and query never appear.
-  return `postgres host=${url.host} port=${url.port} db=${url.database} user=${url.username}`
+  // The user tells which role the script runs as (owner vs app role); the password and query never appear.
+  return `postgres host=${url.host} port=${url.port} db=${url.database} user=${appRole?.username ?? url.username}`
 }
 
 const describeOne = (error: Error): string => {
@@ -289,8 +387,11 @@ export const describeError = (error: unknown): string => {
   return describeOne(error)
 }
 
-/** `name`: the variable the URL came from, used in every error so the operator knows which one to fix. */
-type ConnectionOptions = { max?: number; name?: string }
+/**
+ * `name`: the variable the URL came from, used in every error so the operator knows which one to fix.
+ * `credentials`: log in as this role instead of the URL's user; host, port, database, TLS and options are unchanged.
+ */
+type ConnectionOptions = { max?: number; name?: string; credentials?: RoleCredentials }
 type PostgresOptions = postgres.Options<Record<string, never>>
 
 // Rethrow with fixed text and the errno / SQLSTATE code only; no `cause`, because describeError prints it.
@@ -318,7 +419,7 @@ const loadSsl = ({ policy, name, readFile }: LoadSslOptions): PostgresOptions['s
 // and host / port / database / user / ssl from PG* env variables cannot override what we checked.
 export const buildPostgresOptions = (
   url: string,
-  { max = 5, name = 'DATABASE_URL' }: ConnectionOptions = {},
+  { max = 5, name = 'DATABASE_URL', credentials }: ConnectionOptions = {},
   readFile: (path: string) => Buffer = readFileSync,
 ): PostgresOptions => {
   const parsed = parsePostgresUrl(url, name)
@@ -334,8 +435,8 @@ export const buildPostgresOptions = (
     host: [parsed.host],
     port: [parsed.port],
     database: parsed.database,
-    username: parsed.username,
-    password: parsed.password,
+    username: credentials?.username ?? parsed.username,
+    password: credentials?.password ?? parsed.password,
     ssl,
     ...(channelBinding === undefined ? {} : { channel_binding: channelBinding }),
     connection,
@@ -344,48 +445,132 @@ export const buildPostgresOptions = (
     max,
     idle_timeout: 20,
     connect_timeout: 10,
+    // A job still waiting for a slot after the longest dbQuery limit has no caller left; running it later would only
+    // repeat work nobody reads (or a write nobody knows about), so postgres-js drops it with QUEUE_TIMEOUT (NS-73).
+    queue_timeout: MAX_QUERY_WAIT_MS / 1000,
   }
 }
 
-export const createConnection = (target: DatabaseTarget, { max = 5, name = 'DATABASE_URL' }: ConnectionOptions = {}) => {
-  const logger = process.env.DB_LOG === '1'
+// Fixed text: names the variable only, never the URL or host the refusal is about.
+const DB_LOG_REFUSED_MESSAGE =
+  'Từ chối DB_LOG=1: log của Drizzle in mọi câu lệnh kèm tham số (dữ liệu khách hàng), nên chỉ bật được với PGlite, ' +
+  'Postgres trên localhost, hoặc bản preview / development chạy trên Vercel; tắt DB_LOG cho database này.'
+
+/** The one definition of "DB_LOG is on": the guard and the logger must never disagree (audit PR #35 L3). */
+export const isDbLogOn = (value: string | undefined): boolean => value === '1'
+
+type DbLogGuardInput = {
+  dbLog: string | undefined
+  target: DatabaseTarget
+  vercel: string | undefined
+  vercelEnv: string | undefined
+}
+
+// Allow-list, same spirit as assertSeedAllowed: a remote Postgres counts as production unless Vercel says it is
+// a preview / development deployment. A VPS, a missing or misspelt VERCEL_ENV must never turn on query logging
+// for customer data (ADR-0008). VERCEL_ENV counts only when VERCEL is set (audit PR #35 M1): only then has
+// resolveDatabaseTarget run the endpoint guard, so off Vercel a hand-set VERCEL_ENV=preview proves nothing.
+export const assertDbLogAllowed = ({ dbLog, target, vercel, vercelEnv }: DbLogGuardInput): void => {
+  if (!isDbLogOn(dbLog)) return
+  if (target.kind === 'pglite') return
+  if (isLocalHost(parsePostgresUrl(target.url).host)) return
+  if (Boolean(vercel) && vercelEnv !== undefined && NON_PRODUCTION_VERCEL_ENVS.includes(vercelEnv)) return
+  throw new Error(DB_LOG_REFUSED_MESSAGE)
+}
+
+export const createConnection = (
+  target: DatabaseTarget,
+  { max = 5, name = 'DATABASE_URL', credentials }: ConnectionOptions = {},
+) => {
+  // Before anything else: no client, and so no logger, may exist for a database that must not be logged.
+  const dbLog = process.env.DB_LOG
+  assertDbLogAllowed({ dbLog, target, vercel: process.env.VERCEL, vercelEnv: process.env.VERCEL_ENV })
+  const logger = isDbLogOn(dbLog)
   if (target.kind === 'postgres') {
     // Our own refusals already carry fixed text; only the driver's constructor errors need wrapping.
-    const options = buildPostgresOptions(target.url, { max, name })
+    const options = buildPostgresOptions(target.url, { max, name, credentials })
     let client: postgres.Sql
     try {
       client = postgres(options)
     } catch (error) {
       throw withFixedMessage(clientCreateMessage(name), error)
     }
-    return { kind: 'postgres', target, db: drizzlePostgres({ client, schema, logger }) } as const
+    // Only the role name is kept for log lines; the password stays inside the driver's options.
+    const appRole = credentials === undefined ? undefined : { username: credentials.username }
+    return { kind: 'postgres', target, appRole, db: drizzlePostgres({ client, schema, logger }) } as const
   }
   // PGlite does not create missing parent directories (fresh clone has no `.data/`).
   if (!target.dataDir.startsWith('memory://')) mkdirSync(dirname(target.dataDir), { recursive: true })
   const client = new PGlite(target.dataDir)
-  return { kind: 'pglite', target, db: drizzlePglite({ client, schema, logger }) } as const
+  return { kind: 'pglite', target, appRole: undefined, db: drizzlePglite({ client, schema, logger }) } as const
 }
 
 export type Connection = ReturnType<typeof createConnection>
 
 declare global {
   // Survives dev hot reload so PGlite (single process, single handle) is never opened twice.
-  var nextStoreDbConnection: Connection | undefined
+  var nextStoreDbRuntime: RuntimeConnection | undefined
 }
 
-export const connection: Connection = (globalThis.nextStoreDbConnection ??= createConnection(
-  resolveDatabaseTarget({
+/** The client runtime queries use, replaced when the network has swallowed its connections (ADR-0013). */
+export type RuntimeConnection = {
+  /** The connection a new query runs on. */
+  readonly current: Connection
+  /** Replaces `stale` with a new client, unless it was already replaced; PGlite is never replaced. */
+  recycle: (stale: Connection) => void
+}
+
+// postgres-js has no read limit on a connected socket: a connection waiting on an answer that the network swallowed
+// keeps its pool slot for ~15 minutes, and a full pool pipelines new queries onto it. A fresh client opens new
+// sockets at once. The old one stops taking queries and gives those in flight MAX_QUERY_WAIT_MS (nobody waits
+// longer), then destroys its sockets.
+const RETIRE_TIMEOUT_SECONDS = MAX_QUERY_WAIT_MS / 1000
+// Fixed text: no host, no query; enough for the on-call reader to see that the pool was rebuilt.
+const RECYCLED_WARNING = 'database client recycled after a query timeout'
+
+export const createRuntimeConnection = (open: () => Connection): RuntimeConnection => {
+  let current = open()
+  return {
+    get current() {
+      return current
+    },
+    recycle: (stale) => {
+      // Several queries time out together on one dead pool: only the first replaces it.
+      if (stale !== current || stale.kind !== 'postgres') return
+      current = open()
+      console.warn(RECYCLED_WARNING)
+      // Nobody awaits the old client; a failure while it ends must not become an unhandled rejection.
+      stale.db.$client.end({ timeout: RETIRE_TIMEOUT_SECONDS }).catch(() => {})
+    },
+  }
+}
+
+// Runtime, prerender and db:seed: the app role when configured. db:migrate opens its own connection from the URL
+// alone (openMigrationConnection), because DDL and the default privileges belong to the owner.
+const openRuntimeConnection = (): Connection => {
+  const env: DatabaseEnv = {
     DATABASE_URL: process.env.DATABASE_URL,
+    DATABASE_APP_USER: process.env.DATABASE_APP_USER,
+    DATABASE_APP_PASSWORD: process.env.DATABASE_APP_PASSWORD,
     VERCEL: process.env.VERCEL,
     VERCEL_ENV: process.env.VERCEL_ENV,
     PGLITE_DATA_DIR: process.env.PGLITE_DATA_DIR,
     NEON_PRODUCTION_ENDPOINT: process.env.NEON_PRODUCTION_ENDPOINT,
-  }),
-))
+  }
+  const target = resolveDatabaseTarget(env)
+  return createConnection(target, { credentials: resolveCredentials(target, env) })
+}
+
+/** dbQuery reads `runtime.current` for every query and recycles it on a timeout. */
+export const runtime: RuntimeConnection = (globalThis.nextStoreDbRuntime ??= createRuntimeConnection(openRuntimeConnection))
+
+// The first connection, for src/db scripts (db:seed) and tests: they never run through dbQuery, so it is never
+// recycled under them, and PGlite is never recycled at all. Runtime code reaches the database through dbQuery only.
+export const connection: Connection = runtime.current
 
 export const db: Db = connection.db
 
-export const closeConnection = async (target: Connection = connection) => {
+export const closeConnection = async (target: Connection = runtime.current) => {
   if (target.kind === 'postgres') return target.db.$client.end()
   return target.db.$client.close()
 }

@@ -5,6 +5,8 @@
 ## 1. Cấu trúc và phụ thuộc
 
 - `src/app/` chỉ chứa file routing của Next.js (`page.tsx`, `layout.tsx`, `loading.tsx`, `error.tsx`, `not-found.tsx`, `route.ts`, `sitemap.ts`, `robots.ts`, `opengraph-image.tsx`). Logic nằm ở `src/features/`.
+- `src/mdx-components.tsx` (bắt buộc với `@next/mdx`) chỉ trả `PROSE_COMPONENTS` của `@/components/ui/prose`, không import feature (sẽ thành vòng `content.ts` → `.mdx` → `mdx-components`). Bài blog là `content/blog/<slug>.mdx`, import qua alias `@content/*` và chỉ từ `src/features/blog/content.ts`.
+- `opengraph-image.tsx` chỉ chọn nội dung (eyebrow, tiêu đề, footer, hình minh hoạ) và gọi `renderOgImage` của `@/lib/og-image`; bố cục, màu và font nằm ở đó. Không đọc file hay `fetch` trong route ảnh, không `generateImageMetadata` (M3 K7 → K9).
 - Chiều phụ thuộc: `app → features → db | lib | components/ui`. Không có chiều ngược lại. *(dependency-cruiser)*
 - Ngoài một feature, chỉ import feature đó qua `@/features/<tên>` (file `index.ts`), không import sâu vào bên trong. *(dependency-cruiser)* Ngoại lệ duy nhất: `src/proxy.ts` import `@/features/<tên>/proxy-api` (lối vào hẹp, không kéo component / zod vào bundle của proxy) và không bao giờ import `index.ts` — [ADR-0009](./adr/0009-product-404-in-proxy.md).
 - Không có vòng phụ thuộc. *(dependency-cruiser)*
@@ -21,6 +23,8 @@
 | `types.ts` | Kiểu dùng chung trong feature |
 | `metadata.ts` | Dựng `Metadata` của trang từ dữ liệu feature (`generateMetadata` của `page.tsx` gọi vào) |
 | `slug-guard.ts` | Kiểm slug tồn tại, không cache, cho `src/proxy.ts` trước khi render |
+| `posts.ts` | Registry nội dung tĩnh (blog): mảng `as const` và hàm đọc đồng bộ; **không import gì** để `proxy-api.ts` và Vitest dùng được |
+| `content.ts` | Ánh xạ slug → nội dung MDX bằng import tĩnh, kiểu `Record<Slug, MDXContent>`; không test bằng Vitest (không biên dịch MDX), proxy không được chạm |
 | `components/` | Component của miền |
 | `*.test.ts` | Test, đặt cạnh file được test |
 
@@ -28,6 +32,7 @@
 
 - Mặc định là Server Component. Chỉ thêm `"use client"` khi cần state, effect, event handler hoặc API trình duyệt, và đặt nó ở component **nhỏ nhất** có thể.
 - File chạm vào DB, secret hoặc cookie phải bắt đầu bằng `import 'server-only'`.
+- Ngoài `src/db`, truy vấn chỉ chạy qua `dbQuery` của `@/db`; `name` là hằng `<miền>.<việc>`, không chứa dữ liệu người dùng. Ngoài `src/db` chỉ import `@/db` (`src/db/index.ts`); `@/db` không export `db` thô; chỉ test được import `@/db/client`, `migrate`, `seed`, `seed-data`. *(dependency-cruiser `db-public-api-only`)* Chỉ `src/db` import driver (`postgres`, `@electric-sql/pglite`, `drizzle-orm/postgres-js`, `drizzle-orm/pglite`), kể cả test. *(dependency-cruiser `db-drivers-stay-in-db`)* — [ADR-0011](./adr/0011-db-query-wrapper.md), [ADR-0013](./adr/0013-db-client-recycle.md).
 - Không fetch phía client (React Query, SWR, `useEffect` + `fetch`) cho dữ liệu lấy được ở server.
 - Ghi dữ liệu bằng Server Actions; Route Handler chỉ dùng cho request từ bên ngoài (webhook).
 - Mọi dữ liệu từ form, URL, cookie, webhook đều validate bằng Zod trước khi dùng.
@@ -73,6 +78,8 @@
 
 - Vitest cho logic thuần và truy vấn DB (PGlite `memory://`).
 - Playwright cho E2E trong `e2e/`, mỗi file một user story (`e2e/us-02-filter.spec.ts`), có kiểm tra a11y bằng axe.
+- Spec import `test` và `expect` từ `./test` (`e2e/test.ts`). Context riêng lấy từ fixture `newContext`, HTTP từ fixture `request` hay `page.request`. ESLint cấm trong spec: import `test` hay `import *` từ `@playwright/test`, `browser.newContext` / `request.newContext`, `fetch`. Trên Production, fixture huỷ request ghi của trình duyệt, ném lỗi ở `post` / `put` / `patch` / `delete` của `request` / `context.request` / `page.request`, và cho test đỏ ở teardown. Request ghi đi qua `route.continue()` của chính spec thì **chỉ bị ghi nhận, vẫn tới server**: không dùng `route.continue()` cho request ghi.
+- Test ghi dữ liệu (thêm vào giỏ, đặt hàng, sửa sản phẩm — từ M4) gắn `{ tag: '@ghi' }`; trên Production chúng bị bỏ qua (`grepInvert`). Domain production của bộ test chỉ ghi ở `e2e/production.ts` và `.github/workflows/production-e2e.yml`.
 - Test đặt cạnh file được test, tên `*.test.ts`.
 - Tên test mô tả hành vi: `it('rejects quantity above stock')`.
 - Mỗi tiêu chí chấp nhận trong `requirements.md` có ít nhất một test (E2E hoặc tích hợp); tên test ghi mã story.
@@ -105,3 +112,21 @@ Chi tiết và lý do: [ADR-0006](./adr/0006-branch-strategy.md).
 - Quyết định kiến trúc mới → ADR mới trong `docs/adr/` (đánh số tăng dần, không sửa ADR cũ; thay đổi thì viết ADR mới "thay thế ADR-xxxx").
 - Mỗi mốc có `docs/plans/M<n>.md`, viết và được duyệt trước khi code.
 - Comment trong code giải thích **vì sao**, không giải thích code làm gì.
+
+## 10. Migration
+
+- `db:migrate` chạy trong bước build của **mọi** deploy, trước khi code mới nhận request. Trong lúc đó và khi rollback, **code cũ vẫn chạy trên schema mới**. Hai build cùng lúc có thể cùng migrate.
+- **Expand** (làm cùng release với code dùng nó): thêm bảng, thêm cột nullable hoặc có `DEFAULT`, thêm index, thêm ràng buộc mà dữ liệu hiện có đã thoả.
+- **Contract** (chỉ ở release **sau** release cuối cùng còn code đọc / ghi đối tượng đó):
+  - `DROP TABLE`, `DROP COLUMN` (kể cả `ALTER TABLE t DROP c` không có từ `COLUMN`), `RENAME`, đổi kiểu cột (`ALTER COLUMN … TYPE`), `TRUNCATE`.
+  - `ALTER COLUMN … SET NOT NULL`; `ALTER TABLE … ADD [COLUMN] … NOT NULL` không có `DEFAULT`, `GENERATED` hoặc kiểu serial.
+  - `ALTER COLUMN … DROP DEFAULT`, `DROP INDEX`, `DROP CONSTRAINT`, `DROP TYPE / SCHEMA / VIEW / SEQUENCE`, `SET SCHEMA`, `REVOKE`.
+  - `DELETE FROM` và `UPDATE` không có `WHERE` của chính câu đó (kể cả trong CTE, khi bảng có alias hoặc `ONLY`). `WHERE` nằm trong subquery không tính.
+  - `EXECUTE` SQL động (trừ `EXECUTE FUNCTION` / `PROCEDURE` của trigger): không đọc được lúc kiểm nên coi là contract.
+  - File migration phải có dòng `-- contract: NS-<số>` ghi ticket của bước expand tương ứng. Một dòng cho cả file: Auditor kiểm từng câu lệnh contract trong file khớp ticket đó.
+- `src/db/migrations.test.ts` chỉ là lưới thứ hai: nó dò bằng regex trên SQL đã bỏ comment và chuỗi, nên không hiểu hết cú pháp và có thể lọt câu contract, không chỉ báo nhầm. Thân dollar-quote dừng ở đúng tag đóng của nó. Nếu thân đó đọc được như code thì các câu bên trong được kiểm, nên `$$TRUNCATE$$` bị báo nhầm. Nếu không đọc được thì coi là chuỗi. Chuỗi, tên, comment hay dollar-quote chưa đóng khi hết file thì được báo là contract (`unterminated …`). Auditor vẫn đọc từng câu của mọi `drizzle/*.sql`, test xanh không thay việc đó.
+- `CREATE INDEX` (không `CONCURRENTLY`) và `ADD CONSTRAINT` khoá bảng khi chạy; không nằm trong danh sách trên nhưng Auditor đánh giá riêng với `orders` và `cart_items` trước khi merge.
+- Backfill dữ liệu là migration riêng, chạy lại được, không nằm chung file với đổi schema.
+- Không sửa hay xoá file `drizzle/*.sql` đã merge; sai thì viết migration mới.
+- PR có `drizzle/*.sql`: Auditor bắt buộc; mô tả PR ghi từng câu lệnh thuộc expand hay contract và code nào đang chạy còn dùng đối tượng bị đổi. Migration chỉ lên production qua release PR.
+- Bảng mới tự có quyền cho role app nhờ `ALTER DEFAULT PRIVILEGES` (có hiệu lực từ khi M3 Task 4–5 xong); migration không tự `GRANT`.

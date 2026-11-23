@@ -49,13 +49,32 @@ module.exports = {
       name: 'proxy-narrow-entry',
       severity: 'error',
       comment:
-        'The proxy runs before every /products/<slug> request and is bundled on its own (audit PR #26 L1): it must ' +
-        'not pull in components, zod or tailwind-merge. Checked transitively.',
+        'The proxy runs before every /products/<slug> and /blog/<slug> request and is bundled on its own (audit PR ' +
+        '#26 L1): it must not pull in components, zod, tailwind-merge or MDX (blog content.ts). Checked transitively.',
       from: { path: '^src/proxy\\.ts$' },
       to: {
-        path: '^(src/(components|app)/|src/features/[^/]+/(index|components/|schema|queries|metadata)|node_modules/(zod|tailwind-merge|clsx|react|react-dom)/)',
+        path: '^(src/(components|app)/|src/features/[^/]+/(index|components/|schema|queries|metadata|content)|node_modules/(zod|tailwind-merge|clsx|react|react-dom|@mdx-js|@next/mdx)/)',
         reachable: true,
       },
+    },
+    {
+      name: 'db-public-api-only',
+      severity: 'error',
+      comment:
+        'Outside src/db, import the database only via @/db (src/db/index.ts), so queries run through dbQuery ' +
+        '(ADR-0011, ADR-0013): the raw client throws Drizzle errors that carry the SQL, the params and the host, and ' +
+        'has no time limit. Tests may use @/db/client, migrate, seed and seed-data to set up data.',
+      from: { path: '^src/', pathNot: '^src/db/|\\.test\\.ts$' },
+      to: { path: '^src/db/', pathNot: '^src/db/index\\.ts$' },
+    },
+    {
+      name: 'db-drivers-stay-in-db',
+      severity: 'error',
+      comment:
+        'Only src/db talks to a driver (audit PR #38 L2): a client built elsewhere would skip the URL, TLS and role ' +
+        'checks of client.ts and the timeout and recycling of dbQuery. Tests included.',
+      from: { path: '^src/', pathNot: '^src/db/' },
+      to: { path: '^node_modules/(postgres|@electric-sql/pglite|drizzle-orm/(postgres-js|pglite))/' },
     },
     {
       name: 'feature-public-api-only-cross',

@@ -1,6 +1,6 @@
 import postgres from 'postgres'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { resolveMigrationTarget, resolveMigrationUrl } from '@/db/migrate'
+import { readMigrationEnv, resolveMigrationTarget, resolveMigrationUrl } from '@/db/migrate'
 
 // Spy on the real factory so a refusal can be shown to happen before any client exists.
 vi.mock('postgres', async (importOriginal) => {
@@ -15,6 +15,22 @@ afterEach(() => vi.unstubAllEnvs())
 const POOLED = 'postgres://shop:s3cr3t-pass@ep-cool-x-123-pooler.eu-central-1.aws.neon.tech/neondb?sslmode=require'
 const DIRECT = 'postgres://shop:s3cr3t-pass@ep-cool-x-123.eu-central-1.aws.neon.tech/neondb?sslmode=require'
 const MISMATCH = /DATABASE_URL_UNPOOLED must point to the same database as DATABASE_URL/
+
+describe('readMigrationEnv', () => {
+  it('forwards exactly the four variables the migration target needs', () => {
+    expect(
+      readMigrationEnv({
+        DATABASE_URL_UNPOOLED: 'u',
+        VERCEL: '1',
+        VERCEL_ENV: 'preview',
+        NEON_PRODUCTION_ENDPOINT: 'ep-x',
+        DB_LOG: '1',
+        DATABASE_URL: 'p',
+        NODE_ENV: 'production',
+      }),
+    ).toStrictEqual({ DATABASE_URL_UNPOOLED: 'u', VERCEL: '1', VERCEL_ENV: 'preview', NEON_PRODUCTION_ENDPOINT: 'ep-x' })
+  })
+})
 
 describe('resolveMigrationUrl', () => {
   it('uses DATABASE_URL when DATABASE_URL_UNPOOLED is unset', () => {
@@ -151,18 +167,52 @@ describe('production endpoint guard on the migration path (NS-36)', () => {
     DATABASE_URL: neon(`${PROD}-pooler`),
     DATABASE_URL_UNPOOLED: neon(PROD),
   }
+  // ADR-0010 decision A: DDL needs the owner, and ALTER DEFAULT PRIVILEGES only covers objects that role creates.
+  it('keeps the owner role of the URL for db:migrate when the app role is configured (NS-60)', async () => {
+    vi.resetModules()
+    const env = {
+      VERCEL: '1',
+      VERCEL_ENV: 'preview',
+      NEON_PRODUCTION_ENDPOINT: PROD,
+      DATABASE_URL: neon(`${BRANCH}-pooler`),
+      DATABASE_URL_UNPOOLED: neon(BRANCH),
+      DATABASE_APP_USER: 'next_store_app',
+      DATABASE_APP_PASSWORD: 'npg_AppFake456',
+    }
+    for (const [key, value] of Object.entries(env)) vi.stubEnv(key, value)
+    const saved = globalThis.nextStoreDbRuntime
+    globalThis.nextStoreDbRuntime = undefined
+    try {
+      const { openMigrationConnection } = await import('@/db/migrate')
+      const { closeConnection, connection, describeTarget } = await import('@/db/client')
+      const migration = openMigrationConnection()
+      expect(connection.appRole).toEqual({ username: 'next_store_app' })
+      expect(migration.appRole).toBeUndefined()
+      expect(postgresFactory.mock.calls.at(-1)?.[0]).toMatchObject({
+        host: [`${BRANCH}.ap-southeast-1.aws.neon.tech`],
+        username: 'neondb_owner',
+        password: 'npg_FakePass123',
+      })
+      expect(describeTarget(migration.target, migration.appRole)).toMatch(/ user=neondb_owner$/)
+      await closeConnection(migration)
+      await closeConnection(connection)
+    } finally {
+      globalThis.nextStoreDbRuntime = saved
+    }
+  })
+
   it.each(['@/db/migrate', '@/db/seed'])(
-    'refuses to load %s for a preview against the production endpoint before constructing a client',
+    'refuses to migrate a preview against the production endpoint before constructing a client (%s)',
     async (entry) => {
       vi.resetModules()
       for (const [key, value] of Object.entries(PROD_ENV)) vi.stubEnv(key, value)
-      const saved = globalThis.nextStoreDbConnection
-      globalThis.nextStoreDbConnection = undefined
+      const saved = globalThis.nextStoreDbRuntime
+      globalThis.nextStoreDbRuntime = undefined
       try {
         await expect(import(entry)).rejects.toThrow(/trùng NEON_PRODUCTION_ENDPOINT/)
         expect(postgresFactory).not.toHaveBeenCalled()
       } finally {
-        globalThis.nextStoreDbConnection = saved
+        globalThis.nextStoreDbRuntime = saved
       }
     },
   )

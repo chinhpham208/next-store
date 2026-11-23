@@ -1,7 +1,7 @@
 import { count, eq, sql } from 'drizzle-orm'
 import { afterEach, beforeAll, expect, it, vi } from 'vitest'
-import { categories, db, products } from '@/db'
-import { connection } from '@/db/client'
+import { categories, products } from '@/db'
+import { connection, db } from '@/db/client'
 import { runMigrations } from '@/db/migrate'
 import { seed } from '@/db/seed'
 
