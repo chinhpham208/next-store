@@ -30,8 +30,9 @@
 | [0011](./adr/0011-db-query-wrapper.md) | Truy vấn runtime chỉ qua `dbQuery` của `@/db`: lỗi cố định, có giới hạn thời gian; `db` thô không export | Đã chấp nhận (2026-11-22); bổ sung 0008; thay thế một phần bởi 0013 |
 | [0012](./adr/0012-blog-static-registry.md) | Blog: MDX tĩnh, registry TypeScript, 404 bằng danh sách slug trong proxy | Đã chấp nhận (chủ dự án duyệt hướng ở Cổng 1, 2026-11-22); bổ sung bởi 0014 |
 | [0013](./adr/0013-db-client-recycle.md) | `dbQuery` hết giờ thì dựng lại client Postgres (mạng nuốt gói); chỉ `src/db` chạm driver | Đã chấp nhận (2026-11-23); thay thế một phần 0011 |
-| [0014](./adr/0014-cart-storage-and-cookie.md) | Giỏ hàng lưu trong DB (`carts`, `cart_items`), cookie `httpOnly` chỉ giữ UUID v4 do server sinh, hết hạn 30 ngày trượt; giá hiện tại; biểu tượng giỏ là lỗ động ở mọi trang `(shop)`; proxy bỏ qua request không phải `GET` / `HEAD` | Đã chấp nhận; bổ sung 0003, 0009, 0012 |
+| [0014](./adr/0014-cart-storage-and-cookie.md) | Giỏ hàng lưu trong DB (`carts`, `cart_items`), cookie `httpOnly` chỉ giữ UUID v4 do server sinh, hết hạn 30 ngày trượt; giá hiện tại; biểu tượng giỏ là lỗ động ở mọi trang `(shop)`; proxy bỏ qua request không phải `GET` / `HEAD` | Đã chấp nhận; bổ sung 0003, 0009, 0012; bổ sung bởi 0016 |
 | [0015](./adr/0015-edge-rate-limit.md) | Một quy tắc rate limit Vercel WAF (gói Hobby) cho Server Action: `POST`, theo IP, 60 request / 60 s, Log rồi 429; tìm kiếm `q` và slug lạ chưa có giới hạn | Đã chấp nhận; bổ sung 0008, 0009 |
+| [0016](./adr/0016-security-headers-and-action-body-limit.md) | Header bảo mật toàn site qua `headers()` (X-Frame-Options, CSP chỉ `frame-ancestors`, nosniff, Referrer-Policy); body Server Action tối đa 16 KB | Đã chấp nhận; bổ sung 0014 |
 
 ## Quản lý công việc
 
