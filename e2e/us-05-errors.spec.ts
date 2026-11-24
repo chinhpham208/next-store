@@ -150,10 +150,13 @@ test.describe('DB không đọc được', () => {
     expectCleanLog(BROKEN_DB_LOG, 'cart: cart count unavailable')
   })
 
-  test('US-05: DB chết thì slug lạ hiện trang lỗi, không treo', async ({ page }) => {
+  // NS-109: an unknown slug is answered from the cached list of catalogue slugs, which the prerendered shell of
+  // /products/[slug] carries from the build, so with the database down it still gets the not-found UI (no query, no
+  // hang) instead of the error page. The error page itself is covered by /products and ?q= below.
+  test('US-05: DB chết thì slug lạ vẫn hiện trang không tìm thấy, không treo', async ({ page }) => {
     await page.goto(`${BROKEN_DB_URL}/products/${freshSlug()}`, { timeout: 15_000 })
-    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Đã có lỗi xảy ra', { timeout: 15_000 })
-    await expectErrorPage(page)
+    await expect(page.getByRole('heading', { level: 1 })).toHaveText('Không tìm thấy trang', { timeout: 15_000 })
+    await expect(page.getByRole('heading', { level: 1, name: 'Đã có lỗi xảy ra' })).toHaveCount(0)
   })
 
   test('US-05: DB chết thì slug sai định dạng vẫn trả 404 ngay', async ({ request, isMobile }) => {
@@ -181,8 +184,9 @@ const expectCleanLog = (path: string, expected: string) => {
 test.describe('NS-55: DB chết hoặc treo', () => {
   test.skip(Boolean(process.env.BASE_URL), 'Chỉ chạy với server local có DATABASE_URL chết / treo')
 
+  // An unknown slug no longer reads the database on the request (NS-109, see above); the listing and the search do.
   test('NS-55: log server không có câu SQL hay host khi DB chết', async ({ page }) => {
-    for (const path of ['/products', '/products?q=git', `/products/${freshSlug()}`]) {
+    for (const path of ['/products', '/products?q=git']) {
       await page.goto(`${BROKEN_DB_URL}${path}`)
       await expect(page.getByRole('heading', { level: 1, name: 'Đã có lỗi xảy ra' }), path).toBeVisible()
     }
@@ -192,7 +196,7 @@ test.describe('NS-55: DB chết hoặc treo', () => {
   // The hung server runs with DB_QUERY_TIMEOUT_MS=1000 (playwright.config.ts); without the limit a request waits
   // for connect_timeout (10 s).
   test('NS-55: DB treo thì trang lỗi hiện trong 4 giây', async ({ page }) => {
-    for (const path of ['/products', '/products?q=git', `/products/${freshSlug()}`]) {
+    for (const path of ['/products', '/products?q=git']) {
       const started = Date.now()
       await page.goto(`${HUNG_DB_URL}${path}`, { timeout: 15_000 })
       await expect(page.getByRole('heading', { level: 1, name: 'Đã có lỗi xảy ra' }), path).toBeVisible({
@@ -201,6 +205,13 @@ test.describe('NS-55: DB chết hoặc treo', () => {
       expect(Date.now() - started, path).toBeLessThan(5000)
     }
     expectCleanLog(HUNG_DB_LOG, 'database query timed out: products.')
+  })
+
+  test('NS-55: DB treo thì slug lạ hiện trang không tìm thấy trong 4 giây (NS-109)', async ({ page }) => {
+    const started = Date.now()
+    await page.goto(`${HUNG_DB_URL}/products/${freshSlug()}`, { timeout: 15_000 })
+    await expect(page.getByRole('heading', { level: 1, name: 'Không tìm thấy trang' })).toBeVisible({ timeout: 4000 })
+    expect(Date.now() - started).toBeLessThan(5000)
   })
 
   test('NS-55: DB treo thì trang sản phẩm đã prerender vẫn mở được', async ({ page }) => {

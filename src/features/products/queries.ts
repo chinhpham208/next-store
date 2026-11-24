@@ -93,8 +93,10 @@ export const getCachedProductBySlug = async (slug: string): Promise<ProductDetai
         .where(eq(products.slug, slug))
         .limit(1),
   })
-  // Not stored: otherwise every made-up slug sent straight to this function would leave an entry behind. The proxy
-  // answers an unknown slug with a 404 before the page renders (ADR-0009), so pages never reach this branch.
+  // Not stored: otherwise every made-up slug sent straight to this function would leave an entry behind. Render
+  // paths never reach this branch for a made-up slug: getProductBySlug answers it from the slug list (NS-109). Only
+  // a direct Server Function call does (a request, never a prerender), or a product deleted while the list still
+  // names it, which lasts until 'products' is invalidated.
   if (row === undefined) {
     cacheLife(SKIP_CACHE_ENTRY)
     return null
@@ -102,9 +104,29 @@ export const getCachedProductBySlug = async (slug: string): Promise<ProductDetai
   return row
 }
 
+// The catalogue's slugs under one fixed key: no parameters, so a Server Function call cannot add entries (NS-105).
+// Same tag as the listings, so the admin edits of M5 that create, delete or rename a product refresh it; until then
+// a new product reads as unknown for up to the cache lifetime.
+const getCatalogSlugs = async (): Promise<string[]> => {
+  'use cache'
+  cacheTag('products')
+  cacheLife('hours')
+
+  const rows = await dbQuery({
+    name: 'products.catalog-slugs',
+    run: (db) => db.select({ slug: products.slug }).from(products).orderBy(asc(products.id)),
+  })
+  return rows.map((row) => row.slug)
+}
+
 export const getProductBySlug = async (slug: string): Promise<ProductDetail | null> => {
   // Guard outside the cached function: a slug that fails here never reaches the cache or the database.
   if (!isProductSlug(slug)) return null
+  // NS-109: an unknown slug never opens its own cached read. Its expire-0 lifetime (getCachedProductBySlug) inside
+  // the ISR prerender of the Open Graph image route marks the route dynamic, and a route handler has no dynamic hole
+  // to resume, so a fail-open request (ADR-0009) answered 500 before notFound() ran. The list is one entry, whatever
+  // the slug.
+  if (!(await getCatalogSlugs()).includes(slug)) return null
   return getCachedProductBySlug(slug)
 }
 

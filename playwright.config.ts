@@ -5,12 +5,13 @@ import { grepInvertFor } from './e2e/production'
 const BASE_URL = process.env.BASE_URL
 // Only for machines that cannot download Playwright's Chromium (e.g. PW_CHANNEL=chrome); CI uses the bundled one.
 const CHANNEL = process.env.PW_CHANNEL || undefined
-// E2E_PORT moves the four local servers (E2E_PORT … E2E_PORT + 3) off 3100, e.g. when scripts/verify.sh holds it;
+// E2E_PORT moves the five local servers (E2E_PORT … E2E_PORT + 4) off 3100, e.g. when scripts/verify.sh holds it;
 // CI uses the default.
 const LOCAL_PORT = Number(process.env.E2E_PORT) || 3100
 const BROKEN_DB_PORT = LOCAL_PORT + 1
 const HUNG_DB_PORT = LOCAL_PORT + 2
 const SILENT_TCP_PORT = LOCAL_PORT + 3
+const FAR_DB_PORT = LOCAL_PORT + 4
 // Nothing listens on port 9, so every query fails at once (no 10 s connect wait); a local host needs no TLS.
 const BROKEN_DATABASE_URL = 'postgres://ns:ns@127.0.0.1:9/ns'
 // The silent listener accepts the connection and never answers, like a database that hangs (NS-55).
@@ -26,6 +27,13 @@ export const HUNG_DB_URL = `http://localhost:${HUNG_DB_PORT}`
 // Server output of the two, read by the NS-55 specs: no SQL, params or host:port may reach it.
 export const BROKEN_DB_LOG = '.verify/e2e-broken-db.log'
 export const HUNG_DB_LOG = '.verify/e2e-hung-db.log'
+// Fifth server of the same build whose every query first waits like a far database (e2e/far-db.mjs, NS-109): the
+// proxy's slug lookup fails open on every unknown product slug, as on Production from a far edge (NS-79).
+export const FAR_DB_URL = `http://localhost:${FAR_DB_PORT}`
+export const FAR_DB_LOG = '.verify/e2e-far-db.log'
+// PGlite has no cross-process lock (next.config.ts): two servers on one data directory corrupt it, so this server
+// reads a copy of the seeded database made when it starts.
+const FAR_DB_PGLITE_DIR = '.verify/e2e-far-db-pglite'
 
 export default defineConfig({
   testDir: 'e2e',
@@ -77,6 +85,13 @@ export default defineConfig({
           command: `mkdir -p .verify && npm run start -- -p ${HUNG_DB_PORT} > ${HUNG_DB_LOG} 2>&1`,
           url: HUNG_DB_URL,
           env: { DATABASE_URL: HUNG_DATABASE_URL, DB_QUERY_TIMEOUT_MS: HUNG_DB_QUERY_TIMEOUT_MS },
+          reuseExistingServer: false,
+          timeout: 60_000,
+        },
+        {
+          command: `mkdir -p .verify && rm -rf ${FAR_DB_PGLITE_DIR} && cp -R .data/pglite ${FAR_DB_PGLITE_DIR} && npm run start -- -p ${FAR_DB_PORT} > ${FAR_DB_LOG} 2>&1`,
+          url: FAR_DB_URL,
+          env: { NODE_OPTIONS: '--import ./e2e/far-db.mjs', PGLITE_DATA_DIR: FAR_DB_PGLITE_DIR },
           reuseExistingServer: false,
           timeout: 60_000,
         },

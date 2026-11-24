@@ -33,7 +33,7 @@ test('NS-105: only the reviewed Server Functions are exposed', () => {
     'src/features/cart/actions.ts addToCartAction',
     'src/features/cart/actions.ts removeFromCartAction',
     'src/features/cart/actions.ts setCartQuantityAction',
-    ...Array<string>(6).fill("src/features/products/queries.ts 'use cache'"),
+    ...Array<string>(7).fill("src/features/products/queries.ts 'use cache'"),
   ])
 })
 

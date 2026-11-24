@@ -371,7 +371,14 @@ describe('cache key rules (structural: Vitest does not run the directive)', () =
       .filter((chunk) => /^\s*'use cache'/m.test(chunk))
       .map((chunk) => [/(?:export )?const (\w+) =/.exec(chunk)?.[1] ?? '?', chunk]),
   )
-  const PRODUCTS_TAGGED = ['getFeaturedProducts', 'getCategoryRows', 'countCatalog', 'getCatalogPage', 'getProductSitemapEntries']
+  const PRODUCTS_TAGGED = [
+    'getFeaturedProducts',
+    'getCategoryRows',
+    'countCatalog',
+    'getCatalogPage',
+    'getProductSitemapEntries',
+    'getCatalogSlugs',
+  ]
 
   it('has exactly the expected cached functions', () => {
     expect([...cached.keys()].sort()).toEqual([...PRODUCTS_TAGGED, 'getCachedProductBySlug'].sort())
@@ -403,7 +410,7 @@ describe('cache key rules (structural: Vitest does not run the directive)', () =
       expect(check).toBeLessThan(body.indexOf('cacheTag('))
     },
   )
-  it.each(['getCategoryRows', 'getProductSitemapEntries'])('%s takes no arguments (Next drops extra ones)', (name) => {
+  it.each(['getCategoryRows', 'getProductSitemapEntries', 'getCatalogSlugs'])('%s takes no arguments (Next drops extra ones)', (name) => {
     expect(cached.get(name) ?? '').toMatch(/= async \(\)/)
   })
   it('never builds SQL from raw strings', () => {
