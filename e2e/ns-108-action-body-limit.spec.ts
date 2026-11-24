@@ -6,15 +6,18 @@ import { expect, test } from './test'
 
 // NS-108 (audit M4 NS-96): next.config.ts caps a Server Action body at 16 KB (`experimental.serverActions.bodySizeLimit`,
 // default 1 MB). The cart's real payloads must still go through, and a larger body must be refused before the action
-// runs. Next.js 16.4.6 answers a fetch action over the limit with 500, not 413 (server/app-render/action-handler.js
-// keeps a TODO for it), so 500 is what is asserted: the point is that the action never decodes the body. The
-// action id is the one the page itself sends, so this runs on a deployment too; the adds write a cart (WRITE_TAG).
+// runs. Next.js 16.4.6 throws a 413 while reading the body; measured, `next start` answers the fetch action with 500
+// (server/app-render/action-handler.js turns the error into 500, with a TODO for 413) and a Vercel preview with 413
+// (PR #91). Either is a refusal: the point is that the action never decodes the body. The action id is the one the
+// page itself sends, so this runs on a deployment too; the adds write a cart (WRITE_TAG).
 test.skip(({ isMobile }) => isMobile, VIEWPORT_INDEPENDENT)
 
 const PRODUCT = productWithStock('ao-git-push-force', 1)
 const LIMIT_BYTES = 16 * 1024
 // The real add's body is a few dozen bytes; this bound only catches a payload that grew by an order of magnitude.
 const REAL_PAYLOAD_MAX_BYTES = 1024
+// 500 under `next start`, 413 on Vercel (measured, see above).
+const REFUSED_STATUSES = [413, 500]
 
 // Same shape as the real add ({ slug, quantity } encoded by React), with the slug padded to `bytes` in total. The slug
 // is far past the schema's limit, so a body under the cap reaches the action and gets `invalid` back: no write.
@@ -53,7 +56,7 @@ test.describe('NS-108: giới hạn body của Server Action', { tag: WRITE_TAG 
     expect(await under.text(), 'body 15 KB: action trả invalid').toContain('"invalid"')
 
     const over = await replay(LIMIT_BYTES + 1024)
-    expect(over.status(), 'body 17 KB: Next.js từ chối trước khi decode').toBe(500)
+    expect(REFUSED_STATUSES, 'body 17 KB: Next.js từ chối trước khi decode').toContain(over.status())
     expect(await over.text()).not.toContain('"invalid"')
   })
 })

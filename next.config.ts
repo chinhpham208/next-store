@@ -13,8 +13,8 @@ const SECURITY_HEADERS = [
 ];
 
 // The cart's real action payloads ({ slug, quantity }) are a few dozen bytes; the default 1 MB let any public POST
-// make the server read and parse a megabyte (audit NS-96, ADR-0016). Next.js 16.4.6 answers a fetch action over the
-// limit with 500 before decoding it (server/app-render/action-handler.js), so the action never runs.
+// make the server read and parse a megabyte (audit NS-96, ADR-0016). Next.js 16.4.6 refuses a fetch action over the
+// limit before decoding it (413 on Vercel, 500 under `next start`), so the action never runs.
 const SERVER_ACTION_BODY_LIMIT = "16kb";
 
 const nextConfig: NextConfig = {
