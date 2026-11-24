@@ -8,7 +8,7 @@
 # Chạy nền, ghi log vào .verify/<thời gian>.log. Mỗi lần gọi đợi tối đa VERIFY_WAIT giây (mặc định 160).
 # Mã thoát: 0 = qua, 1 = lỗi, 2 = cách gọi / cổng sai, 3 = vẫn đang chạy (gọi lại `verify.sh wait`).
 #
-# Cổng: E2E_PORT (dùng E2E_PORT … E2E_PORT+3) và SMOKE_PORT; chỉ đặt một biến thì biến kia lấy cùng giá trị,
+# Cổng: E2E_PORT (dùng E2E_PORT … E2E_PORT+4) và SMOKE_PORT; chỉ đặt một biến thì biến kia lấy cùng giá trị,
 # không đặt gì thì 3100. Cổng đang bận bởi tiến trình khác → dừng với lỗi, không tắt hộ.
 set -uo pipefail
 cd "$(dirname "$0")/.."
@@ -18,19 +18,20 @@ mkdir -p "$STATE_DIR"
 WAIT=${VERIFY_WAIT:-160}
 # Ports (process.md §4: a second worktree runs on other ports). One base: setting only E2E_PORT or only
 # SMOKE_PORT moves both, so a run never lands on another worktree's 3100 by default (audit PR #38 M2). Smoke and
-# e2e run one after the other, so they may share the base. E2E uses four ports (playwright.config.ts): the app,
-# a server with a dead database (M2 Task 15), a server whose database hangs, and the silent listener (NS-55).
+# e2e run one after the other, so they may share the base. E2E uses five ports (playwright.config.ts): the app,
+# a server with a dead database (M2 Task 15), a server whose database hangs, the silent listener (NS-55), and a
+# server whose database answers slowly, so the proxy fails open (NS-109).
 port_ok() { [[ $1 =~ ^[0-9]{1,5}$ ]] && [ "$((10#$1))" -ge 1 ] && [ "$((10#$1))" -le "$2" ]; }
 
 resolve_ports() {
   local e2e=${E2E_PORT:-} smoke=${SMOKE_PORT:-}
   [ -n "$e2e" ] || e2e=${smoke:-3100}
   [ -n "$smoke" ] || smoke=$e2e
-  port_ok "$e2e" 65532 || { echo "verify: E2E_PORT không hợp lệ: cần số nguyên 1–65532 (dùng E2E_PORT … E2E_PORT+3)." >&2; return 1; }
+  port_ok "$e2e" 65531 || { echo "verify: E2E_PORT không hợp lệ: cần số nguyên 1–65531 (dùng E2E_PORT … E2E_PORT+4)." >&2; return 1; }
   port_ok "$smoke" 65535 || { echo "verify: SMOKE_PORT không hợp lệ: cần số nguyên 1–65535." >&2; return 1; }
   # Base 10 and exported normalised: Playwright reads `08` as 8, bash arithmetic would read it as octal.
   export E2E_PORT=$((10#$e2e)) SMOKE_PORT=$((10#$smoke))
-  E2E_PORTS=("$E2E_PORT" "$((E2E_PORT + 1))" "$((E2E_PORT + 2))" "$((E2E_PORT + 3))")
+  E2E_PORTS=("$E2E_PORT" "$((E2E_PORT + 1))" "$((E2E_PORT + 2))" "$((E2E_PORT + 3))" "$((E2E_PORT + 4))")
 }
 
 has_script() { node -e "process.exit(require('./package.json').scripts?.['$1'] ? 0 : 1)" 2>/dev/null; }

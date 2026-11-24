@@ -5,6 +5,7 @@ import { db } from '@/db/client'
 import { runMigrations } from '@/db/migrate'
 import { seed } from '@/db/seed'
 import { getAllProductSlugs, getProductBySlug, isKnownProductSlug } from '@/features/products'
+import { SKIP_CACHE_ENTRY } from '@/lib/cache-args'
 import { getCachedProductBySlug } from './queries'
 import { resetKnownProductSlugs } from './slug-guard'
 
@@ -44,6 +45,17 @@ describe('getProductBySlug', () => {
   it('US-05: returns null for an unknown slug', async () => {
     expect(await getProductBySlug('khong-ton-tai')).toBeNull()
   })
+  // NS-109: an expire-0 read inside the ISR prerender of the Open Graph image route makes the route dynamic, and a
+  // route handler then answers 500 instead of reaching notFound(). An unknown slug is answered from the cached list
+  // of catalogue slugs (one fixed key), so it never opens a per-slug cached read at all.
+  it('NS-109: answers an unknown slug without a per-slug cached read or a lifetime that skips the entry', async () => {
+    const select = vi.spyOn(db, 'select')
+    expect(await getProductBySlug('khong-ton-tai-ns109')).toBeNull()
+    expect(cacheTag).not.toHaveBeenCalledWith('product:khong-ton-tai-ns109')
+    expect(cacheLife).not.toHaveBeenCalledWith(SKIP_CACHE_ENTRY)
+    // Only the slug list was read, never the detail columns.
+    expect(select.mock.calls.some(([fields]) => typeof fields === 'object' && 'description' in fields)).toBe(false)
+  })
   it('returns null for a malformed slug without creating a cache entry', async () => {
     expect(await getProductBySlug("x' or '1'='1")).toBeNull()
     expect(await getProductBySlug('a'.repeat(81))).toBeNull()
@@ -60,7 +72,11 @@ describe('getProductBySlug', () => {
     },
   )
   it('NS-55: a failed detail query carries neither the SQL nor the slug', async () => {
-    vi.spyOn(db, 'select').mockImplementationOnce(() => {
+    // The first select is the slug list (NS-109); the detail query is the second.
+    const original = db.select.bind(db)
+    const select = vi.spyOn(db, 'select')
+    select.mockImplementationOnce(original)
+    select.mockImplementationOnce(() => {
       throw Object.assign(new Error('Failed query: select "slug" from "products" params: sticker-git'), {
         cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9'), { code: 'ECONNREFUSED' }),
       })

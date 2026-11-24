@@ -4,6 +4,11 @@
 // - a value of the wrong shape → rejectCacheArguments: no query, and a fill that throws stores no entry;
 // - a well-formed key that names nothing (unknown slug, category or page) → cacheLife(SKIP_CACHE_ENTRY) and an
 //   empty result, so the key never becomes an entry.
+// That second branch is for direct calls only. On a render path the caller answers an unknown key before it calls
+// the cached function, from cached data under a fixed key (getCatalogSlugs, getCategoryRows): inside a prerender,
+// ISR at runtime included, an expire-0 read marks the route dynamic, and a route handler (an Open Graph image) then
+// answers 500 instead of reaching notFound() (NS-109). notFound() inside the cached function is no substitute: Next
+// encodes it in the entry's stream, so the entry is still stored.
 
 export const rejectCacheArguments = (name: string): never => {
   throw new Error(`invalid arguments for cached ${name}`)
