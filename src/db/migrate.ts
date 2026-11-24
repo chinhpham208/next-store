@@ -1,5 +1,7 @@
 import 'server-only'
 import { pathToFileURL } from 'node:url'
+import { sql, type SQL } from 'drizzle-orm'
+import type { PgTransactionConfig } from 'drizzle-orm/pg-core'
 import { migrate as migratePglite } from 'drizzle-orm/pglite/migrator'
 import { migrate as migratePostgres } from 'drizzle-orm/postgres-js/migrator'
 import {
@@ -16,12 +18,58 @@ import {
 
 const MIGRATIONS_FOLDER = './drizzle'
 
-export const runMigrations = async (target: Connection = connection): Promise<void> => {
+// db:migrate runs in the build of every deploy, as the owner role, while the previous deployment still serves
+// (conventions §10). An ALTER or CREATE INDEX queued behind a long app transaction would make every later query on
+// that table wait behind it, so the migration gives up after MIGRATION_LOCK_TIMEOUT instead: the build fails and the
+// old deployment keeps serving (NS-101, audit PR #69 L1). MIGRATION_STATEMENT_TIMEOUT bounds a statement that does
+// get its locks; this schema's largest table is capped at MAX_CARTS rows (ADR-0014), far inside a minute.
+// Written as Postgres prints them, so current_setting() reads back the same text.
+export const MIGRATION_LOCK_TIMEOUT = '5s'
+export const MIGRATION_STATEMENT_TIMEOUT = '1min'
+
+// SET LOCAL, inside the migration's own transaction: a session-level SET through the Neon pooler (transaction mode)
+// would stay on a server connection that the app's queries reuse. Startup parameters are not used for the same
+// reason: the pooler may refuse them. Two statements: a prepared query holds only one.
+const SET_MIGRATION_TIMEOUTS: readonly SQL[] = [
+  sql.raw(`SET LOCAL lock_timeout = '${MIGRATION_LOCK_TIMEOUT}'`),
+  sql.raw(`SET LOCAL statement_timeout = '${MIGRATION_STATEMENT_TIMEOUT}'`),
+]
+
+type Executor = { execute: (query: SQL) => Promise<unknown> }
+// Method syntax on purpose: drizzle's sessions take a transaction callback of their own driver's type.
+type TransactionRunner = {
+  transaction<T>(run: (tx: Executor) => Promise<T>, config?: PgTransactionConfig): Promise<T>
+}
+
+// Drizzle's migrator runs every pending migration in one `db.session.transaction(…)` (pg-core dialect.migrate). This
+// session starts that transaction with the timeouts; every other property is the real session's.
+const withMigrationTimeouts = <S extends TransactionRunner>(session: S): S =>
+  new Proxy(session, {
+    get: (real, property, receiver) => {
+      if (property !== 'transaction') return Reflect.get(real, property, receiver)
+      const transaction: TransactionRunner['transaction'] = (run, config) =>
+        real.transaction(async (tx) => {
+          for (const statement of SET_MIGRATION_TIMEOUTS) await tx.execute(statement)
+          return run(tx)
+        }, config)
+      return transaction
+    },
+  })
+
+// The same database, whose `session` (what the migrator reads) is the one above.
+const withTimeoutSession = <D extends { _: { session: TransactionRunner } }>(db: D): D =>
+  new Proxy(db, {
+    get: (real, property, receiver) =>
+      property === 'session' ? withMigrationTimeouts(real._.session) : Reflect.get(real, property, receiver),
+  })
+
+export const runMigrations = async (target: Connection = connection, migrationsFolder = MIGRATIONS_FOLDER) => {
+  const config = { migrationsFolder }
   if (target.kind === 'postgres') {
-    await migratePostgres(target.db, { migrationsFolder: MIGRATIONS_FOLDER })
+    await migratePostgres(withTimeoutSession(target.db), config)
     return
   }
-  await migratePglite(target.db, { migrationsFolder: MIGRATIONS_FOLDER })
+  await migratePglite(withTimeoutSession(target.db), config)
 }
 
 // Fixed text on purpose: either URL carries a password, and the host alone already identifies the customer DB.
