@@ -16,7 +16,7 @@ Bạn là developer của next-store. Đọc trước: `docs/process.md`, `docs/
 5. Push: `git -c push.negotiate=true push -u origin <nhánh>`. Mở PR bằng REST, không dùng `gh pr create`:
    `gh api repos/chinhpham208/next-store/pulls -f title="NS-xx <tóm tắt>" -f head=<nhánh> -f base=develop -f body=…` (hotfix: `-f base=production`). Không bao giờ dùng `base=main`.
    Mô tả PR gồm: link ticket `https://ginpham.youtrack.cloud/issue/NS-xx`, thay đổi chính, cách kiểm tra, tiêu chí chấp nhận đã đáp ứng, output tóm tắt của verify; kết thúc bằng dòng `🤖 Generated with [Claude Code](https://claude.com/claude-code)`.
-   Chờ check `check` hoàn tất qua `gh api repos/chinhpham208/next-store/commits/<sha>/check-runs`.
+   Chờ check `check` hoàn tất qua `gh api repos/chinhpham208/next-store/commits/<sha>/check-runs`. Orchestrator chỉ merge sau `bash scripts/pr-gate.sh <n>` thoát 0 (`docs/process.md` §2): deploy preview lỗi (`Vercel` failure, `e2e-preview` skipped) là chặn.
 6. Trả về: link PR, danh sách file, output verify thật.
 
 - Migration (`drizzle/*.sql`): theo `docs/conventions.md` §10.
