@@ -326,14 +326,17 @@ POST_OG_PATH=$OG_PATH
 # Every case runs before smoke fails: which variants pass tells whether the proxy ran at all (malformed slugs never
 # reach the database) or only its database lookup failed open.
 # A well-formed product slug is the one case that needs the database lookup; with SMOKE_PRODUCT_FAIL_OPEN=warn its
-# fail-open (200) is a CI warning with the time taken, not a failure (NS-79). Every other case never reaches the
+# fail-open (200, or 405 for a non-GET method) is a CI warning with the time taken, not a failure (NS-79). Every other case never reaches the
 # database, so a 200 there means the proxy did not run: always a failure.
 NOT_FOUND_FAILED=
 PRODUCT_FAIL_OPEN_COUNT=0
 expect_404() { check_404 '' "$@"; } # expect_404 <path> <label> [header] [method]
 expect_product_404() { check_404 product "$@"; } # expect_product_404 <path> <label> [header] [method]: slug đi qua lookup DB
-product_fail_open_warned() { # product_fail_open_warned <status> <message>: 0 = cảnh báo thay cho lỗi
-  [ "$1" = 200 ] && [ "${SMOKE_PRODUCT_FAIL_OPEN:-}" = warn ] || return 1
+# A fail-open GET renders the page (200). A fail-open POST without next-action or PUT reaches the prerendered page,
+# and Next answers 405 without rendering, caching or querying (NS-110), so 405 counts as fail-open for those methods.
+product_fail_open_warned() { # product_fail_open_warned <status> <message> [method]: 0 = cảnh báo thay cho lỗi
+  [ "${SMOKE_PRODUCT_FAIL_OPEN:-}" = warn ] || return 1
+  [ "$1" = 200 ] || { [ "$1" = 405 ] && [ "${3:-GET}" != GET ]; } || return 1
   # A workflow command on purpose: visible on the run summary, not only in the log.
   echo "::warning::smoke: $2 sau $(last_time_ms): lookup DB của proxy fail-open (SMOKE_PRODUCT_FAIL_OPEN=warn, NS-79)"
   PRODUCT_FAIL_OPEN_COUNT=$((PRODUCT_FAIL_OPEN_COUNT + 1))
@@ -341,7 +344,7 @@ product_fail_open_warned() { # product_fail_open_warned <status> <message>: 0 = 
 check_404() { # check_404 <kind> <path> <label> [header] [method]
   local kind=$1 path=$2 label=$3 header=${4:-} method=${5:-GET} status
   status=$(fetch "$BASE$path" "$TMP/not-found" "$header" /dev/null "$method") || fail "không kết nối được $BASE$path"
-  if [ "$kind" = product ] && product_fail_open_warned "$status" "$method $path ($label) trả 200"; then return 0; fi
+  if [ "$kind" = product ] && product_fail_open_warned "$status" "$method $path ($label) trả $status" "$method"; then return 0; fi
   if [ "$status" != 404 ]; then
     echo "smoke: LỖI: $method $path ($label) trả $status ngay lần đầu, cần 404" >&2
     NOT_FOUND_FAILED=1

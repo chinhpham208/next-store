@@ -28,6 +28,7 @@ FAIL_OPEN_PORT=3184
 MALFORMED_PORT=3183
 NON_ACTION_PORT=3182
 NON_ACTION_5XX_PORT=3181
+FAIL_OPEN_405_PORT=3180
 
 TMP=$(mktemp -d)
 PIDS=()
@@ -70,7 +71,7 @@ start_server() {
     require("node:http").createServer((req, res) => {
       fs.appendFileSync(headers, JSON.stringify(req.headers) + "\n")
       if (robotsTag) res.setHeader("x-robots-tag", robotsTag)
-      if (postStatus && req.method !== "GET") { res.writeHead(Number(postStatus), { "content-type": "text/html; charset=utf-8" }); res.end(body); return }
+      if (postStatus && req.method !== "GET" && (!soft || new RegExp(soft).test(req.url))) { res.writeHead(Number(postStatus), { "content-type": "text/html; charset=utf-8" }); res.end(body); return }
       const locs = ["/", "/products/ao-404-not-found", "/blog/chao-mung-den-next-store"]
       if (req.url === "/sitemap.xml") { res.writeHead(200, { "content-type": "application/xml" }); res.end(`<urlset>${locs.map((p) => `<url>\n<loc>${p === "/" ? "https://shop.example.test" : origin}${p}</loc>\n</url>`).join("\n")}</urlset>`); return }
       if (req.url === "/robots.txt") { res.writeHead(200, { "content-type": "text/plain" }); res.end(`User-Agent: *\n${robotsRule}\n\nSitemap: https://shop.example.test/sitemap.xml\n`); return }
@@ -322,6 +323,20 @@ run BASE_URL="http://127.0.0.1:$FAIL_OPEN_PORT" -- bash scripts/smoke.sh
 grep -qF 'hơn 2 slug fail-open' "$TMP/out" || fail product-fail-open-warn "không cờ: thiếu lỗi warm-up"
 ! grep -q 'SMOKE_PRODUCT_FAIL_OPEN=warn' "$TMP/out" || fail product-fail-open-warn "không cờ mà vẫn cảnh báo"
 echo "ok product-fail-open-warn"
+
+# product-fail-open-405 (NS-110): on Production a fail-open POST without next-action or PUT reaches the prerendered
+# product page, and Next answers 405 (no render, no cache entry, no query). With SMOKE_PRODUCT_FAIL_OPEN=warn that is a
+# warning like the GET 200; without the flag it fails. Only unknown product slugs (the soft regex) answer 405 here.
+start_server "$FAIL_OPEN_405_PORT" "$TMP/fail-open-405-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/(smoke-warmup-|khong-ton-tai)' "" "" https://shop.example.test "Allow: /" 200 405
+run BASE_URL="http://127.0.0.1:$FAIL_OPEN_405_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail product-fail-open-405 "có cờ: thoát $CODE, cần 0"
+for label in 'POST không có next-action' 'PUT'; do
+  grep -qE "^::warning::smoke: (POST|PUT) /products/[^ ]+ \\($label\\) trả 405 sau [0-9]+ ms" "$TMP/out" ||
+    fail product-fail-open-405 "thiếu ::warning:: 405 cho \"$label\""
+done
+run BASE_URL="http://127.0.0.1:$FAIL_OPEN_405_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail product-fail-open-405 "không cờ: thoát $CODE, cần 1"
+echo "ok product-fail-open-405"
 
 # non-action-200 (NS-103): a proxy that lets every non-GET through (the NS-92 behaviour) answers 200 to a POST without
 # next-action, a PUT or a DELETE to an unknown slug; smoke fails, even with SMOKE_PRODUCT_FAIL_OPEN=warn, because the
