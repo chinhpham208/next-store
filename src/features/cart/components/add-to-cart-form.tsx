@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useState, useTransition, type FormEvent } from 'react'
+import { useEffect, useState, useTransition, type FormEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { QuantityStepper } from '@/components/ui/quantity-stepper'
 import { addToCartAction } from '@/features/cart/actions'
@@ -27,6 +27,42 @@ const checkQuantity = (value: string): { quantity: number } | { message: string 
 }
 
 
+// NS-107 (WCAG 2.4.2). A successful add re-renders the route in the action's response (D2). Next.js 16.4.6 keys the
+// head's metadata by request id (server/app-render/app-render.js getFlightMetadataKey), so every response remounts
+// it, and the metadata streams inside its own <Suspense> (lib/metadata/metadata.js). Its row comes last; when the rest
+// of the tree commits first, the remounted boundary shows its empty fallback and the page has no <title> until the
+// row lands. The form therefore renders a copy of the current title (React hoists it into <head>) from the click
+// until the route's own <title> is back after the action, so the document always has one. Both say the same thing.
+const HELD_TITLE_ATTRIBUTE = 'data-held-title'
+const routeTitlePresent = () =>
+  Array.from(document.head.querySelectorAll('title')).some(
+    (title) => !title.hasAttribute(HELD_TITLE_ATTRIBUTE) && title.textContent !== '',
+  )
+
+const useTitleHeldWhile = (isPending: boolean) => {
+  const [heldTitle, setHeldTitle] = useState<string | null>(null)
+  useEffect(() => {
+    // Released only after the action's render has committed (isPending goes false with it, C1) and the route's
+    // title is in the head again; until then a DOM observer waits for it.
+    if (heldTitle === null || isPending) return
+    const release = () => {
+      if (!routeTitlePresent()) return false
+      setHeldTitle(null)
+      return true
+    }
+    if (release()) return
+    const observer = new MutationObserver(() => {
+      if (release()) observer.disconnect()
+    })
+    observer.observe(document.head, { subtree: true, childList: true, characterData: true })
+    return () => observer.disconnect()
+  }, [heldTitle, isPending])
+  const hold = () => setHeldTitle(document.title)
+  // The attribute is HELD_TITLE_ATTRIBUTE, so the copy never counts as the route's own title.
+  const title = heldTitle ? <title data-held-title="">{heldTitle}</title> : null
+  return { hold, title }
+}
+
 const SoldOut = () => (
   <section aria-label="Mua hàng" className="flex flex-col gap-4">
     {/* The M2 "Hết hàng" badge by the price already says why; a real disabled attribute, not only aria-disabled. */}
@@ -44,6 +80,7 @@ export const AddToCartForm = ({ slug, stock }: AddToCartFormProps) => {
   const [isPending, startTransition] = useTransition()
   const [value, setValue] = useState(String(MIN_QUANTITY))
   const [outcome, setOutcome] = useState<Outcome>(IDLE)
+  const heldTitle = useTitleHeldWhile(isPending)
 
   if (stock === 0) return <SoldOut />
 
@@ -56,6 +93,7 @@ export const AddToCartForm = ({ slug, stock }: AddToCartFormProps) => {
     }
     const { quantity } = checked
     setOutcome(IDLE)
+    heldTitle.hold()
     startTransition(async () => {
       addPending(quantity)
       // A business refusal comes back as a result; only a network failure, a 500 or a stale action id after a deploy
@@ -71,6 +109,7 @@ export const AddToCartForm = ({ slug, stock }: AddToCartFormProps) => {
 
   return (
     <section aria-label="Mua hàng" className="flex flex-col gap-4">
+      {heldTitle.title}
       <form noValidate onSubmit={submit} className="flex flex-wrap items-end gap-4">
         <div className="flex flex-col gap-2">
           <label htmlFor={INPUT_ID} className="text-sm font-medium">
