@@ -31,6 +31,7 @@ NON_ACTION_5XX_PORT=3181
 FAIL_OPEN_405_PORT=3180
 FAIL_OPEN_307_PORT=3179
 REDIRECT_PORT=3178
+SECURITY_PORT=3177
 
 TMP=$(mktemp -d)
 PIDS=()
@@ -65,15 +66,23 @@ chmod +x "$TMP/bin/curl"
 # proxy that lets every non-GET through to a page rendered like a GET (NS-92, fixed by NS-103).
 # <rsc-status>, when set, answers a request with `rsc: 1` to a URL matching <soft-regex> with that status and a
 # Location to <url>?_rsc, like `next start` when the proxy fails open (NS-111).
+# Every response carries the site's security headers (NS-108, next.config.ts) unless <security-file> names a file whose
+# first line is a regex: matching URLs then leave out the header named on its second line, or all of them. The file is
+# read on each request, so one server serves every security case.
 start_server() {
-  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} postStatus=${11:-} rscStatus=${12:-} ready="$TMP/ready-$1"
+  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} postStatus=${11:-} rscStatus=${12:-} securityFile=${13:-} ready="$TMP/ready-$1"
   node -e '
-    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule, ogStatus, postStatus, rscStatus] = process.argv.slice(1)
+    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule, ogStatus, postStatus, rscStatus, securityFile] = process.argv.slice(1)
+    const SECURITY = { "x-frame-options": "DENY", "content-security-policy": "frame-ancestors \x27none\x27", "x-content-type-options": "nosniff", "referrer-policy": "strict-origin-when-cross-origin" }
     const og = (path) => `<meta property="og:image" content="http://localhost:3000${path}"/>`
     const images = ["/opengraph-image?a1b2c3", "/products/ao-404-not-found/opengraph-image-16g1u1?d4e5f6", "/blog/chao-mung-den-next-store/opengraph-image-16g1u1?a7b8c9"]
     const fs = require("node:fs")
     require("node:http").createServer((req, res) => {
       fs.appendFileSync(headers, JSON.stringify(req.headers) + "\n")
+      const [omitUrl, omitName] = securityFile && fs.existsSync(securityFile) ? fs.readFileSync(securityFile, "utf8").split("\n") : []
+      for (const [name, value] of Object.entries(SECURITY)) {
+        if (!(omitUrl && new RegExp(omitUrl).test(req.url) && (!omitName || omitName === name))) res.setHeader(name, value)
+      }
       if (robotsTag) res.setHeader("x-robots-tag", robotsTag)
       if (rscStatus && req.headers.rsc === "1" && soft && new RegExp(soft).test(req.url)) { res.writeHead(Number(rscStatus), { location: `${req.url}?_rsc` }); res.end(); return }
       if (postStatus && req.method !== "GET" && (!soft || new RegExp(soft).test(req.url))) { res.writeHead(Number(postStatus), { "content-type": "text/html; charset=utf-8" }); res.end(body); return }
@@ -90,7 +99,7 @@ start_server() {
       else if (soft && new RegExp(soft).test(req.url)) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
       else { res.writeHead(404, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
     }).listen(Number(port), "127.0.0.1", () => fs.writeFileSync(ready, ""))
-  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" "$ogStatus" "$postStatus" "$rscStatus" &
+  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" "$ogStatus" "$postStatus" "$rscStatus" "$securityFile" &
   PIDS+=($!)
   local i
   for i in $(seq 1 50); do [ -f "$ready" ] && return 0; sleep 0.1; done
@@ -431,3 +440,28 @@ grep -qE '^smoke: thời gian: GET /robots.txt [0-9]+ ms; GET /blog/smoke-proxy-
   fail proxy-timing "thiếu dòng thời gian của /robots.txt và slug bài lạ"
 grep -qE '^smoke: GET /products/khong-ton-tai \(slug cố định của US-05\) → 404, [0-9]+ ms$' "$TMP/out" || fail proxy-timing "dòng 404 thiếu thời gian"
 echo "ok proxy-timing"
+
+# security-headers (NS-108): every checked response must carry the four security headers of next.config.ts. A response
+# that leaves them out (the home page, robots.txt, the sitemap, the 404 page, the proxy's 404 rewrite, a product page,
+# an og:image) or leaves out a single one of them fails smoke and names the path and the header.
+start_server "$SECURITY_PORT" "$TMP/security-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 "" "" "$TMP/security-omit"
+run BASE_URL="http://127.0.0.1:$SECURITY_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail security-headers "đủ header: thoát $CODE, cần 0"
+grep -qF 'smoke: header bảo mật có trên' "$TMP/out" || fail security-headers "thiếu dòng tóm tắt header bảo mật"
+for omit in '^/$|/' '^/robots\.txt$|/robots.txt' '^/sitemap\.xml$|/sitemap.xml' '^/khong-ton-tai$|/khong-ton-tai' \
+  '^/blog/smoke-headers-|/blog/smoke-headers-' '^/products/ao-404-not-found$|/products/ao-404-not-found' \
+  '^/products/ao-404-not-found/opengraph-image|/products/ao-404-not-found/opengraph-image'; do
+  printf '%s\n' "${omit%%|*}" > "$TMP/security-omit"
+  run BASE_URL="http://127.0.0.1:$SECURITY_PORT" -- bash scripts/smoke.sh
+  [ "$CODE" = 1 ] || fail security-headers "${omit#*|} thiếu header: thoát $CODE, cần 1"
+  grep -qE "LỖI: GET ${omit#*|}[^ ]* thiếu header x-frame-options" "$TMP/out" ||
+    fail security-headers "${omit#*|} thiếu header: thông báo không nêu đường dẫn và header"
+done
+for name in x-frame-options content-security-policy x-content-type-options referrer-policy; do
+  printf '%s\n%s\n' '^/robots\.txt$' "$name" > "$TMP/security-omit"
+  run BASE_URL="http://127.0.0.1:$SECURITY_PORT" -- bash scripts/smoke.sh
+  [ "$CODE" = 1 ] || fail security-headers "thiếu $name: thoát $CODE, cần 1"
+  grep -qF "thiếu header $name" "$TMP/out" || fail security-headers "thiếu $name: thông báo không nêu header"
+done
+rm -f "$TMP/security-omit"
+echo "ok security-headers"

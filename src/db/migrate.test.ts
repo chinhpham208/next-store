@@ -1,6 +1,18 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { sql } from 'drizzle-orm'
 import postgres from 'postgres'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { readMigrationEnv, resolveMigrationTarget, resolveMigrationUrl } from '@/db/migrate'
+import { closeConnection, createConnection } from '@/db/client'
+import {
+  MIGRATION_LOCK_TIMEOUT,
+  MIGRATION_STATEMENT_TIMEOUT,
+  readMigrationEnv,
+  resolveMigrationTarget,
+  resolveMigrationUrl,
+  runMigrations,
+} from '@/db/migrate'
 
 // Spy on the real factory so a refusal can be shown to happen before any client exists.
 vi.mock('postgres', async (importOriginal) => {
@@ -223,4 +235,63 @@ describe('production endpoint guard on the migration path (NS-36)', () => {
       }
     },
   )
+})
+
+// NS-101 (audit PR #69 L1): db:migrate runs at build, as the owner role, while the old deployment still serves. An
+// ALTER waiting behind a long app transaction would queue every later query on that table behind it, so the
+// migration transaction gives up after MIGRATION_LOCK_TIMEOUT instead (the build fails, the old deployment keeps
+// serving). PGlite is real Postgres, so the settings are read from inside a migration.
+describe('migration timeouts (NS-101)', () => {
+  const probeFolder = () => {
+    const folder = mkdtempSync(join(tmpdir(), 'ns101-migrations-'))
+    mkdirSync(join(folder, 'meta'))
+    const journal = { version: '7', dialect: 'postgresql', entries: [{ idx: 0, version: '7', when: 1, tag: '0000_probe', breakpoints: true }] }
+    writeFileSync(join(folder, 'meta', '_journal.json'), JSON.stringify(journal))
+    writeFileSync(
+      join(folder, '0000_probe.sql'),
+      "CREATE TABLE probe AS SELECT current_setting('lock_timeout') AS lock_timeout, current_setting('statement_timeout') AS statement_timeout;",
+    )
+    return folder
+  }
+
+  const pglite = () => {
+    const target = createConnection({ kind: 'pglite', dataDir: 'memory://' })
+    if (target.kind !== 'pglite') throw new Error('cần PGlite')
+    return target
+  }
+
+  it('runs every migration with lock_timeout and statement_timeout set', async () => {
+    const folder = probeFolder()
+    const target = pglite()
+    try {
+      await runMigrations(target, folder)
+      const rows = await target.db.execute(sql`SELECT lock_timeout, statement_timeout FROM probe`)
+      expect(rows.rows).toEqual([{ lock_timeout: MIGRATION_LOCK_TIMEOUT, statement_timeout: MIGRATION_STATEMENT_TIMEOUT }])
+    } finally {
+      await closeConnection(target)
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  // SET LOCAL: through the Neon pooler (transaction mode) a session-level SET would stay on a server connection
+  // the app's queries reuse.
+  it('leaves the session settings as they were after the migration', async () => {
+    const folder = probeFolder()
+    const target = pglite()
+    try {
+      await runMigrations(target, folder)
+      const rows = await target.db.execute(
+        sql`SELECT current_setting('lock_timeout') AS lock_timeout, current_setting('statement_timeout') AS statement_timeout`,
+      )
+      expect(rows.rows).toEqual([{ lock_timeout: '0', statement_timeout: '0' }])
+    } finally {
+      await closeConnection(target)
+      rmSync(folder, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps the bounds short enough to fail a build fast and long enough for this schema', () => {
+    expect(MIGRATION_LOCK_TIMEOUT).toBe('5s')
+    expect(MIGRATION_STATEMENT_TIMEOUT).toBe('1min')
+  })
 })
