@@ -17,10 +17,11 @@
 #   SMOKE_ROBOTS                     disallow = robots.txt phải `Disallow: /` (Preview / Dev; workflow e2e-preview đặt),
 #                                    allow = phải `Allow: /` (Production). Bỏ trống: chấp nhận một trong hai, in ra
 #                                    (next start: build ngoài Vercel là disallow). Header X-Robots-Tag luôn chỉ được in
-#   SMOKE_PRODUCT_FAIL_OPEN          warn = slug sản phẩm lạ đúng dạng (cần lookup DB trong proxy) trả 200 thì chỉ in
+#   SMOKE_PRODUCT_FAIL_OPEN          warn = slug sản phẩm lạ đúng dạng (cần lookup DB trong proxy) trả 200 (405 cho
+#                                    POST / PUT, 307 cho request `rsc: 1` dưới next start) thì chỉ in
 #                                    ::warning:: kèm thời gian, không fail; áp cho warm-up và mọi dạng (slug mới, RSC,
-#                                    .rsc, segment, ảnh OG sản phẩm). Chỉ workflow Production E2E đặt (NS-79: proxy chạy
-#                                    ở edge gần người gọi, xa Neon, ADR-0009). Slug sai dạng, blog, ảnh OG của bài không
+#                                    .rsc, segment, ảnh OG sản phẩm). Workflow Production E2E và release-smoke đặt (NS-79: proxy chạy
+#                                    ở edge gần người gọi, xa Neon, ADR-0009; NS-111). Slug sai dạng, blog, ảnh OG của bài không
 #                                    chạm DB nên vẫn phải 404. Bỏ trống (mặc định, Preview / CI): fail-open là lỗi
 #   VERCEL_AUTOMATION_BYPASS_SECRET  có thì gửi header x-vercel-protection-bypass (vượt Deployment Protection),
 #                                    chỉ khi BASE_URL là https://
@@ -334,9 +335,11 @@ expect_404() { check_404 '' "$@"; } # expect_404 <path> <label> [header] [method
 expect_product_404() { check_404 product "$@"; } # expect_product_404 <path> <label> [header] [method]: slug đi qua lookup DB
 # A fail-open GET renders the page (200). A fail-open POST without next-action or PUT reaches the prerendered page,
 # and Next answers 405 without rendering, caching or querying (NS-110), so 405 counts as fail-open for those methods.
-product_fail_open_warned() { # product_fail_open_warned <status> <message> [method]: 0 = cảnh báo thay cho lỗi
+# Under `next start` (scripts/smoke-fail-open.sh) a fail-open RSC request (`rsc: 1`) answers 307 to <path>?_rsc where
+# Vercel answers 200 (NS-111), so 307 counts as fail-open for that request only.
+product_fail_open_warned() { # product_fail_open_warned <status> <message> [method] [header]: 0 = cảnh báo thay cho lỗi
   [ "${SMOKE_PRODUCT_FAIL_OPEN:-}" = warn ] || return 1
-  [ "$1" = 200 ] || { [ "$1" = 405 ] && [ "${3:-GET}" != GET ]; } || return 1
+  [ "$1" = 200 ] || { [ "$1" = 405 ] && [ "${3:-GET}" != GET ]; } || { [ "$1" = 307 ] && [ "${4:-}" = 'rsc: 1' ]; } || return 1
   # A workflow command on purpose: visible on the run summary, not only in the log.
   echo "::warning::smoke: $2 sau $(last_time_ms): lookup DB của proxy fail-open (SMOKE_PRODUCT_FAIL_OPEN=warn, NS-79)"
   PRODUCT_FAIL_OPEN_COUNT=$((PRODUCT_FAIL_OPEN_COUNT + 1))
@@ -344,7 +347,7 @@ product_fail_open_warned() { # product_fail_open_warned <status> <message> [meth
 check_404() { # check_404 <kind> <path> <label> [header] [method]
   local kind=$1 path=$2 label=$3 header=${4:-} method=${5:-GET} status
   status=$(fetch "$BASE$path" "$TMP/not-found" "$header" /dev/null "$method") || fail "không kết nối được $BASE$path"
-  if [ "$kind" = product ] && product_fail_open_warned "$status" "$method $path ($label) trả $status" "$method"; then return 0; fi
+  if [ "$kind" = product ] && product_fail_open_warned "$status" "$method $path ($label) trả $status" "$method" "$header"; then return 0; fi
   if [ "$status" != 404 ]; then
     echo "smoke: LỖI: $method $path ($label) trả $status ngay lần đầu, cần 404" >&2
     NOT_FOUND_FAILED=1

@@ -29,6 +29,8 @@ MALFORMED_PORT=3183
 NON_ACTION_PORT=3182
 NON_ACTION_5XX_PORT=3181
 FAIL_OPEN_405_PORT=3180
+FAIL_OPEN_307_PORT=3179
+REDIRECT_PORT=3178
 
 TMP=$(mktemp -d)
 PIDS=()
@@ -61,16 +63,19 @@ chmod +x "$TMP/bin/curl"
 # og:image on http://localhost:3000 (as under next start); its path answers <og-status> (default 200) with a PNG.
 # <non-get-status>, when set, answers every request that is not a GET with that status and the not-found page, like a
 # proxy that lets every non-GET through to a page rendered like a GET (NS-92, fixed by NS-103).
+# <rsc-status>, when set, answers a request with `rsc: 1` to a URL matching <soft-regex> with that status and a
+# Location to <url>?_rsc, like `next start` when the proxy fails open (NS-111).
 start_server() {
-  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} postStatus=${11:-} ready="$TMP/ready-$1"
+  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} postStatus=${11:-} rscStatus=${12:-} ready="$TMP/ready-$1"
   node -e '
-    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule, ogStatus, postStatus] = process.argv.slice(1)
+    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule, ogStatus, postStatus, rscStatus] = process.argv.slice(1)
     const og = (path) => `<meta property="og:image" content="http://localhost:3000${path}"/>`
     const images = ["/opengraph-image?a1b2c3", "/products/ao-404-not-found/opengraph-image-16g1u1?d4e5f6", "/blog/chao-mung-den-next-store/opengraph-image-16g1u1?a7b8c9"]
     const fs = require("node:fs")
     require("node:http").createServer((req, res) => {
       fs.appendFileSync(headers, JSON.stringify(req.headers) + "\n")
       if (robotsTag) res.setHeader("x-robots-tag", robotsTag)
+      if (rscStatus && req.headers.rsc === "1" && soft && new RegExp(soft).test(req.url)) { res.writeHead(Number(rscStatus), { location: `${req.url}?_rsc` }); res.end(); return }
       if (postStatus && req.method !== "GET" && (!soft || new RegExp(soft).test(req.url))) { res.writeHead(Number(postStatus), { "content-type": "text/html; charset=utf-8" }); res.end(body); return }
       const locs = ["/", "/products/ao-404-not-found", "/blog/chao-mung-den-next-store"]
       if (req.url === "/sitemap.xml") { res.writeHead(200, { "content-type": "application/xml" }); res.end(`<urlset>${locs.map((p) => `<url>\n<loc>${p === "/" ? "https://shop.example.test" : origin}${p}</loc>\n</url>`).join("\n")}</urlset>`); return }
@@ -85,7 +90,7 @@ start_server() {
       else if (soft && new RegExp(soft).test(req.url)) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
       else { res.writeHead(404, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
     }).listen(Number(port), "127.0.0.1", () => fs.writeFileSync(ready, ""))
-  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" "$ogStatus" "$postStatus" &
+  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" "$ogStatus" "$postStatus" "$rscStatus" &
   PIDS+=($!)
   local i
   for i in $(seq 1 50); do [ -f "$ready" ] && return 0; sleep 0.1; done
@@ -337,6 +342,27 @@ done
 run BASE_URL="http://127.0.0.1:$FAIL_OPEN_405_PORT" -- bash scripts/smoke.sh
 [ "$CODE" = 1 ] || fail product-fail-open-405 "không cờ: thoát $CODE, cần 1"
 echo "ok product-fail-open-405"
+
+# product-fail-open-307 (NS-111): under `next start` with a far database (scripts/smoke-fail-open.sh), a fail-open RSC
+# request (`rsc: 1`) to an unknown product slug answers 307 to <path>?_rsc instead of Vercel's 200. With
+# SMOKE_PRODUCT_FAIL_OPEN=warn that is a warning like the 200; without the flag, or without the rsc header, it fails.
+start_server "$FAIL_OPEN_307_PORT" "$TMP/fail-open-307-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/(smoke-warmup-|khong-ton-tai)' "" "" https://shop.example.test "Allow: /" 200 "" 307
+run BASE_URL="http://127.0.0.1:$FAIL_OPEN_307_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail product-fail-open-307 "có cờ: thoát $CODE, cần 0"
+for label in 'request RSC' 'segment prefetch dạng đường dẫn'; do
+  grep -qE "^::warning::smoke: GET /products/[^ ]+ \\($label\\) trả 307 sau [0-9]+ ms" "$TMP/out" ||
+    fail product-fail-open-307 "thiếu ::warning:: 307 cho \"$label\""
+done
+run BASE_URL="http://127.0.0.1:$FAIL_OPEN_307_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail product-fail-open-307 "không cờ: thoát $CODE, cần 1"
+echo "ok product-fail-open-307"
+
+# product-redirect-no-rsc (NS-111): a 307 to a request without the rsc header is never a fail-open, even with the flag.
+start_server "$REDIRECT_PORT" "$TMP/redirect-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/(smoke-warmup-|khong-ton-tai)' "" "" https://shop.example.test "Allow: /" 200 307
+run BASE_URL="http://127.0.0.1:$REDIRECT_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail product-redirect-no-rsc "thoát $CODE, cần 1"
+grep -qE '\(POST không có next-action\) trả 307 ngay lần đầu, cần 404' "$TMP/out" || fail product-redirect-no-rsc "không nêu POST 307"
+echo "ok product-redirect-no-rsc"
 
 # non-action-200 (NS-103): a proxy that lets every non-GET through (the NS-92 behaviour) answers 200 to a POST without
 # next-action, a PUT or a DELETE to an unknown slug; smoke fails, even with SMOKE_PRODUCT_FAIL_OPEN=warn, because the

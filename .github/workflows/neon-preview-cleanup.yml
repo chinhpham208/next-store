@@ -1,0 +1,63 @@
+name: Neon preview cleanup
+
+# NS-111: the Neon ↔ Vercel integration creates a Neon branch preview/<git branch> for every preview and never deletes
+# it; Neon Free allows 10 branches per project, so about every 8th PR's preview failed to provision. This workflow
+# deletes those branches; the rules (never main, preview/develop, a default / protected branch, a branch with children,
+# a branch an open PR still uses, or a branch without the preview/ prefix) live in scripts/neon-cleanup.mjs.
+#
+# pull_request closed: delete preview/<head_ref> of that PR. The workflow file comes from the base branch, and the
+# job checks out the base branch too (never the PR's code), because it holds NEON_API_KEY.
+# schedule / workflow_dispatch: sweep every preview/* whose PR is closed or that no open PR uses.
+on:
+  pull_request:
+    types: [closed]
+  schedule:
+    - cron: '17 20 * * *' # 03:17 giờ Việt Nam
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Chỉ in nhánh sẽ xoá, không xoá'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: neon-preview-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    # A fork's PR gets no secrets, and its branch name is not ours to clean.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The default branch on schedule / dispatch, the PR's base on pull_request: never the PR head.
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      # Fails the job, on purpose, when the owner has not added the secret yet: a silent skip would let the branches
+      # pile up again unnoticed.
+      - name: delete Neon preview branches
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ vars.NEON_PROJECT_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          # Untrusted text: passed through env and checked by the script, never interpolated into the shell.
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          args=()
+          if [ "$EVENT_NAME" = pull_request ]; then args=(closed "$HEAD_REF"); else args=(sweep); fi
+          if [ "$DRY_RUN" = true ]; then args+=(--dry-run); fi
+          node scripts/neon-cleanup.mjs "${args[@]}"

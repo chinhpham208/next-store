@@ -8,7 +8,7 @@
     "build:vercel": "npm run db:migrate && (test \"$VERCEL_ENV\" = production || npm run db:seed) && next build",
     "start": "next start",
     "smoke": "bash scripts/smoke.sh",
-    "test:scripts": "bash scripts/smoke.test.sh && bash scripts/verify.test.sh && bash scripts/redact-report.test.sh && python3 -m unittest discover -s scripts/youtrack -p 'test_*.py'",
+    "test:scripts": "bash scripts/smoke.test.sh && bash scripts/verify.test.sh && bash scripts/pr-gate.test.sh && bash scripts/wait-vercel-deploy.test.sh && bash scripts/smoke-fail-open.test.sh && node --test scripts/neon-cleanup.test.mjs && bash scripts/redact-report.test.sh && python3 -m unittest discover -s scripts/youtrack -p 'test_*.py'",
     "e2e": "playwright test",
     "lint": "eslint",
     "typecheck": "next typegen && tsc --noEmit",
