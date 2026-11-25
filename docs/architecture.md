@@ -12,7 +12,7 @@ flowchart TB
   payment["Cổng thanh toán<br/>Fake (test) / cổng VN khi mở bán"]
 
   subgraph next["Next.js 16 server"]
-    proxy["proxy.ts<br/>404 cho /products/:slug không tồn tại (M2)<br/>404 cho /blog/:slug không tồn tại, không chạm DB (M3)<br/>bỏ qua request không phải GET/HEAD, tức Server Action (M4)<br/>chặn /admin khi chưa đăng nhập (M5)"]
+    proxy["proxy.ts — không chạm DB (M5)<br/>chặn /admin khi chưa đăng nhập: cookie ký HMAC, chạy trước mọi nhánh khác (M5)<br/>Server Action (POST + next-action) đi thẳng (M4)<br/>404 cho /products/:slug không tồn tại: đối chiếu registry slug sản phẩm (M2, registry từ M5)<br/>404 cho /blog/:slug không tồn tại: đối chiếu registry bài (M3)"]
     subgraph app["src/app — chỉ routing"]
       pages["Pages<br/>Server Components"]
       actions["Server Actions<br/>giỏ hàng, sửa sản phẩm"]
@@ -28,7 +28,7 @@ flowchart TB
   browser --> proxy --> pages & actions
   payment --> route
   pages & actions & route --> features --> db
-  proxy -->|kiểm slug| features
+  proxy -->|registry slug, kiểm phiên admin<br/>qua proxy-api, không DB| features
   db --> pglite
   db -.->|có DATABASE_URL| postgres
 ```
@@ -50,10 +50,10 @@ flowchart LR
 
 | Miền | Trách nhiệm | Mốc |
 |---|---|---|
-| `products` | Đọc danh mục, danh sách, chi tiết; ghi sản phẩm (kèm `updateTag`) | M1, M2, M5 |
+| `products` | Đọc danh mục, danh sách, chi tiết; registry slug cho proxy (`catalog-slugs.ts`, M5); ghi sản phẩm (kèm `updateTag` theo `tagsForProductWrite`, [ADR-0019](./adr/0019-product-edits-and-cache-tags.md)) | M1, M2, M5 |
 | `blog` | Registry bài viết (`posts.ts`, không import gì), nội dung MDX (`content.ts`), metadata bài viết | M3 |
 | `cart` | Cookie giỏ hàng, thêm / sửa / xoá, kiểm tra tồn kho | M4 |
-| `admin` | Phiên đăng nhập admin (ký / xác minh cookie) | M5 |
+| `admin` | Cấu hình và mật khẩu admin, phiên đăng nhập (ký / xác minh cookie HMAC), giới hạn đăng nhập sai, CSP nonce cho `/admin` ([ADR-0018](./adr/0018-admin-auth.md), [ADR-0020](./adr/0020-content-security-policy-and-hsts.md)) | M5 |
 | `checkout` | `PaymentProvider`, tạo phiên thanh toán | M6 |
 | `orders` | Tạo đơn, xử lý webhook, trừ kho, danh sách đơn | M6 |
 
@@ -96,13 +96,14 @@ flowchart LR
     shell["Vỏ trang + thông tin sản phẩm<br/>&quot;use cache&quot; · tag product:&lt;slug&gt;<br/>nút thêm vào giỏ (client, stock từ cache)"]
   end
   action["Server Action giỏ hàng<br/>đặt lại cookie"]
-  edit["Admin sửa sản phẩm"] -->|updateTag| shell
+  edit["Admin sửa sản phẩm"] -->|"updateTag product:&lt;slug&gt; + products<br/>(không product-slugs)"| shell
   paid["Webhook trừ kho"] -->|revalidateTag| shell
   req["Mỗi request"] --> hole
   action -->|render lại route trong cùng response| hole
 ```
 
 - Phần vỏ và dữ liệu sản phẩm được phục vụ từ cache cho đến khi có sự kiện làm mới.
+- Danh sách slug (`getCatalogSlugs`) mà mọi trang chi tiết đọc mang tag riêng `product-slugs` (M5). Admin sửa một sản phẩm chỉ xoá `product:<slug>` và `products` (danh sách), nên trang của các sản phẩm khác không bị render lại; `product-slugs` chỉ bị xoá khi tập slug đổi ([ADR-0019](./adr/0019-product-edits-and-cache-tags.md)).
 - Phần phụ thuộc cookie luôn được tính lại cho từng người xem. Từ M4 đó là số trên biểu tượng giỏ ở header của **mọi** trang `(shop)`; vỏ trang vẫn prerender, lỗi DB chỉ làm mất con số. Dữ liệu giỏ không bao giờ nằm trong `"use cache"` ([ADR-0014](./adr/0014-cart-storage-and-cookie.md)).
 - Server Action của giỏ không gọi `updateTag`: M4 không sửa tồn kho. Đặt lại cookie làm Next.js render lại route hiện tại, nên biểu tượng giỏ cập nhật trong cùng response.
 - Blog được tạo tĩnh lúc build, không cần làm mới; chỉ lỗ biểu tượng giỏ ở header là động.
@@ -130,7 +131,13 @@ erDiagram
     integer category_id FK
     integer stock
     boolean featured
-    timestamp updated_at
+    timestamp created_at "M5: thứ tự Mới nhất"
+    timestamp updated_at "kiểm chống ghi đè khi admin lưu"
+  }
+  admin_login_failures {
+    uuid id PK "do server sinh"
+    text ip_hash "HMAC của IP, không lưu IP thô"
+    timestamp failed_at
   }
   carts {
     uuid id PK "UUID v4 do server sinh, lưu trong cookie httpOnly"
@@ -154,7 +161,7 @@ erDiagram
   }
 ```
 
-`orders` lưu bản chụp sản phẩm (`items`) thay vì tham chiếu, để đơn cũ không đổi khi giá sản phẩm thay đổi. Bảng `carts`, `cart_items` thêm ở M4; `orders` ở M6. Giỏ không lưu giá: luôn dùng giá hiện tại, M6 chụp giá vào `orders.items` lúc tạo đơn ([ADR-0014](./adr/0014-cart-storage-and-cookie.md)).
+`orders` lưu bản chụp sản phẩm (`items`) thay vì tham chiếu, để đơn cũ không đổi khi giá sản phẩm thay đổi. Bảng `carts`, `cart_items` thêm ở M4; `products.created_at` và `admin_login_failures` (không quan hệ với bảng khác) ở M5 ([ADR-0018](./adr/0018-admin-auth.md), [ADR-0019](./adr/0019-product-edits-and-cache-tags.md)); `orders` ở M6. Khi có tính năng xoá sản phẩm: ẩn bằng `products.archived_at`, không xoá cứng (ADR-0019). Giỏ không lưu giá: luôn dùng giá hiện tại, M6 chụp giá vào `orders.items` lúc tạo đơn ([ADR-0014](./adr/0014-cart-storage-and-cookie.md)).
 
 ## 6. Môi trường và luồng deploy
 
