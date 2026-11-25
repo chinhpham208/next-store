@@ -3,6 +3,7 @@ import { and, asc, count, desc, eq, ilike, sql, type SQL } from 'drizzle-orm'
 import { cacheLife, cacheTag } from 'next/cache'
 import { connection } from 'next/server'
 import { categories, dbQuery, products, type DbQueryName } from '@/db'
+import { PRODUCT_SLUGS_TAG, PRODUCTS_TAG, productTag } from '@/features/products/cache-tags'
 import {
   isProductSlug,
   PAGE_SIZE,
@@ -46,7 +47,7 @@ export const getFeaturedProducts = async (limit: number = FEATURED_LIMIT): Promi
   // Tag 'products' is invalidated by admin edits (M5). Stock changes from the payment webhook invalidate only
   // product:<slug> (ADR-0003), so listings may show inStock up to the cache lifetime after a purchase.
   // 'hours' is the cache lifetime and the safety net if an invalidation is ever missed.
-  cacheTag('products')
+  cacheTag(PRODUCTS_TAG)
   cacheLife('hours')
 
   return dbQuery({
@@ -71,7 +72,7 @@ export const getCachedProductBySlug = async (slug: string): Promise<ProductDetai
   if (!isProductSlug(slug)) return rejectCacheArguments('products.detail')
   // product:<slug> is invalidated by admin edits (M5, updateTag) and by the payment webhook after a stock
   // decrement (M4, revalidateTag) — ADR-0003. 'hours' is the safety net if an invalidation is ever missed.
-  cacheTag(`product:${slug}`)
+  cacheTag(productTag(slug))
   cacheLife('hours')
 
   const [row] = await dbQuery({
@@ -96,7 +97,7 @@ export const getCachedProductBySlug = async (slug: string): Promise<ProductDetai
   // Not stored: otherwise every made-up slug sent straight to this function would leave an entry behind. Render
   // paths never reach this branch for a made-up slug: getProductBySlug answers it from the slug list (NS-109). Only
   // a direct Server Function call does (a request, never a prerender), or a product deleted while the list still
-  // names it, which lasts until 'products' is invalidated.
+  // names it, which lasts until 'product-slugs' is invalidated.
   if (row === undefined) {
     cacheLife(SKIP_CACHE_ENTRY)
     return null
@@ -105,11 +106,14 @@ export const getCachedProductBySlug = async (slug: string): Promise<ProductDetai
 }
 
 // The catalogue's slugs under one fixed key: no parameters, so a Server Function call cannot add entries (NS-105).
-// Same tag as the listings, so the admin edits of M5 that create, delete or rename a product refresh it; until then
-// a new product reads as unknown for up to the cache lifetime.
+// Every detail page, its metadata and its Open Graph image read this list, so its tag rides up to every
+// /products/<slug> entry. Its own tag, not the listings' one (ADR-0019): an admin field edit invalidates products and
+// must not re-render every product page. M5 only edits fields (decision 3A) and the slug set changes only through a
+// deploy (ADR-0017). A later write that creates, deletes, hides or renames a product uses
+// tagsForProductWrite({ change: 'slug-set' }); until then a new product reads as unknown for up to the cache lifetime.
 const getCatalogSlugs = async (): Promise<string[]> => {
   'use cache'
-  cacheTag('products')
+  cacheTag(PRODUCT_SLUGS_TAG)
   cacheLife('hours')
 
   const rows = await dbQuery({
@@ -147,7 +151,7 @@ export type ProductSitemapEntry = { slug: string; updatedAt: string }
 // cache lifetime, which a crawler tolerates.
 export const getProductSitemapEntries = async (): Promise<ProductSitemapEntry[]> => {
   'use cache'
-  cacheTag('products')
+  cacheTag(PRODUCTS_TAG)
   cacheLife('hours')
 
   const rows = await dbQuery({
@@ -167,7 +171,7 @@ type CategoryRow = CategoryOption & { id: number }
 // id lets the listing filter on products.category_id (indexed) instead of joining categories to count.
 const getCategoryRows = async (): Promise<CategoryRow[]> => {
   'use cache'
-  cacheTag('products')
+  cacheTag(PRODUCTS_TAG)
   cacheLife('hours')
 
   return dbQuery({
@@ -235,7 +239,7 @@ const isCategoryId = async (categoryId: number | null) =>
 export const countCatalog = async (categoryId: number | null): Promise<number> => {
   'use cache'
   if (!isCategoryIdShape(categoryId)) return rejectCacheArguments('products.count')
-  cacheTag('products')
+  cacheTag(PRODUCTS_TAG)
   cacheLife('hours')
 
   if (!(await isCategoryId(categoryId))) {
@@ -255,7 +259,7 @@ export const getCatalogPage = async (
   const validKey =
     isCategoryIdShape(categoryId) && PRODUCT_SORTS.includes(sort) && isCacheCount(page, Number.MAX_SAFE_INTEGER)
   if (!validKey) return rejectCacheArguments('products.page')
-  cacheTag('products')
+  cacheTag(PRODUCTS_TAG)
   cacheLife('hours')
 
   if (!(await isCategoryId(categoryId)) || page > toPageCount(await countCatalog(categoryId))) {

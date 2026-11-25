@@ -377,21 +377,30 @@ describe('cache key rules (structural: Vitest does not run the directive)', () =
     'countCatalog',
     'getCatalogPage',
     'getProductSitemapEntries',
-    'getCatalogSlugs',
   ]
 
   it('has exactly the expected cached functions', () => {
-    expect([...cached.keys()].sort()).toEqual([...PRODUCTS_TAGGED, 'getCachedProductBySlug'].sort())
+    expect([...cached.keys()].sort()).toEqual([...PRODUCTS_TAGGED, 'getCatalogSlugs', 'getCachedProductBySlug'].sort())
   })
   it.each(PRODUCTS_TAGGED)('%s tags products and sets an hours lifetime', (name) => {
     const body = cached.get(name) ?? ''
-    expect(body).toContain("cacheTag('products')")
+    expect(body).toContain('cacheTag(PRODUCTS_TAG)')
+    expect(body).toContain("cacheLife('hours')")
+  })
+  // ADR-0019: the slug list every detail page reads carries its own tag, never products.
+  it('getCatalogSlugs tags product-slugs only and sets an hours lifetime', () => {
+    const body = cached.get('getCatalogSlugs') ?? ''
+    expect(body.match(/cacheTag\(/g)).toHaveLength(1)
+    expect(body).toContain('cacheTag(PRODUCT_SLUGS_TAG)')
     expect(body).toContain("cacheLife('hours')")
   })
   it('the detail query tags product:<slug> and sets an hours lifetime', () => {
     const body = cached.get('getCachedProductBySlug') ?? ''
-    expect(body).toContain('cacheTag(`product:${slug}`)')
+    expect(body).toContain('cacheTag(productTag(slug))')
     expect(body).toContain("cacheLife('hours')")
+  })
+  it('tags only through the constants of cache-tags.ts', () => {
+    expect(source).not.toMatch(/cacheTag\(\s*['"`]/)
   })
   it('never passes q or an unknown category to the cached query', () => {
     for (const body of cached.values()) {
