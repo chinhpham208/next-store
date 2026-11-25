@@ -6,7 +6,7 @@ import { db } from '@/db/client'
 import { runMigrations } from '@/db/migrate'
 import { seed } from '@/db/seed'
 import { PRODUCT_SEEDS } from '@/db/seed-data'
-import { getFeaturedProducts, getProductSitemapEntries } from '@/features/products'
+import { getFeaturedProducts, getProductBySlug, getProductSitemapEntries } from '@/features/products'
 
 // cacheTag() throws outside a cacheComponents build (K7); Vitest also ignores 'use cache', so
 // these tests cover the query itself, and the directive's effect is checked by the build (Task 9).
@@ -116,4 +116,16 @@ describe('getFeaturedProducts called with arguments the page never passes (NS-10
     expect(await getFeaturedProducts(8)).toHaveLength(6)
     expect(await Reflect.apply(getFeaturedProducts, undefined, [undefined])).toHaveLength(6)
   })
+})
+
+// ADR-0019: every detail page reads the slug list, so its tag rides up to every /products/<slug> entry. It carries
+// product-slugs, not products, so an admin field edit (updateTag('products')) leaves the other detail pages cached.
+it('getCatalogSlugs is tagged product-slugs, not products', async () => {
+  await seed()
+  vi.mocked(cacheTag).mockClear()
+  vi.mocked(cacheLife).mockClear()
+  // An unknown slug stops at the slug list: getCatalogSlugs is the only cached function this call runs.
+  expect(await getProductBySlug('khong-ton-tai')).toBeNull()
+  expect(vi.mocked(cacheTag).mock.calls).toEqual([['product-slugs']])
+  expect(cacheLife).toHaveBeenCalledWith('hours')
 })
