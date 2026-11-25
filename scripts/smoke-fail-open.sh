@@ -18,7 +18,7 @@ cd "$(dirname "$0")/.."
 SMOKE=${SMOKE_FAIL_OPEN_SMOKE:-scripts/smoke.sh}
 SOURCE_DB=${SMOKE_FAIL_OPEN_PGLITE:-.data/pglite}
 # Well under the 600 ms every query of e2e/far-db.mjs waits.
-SLOW_MS=200
+SLOW_MS=450  # dưới 600 ms của far-db: một lần chờ DB vẫn vượt ngưỡng; chừa chỗ cho runner GitHub chậm (review PR #100 L1)
 # Printed by smoke.sh for every unknown product slug that got its 404: `smoke: <method> /products/… (<label>) → 404, N ms`.
 PRODUCT_404='^smoke: [A-Z]+ /products/[^ ]+ \(.*\) → 404, [0-9]+ ms$'
 FIRST='(slug sản phẩm lạ đầu tiên) → 404'

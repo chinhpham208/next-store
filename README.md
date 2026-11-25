@@ -168,14 +168,17 @@ less "$SEED_SQL"                       # đọc lướt trước khi dán: begin
 
 **Thêm hoặc bỏ một sản phẩm** ([ADR-0017](./docs/adr/0017-product-slug-registry-in-proxy.md)): proxy trả 404 cho mọi slug không có trong registry `src/features/products/catalog-slugs.ts`, không tra DB. Vì vậy:
 
-1. Trong **một** PR: sửa `PRODUCT_SEEDS` (`src/db/seed-data.ts`), sửa `PRODUCT_SLUGS` (`catalog-slugs.ts`, cùng thứ tự), thêm ảnh vào repo. Vitest `PRODUCT_SLUGS equals the seed slugs` đỏ nếu hai file lệch nhau.
-2. Merge, release, đợi deploy Production xong.
-3. Chạy lại SQL seed như trên (bước 1–4): chỉ thêm dòng còn thiếu theo slug.
-4. Kiểm: workflow `Production E2E` xanh, trong đó `catalog: sitemap và registry slug khớp nhau`.
+**Thêm** sản phẩm: DB trước, registry sau (một dòng DB chưa có trong registry vô hại: proxy vẫn 404 slug đó).
+
+1. Một PR sửa `PRODUCT_SEEDS` (`src/db/seed-data.ts`), sửa `PRODUCT_SLUGS` (`catalog-slugs.ts`, cùng thứ tự), thêm ảnh vào repo. Vitest `PRODUCT_SLUGS equals the seed slugs` đỏ nếu hai file lệch nhau. Merge vào `develop`.
+2. **Trước khi release**, chạy SQL seed trên Production như trên (bước 1–4), sinh từ nhánh `develop` đã merge: chỉ thêm dòng còn thiếu theo slug, không ghi đè dòng đã có (kể cả dòng admin đã sửa).
+3. Release. `Production E2E` tự chạy sau deploy; `catalog: sitemap và registry slug khớp nhau` phải xanh. Sitemap và danh sách slug lấy qua cache `hours`: nếu E2E đỏ vì sitemap chưa có slug mới, chạy lại workflow sau khoảng 1 giờ.
+
+**Bỏ** sản phẩm: ngược lại, registry trước, DB sau. Release bản đã bỏ slug khỏi `PRODUCT_SEEDS` / `PRODUCT_SLUGS` (trang của nó 404 ngay), rồi mới ẩn hoặc xoá dòng DB (M5 chọn ẩn, ADR-0019).
 
 Thêm sản phẩm bằng SQL Editor mà không qua PR thì trang của nó 404 (slug không có trong registry) và E2E `catalog` đỏ. Bỏ sản phẩm khỏi registry mà còn trong DB cũng vậy. Admin chỉ sửa tên, giá, mô tả, tồn kho (M5), không đổi tập slug.
 
-Câu lệnh dùng `on conflict (slug) do nothing`: chỉ thêm dòng còn thiếu theo slug, không bao giờ ghi đè dòng đã có. Dù vậy, **không** chạy lại trên production sau khi admin đã sửa dữ liệu (từ M5), trừ khi chủ dự án yêu cầu: sản phẩm admin đã xoá sẽ bị thêm lại.
+Câu lệnh dùng `on conflict (slug) do nothing`: chỉ thêm dòng còn thiếu theo slug, không bao giờ ghi đè dòng đã có. Vì vậy chạy lại khi thêm sản phẩm (ở trên) là an toàn với dữ liệu admin đã sửa. Chỉ cần cẩn thận khi sau này có xoá cứng: sản phẩm đã xoá khỏi DB mà còn trong `PRODUCT_SEEDS` sẽ bị thêm lại (M5 chọn ẩn, không xoá cứng).
 
 ## Role app
 

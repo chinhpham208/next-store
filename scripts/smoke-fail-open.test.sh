@@ -43,7 +43,7 @@ run() {
     bash scripts/smoke-fail-open.sh > "$TMP/out" 2>&1 || CODE=$?
 }
 
-# pass: smoke passes on a far database and every unknown product slug got its 404 under 200 ms → 0; env as designed.
+# pass: smoke passes on a far database and every unknown product slug got its 404 under SLOW_MS (450 ms) → 0; env as designed.
 fake_smoke 0 $'slug sản phẩm lạ đầu tiên|35\nslug cố định của US-05|12\nảnh OG: slug sản phẩm lạ|199'
 run
 [ "$CODE" = 0 ] || fail pass "thoát $CODE, cần 0"
@@ -56,7 +56,7 @@ grep -qx 'copy=seeded' "$TMP/env" || fail pass "PGLITE_DATA_DIR không phải b�
 grep -qF 'smoke-fail-open: qua (3 slug sản phẩm lạ trả 404, chậm nhất 199 ms' "$TMP/out" || fail pass "không có dòng qua kèm số đo"
 echo "ok pass"
 
-# slow-404: one unknown product slug took 200 ms or more → the proxy waited on the database → 1, naming the case.
+# slow-404: one unknown product slug took SLOW_MS (450 ms) or more → the proxy waited on the database → 1, naming the case.
 fake_smoke 0 $'slug sản phẩm lạ đầu tiên|35\nrequest RSC|640'
 run
 [ "$CODE" = 1 ] || fail slow-404 "thoát $CODE, cần 1"
