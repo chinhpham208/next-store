@@ -8,7 +8,6 @@ export {
   type ProductSitemapEntry,
 } from '@/features/products/queries'
 export { getProductMetadata } from '@/features/products/metadata'
-export { isKnownProductSlug } from '@/features/products/slug-guard'
 export { renderProductName } from '@/features/products/components/product-name'
 export { ProductGrid, type ProductGridProps } from '@/features/products/components/product-grid'
 export {

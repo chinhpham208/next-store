@@ -1,6 +1,6 @@
 # ADR-0016: Header bảo mật toàn site và giới hạn body của Server Action
 
-- Trạng thái: Đã chấp nhận (Orchestrator quyết, chủ dự án giao Orchestrator các việc kỹ thuật)
+- Trạng thái: Đã chấp nhận (Orchestrator quyết, chủ dự án giao Orchestrator các việc kỹ thuật); thay thế một phần bởi [ADR-0020](./0020-content-security-policy-and-hsts.md) (đề xuất, M5: mục "CSP chỉ có `frame-ancestors`" thay bằng CSP nền đầy đủ + CSP nonce cho `/admin`)
 - Ngày: 2026-11-24
 - Ticket: NS-108, phát hiện Low của audit M4 (NS-96)
 - Bổ sung: [ADR-0014](./0014-cart-storage-and-cookie.md) (mục Hệ quả, gạch đầu dòng CSRF: body Server Action không còn tối đa 1 MB mặc định)

@@ -1,6 +1,6 @@
 # ADR-0009: 404 thật cho sản phẩm không tồn tại bằng proxy
 
-- Trạng thái: Đã chấp nhận; bổ sung bởi [ADR-0012](./0012-blog-static-registry.md) (proxy thêm `/blog/<slug>` và đường dẫn ảnh Open Graph, M3 Task 13); bổ sung bởi [ADR-0014](./0014-cart-storage-and-cookie.md) (proxy bỏ qua request không phải `GET` / `HEAD`, M4 Task 7, NS-92, 2026-11-23; kết quả kiểm C3 ở mục Hệ quả); thu hẹp bởi NS-103 (2026-11-24, audit NS-96): chỉ `POST` có header `next-action` đi thẳng
+- Trạng thái: Đã chấp nhận; bổ sung bởi [ADR-0012](./0012-blog-static-registry.md) (proxy thêm `/blog/<slug>` và đường dẫn ảnh Open Graph, M3 Task 13); bổ sung bởi [ADR-0014](./0014-cart-storage-and-cookie.md) (proxy bỏ qua request không phải `GET` / `HEAD`, M4 Task 7, NS-92, 2026-11-23; kết quả kiểm C3 ở mục Hệ quả); thu hẹp bởi NS-103 (2026-11-24, audit NS-96): chỉ `POST` có header `next-action` đi thẳng; thay thế một phần bởi [ADR-0017](./0017-product-slug-registry-in-proxy.md) (đã chấp nhận 2026-11-25, M5, NS-79: proxy đối chiếu registry slug tĩnh, không tra DB; `slug-guard.ts`, `Set` slug dương, fail-open 400 ms và các mục Hệ quả liên quan hết hiệu lực khi Task 3 merge)
 - Ngày: 2026-11-21
 - Quyết định của chủ dự án: 2026-11-20 (plan M2, quyết định 1, phương án A)
 - Liên quan: [ADR-0003](./0003-cache-strategy.md), ticket NS-49 (M2 Task 12), audit PR #20, NS-79 (region của proxy, sửa mục Hệ quả 2026-11-23)

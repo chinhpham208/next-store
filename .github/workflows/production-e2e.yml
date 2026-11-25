@@ -83,10 +83,8 @@ jobs:
           BASE_URL: ${{ env.PRODUCTION_URL }}
           # Production must let crawlers in; left empty, smoke would also accept `Disallow: /` (review PR #42).
           SMOKE_ROBOTS: allow
-          # On Vercel the proxy runs at the edge nearest the runner, far from Neon in Singapore, so a product slug
-          # lookup can outlast its 400 ms bound and fail open (200). Here that is a warning with the time taken; slugs
-          # that never reach the database must still 404. Preview leaves it unset and fails (NS-79, ADR-0009; fix: M5).
-          SMOKE_PRODUCT_FAIL_OPEN: warn
+          # No SMOKE_PRODUCT_FAIL_OPEN (ADR-0017, NS-79): the proxy answers product slugs from the static registry, so
+          # an unknown slug must 404 on the first hit here too, from the edge nearest the runner.
         run: npm run smoke
 
       - name: install Playwright Chromium
@@ -96,9 +94,6 @@ jobs:
         id: e2e
         env:
           BASE_URL: ${{ env.PRODUCTION_URL }}
-          # Same flag as smoke, same rule (NS-79, NS-100): a well-formed unknown product slug answering 200 is a
-          # `warning` annotation with the time taken (e2e/product-fail-open.ts); everything else must still 404.
-          SMOKE_PRODUCT_FAIL_OPEN: warn
         run: npm run e2e
 
       - name: upload Playwright report

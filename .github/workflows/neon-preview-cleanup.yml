@@ -5,8 +5,8 @@ name: Neon preview cleanup
 # deletes those branches; the rules (never main, preview/develop, a default / protected branch, a branch with children,
 # a branch an open PR still uses, or a branch without the preview/ prefix) live in scripts/neon-cleanup.mjs.
 #
-# pull_request closed: delete preview/<head_ref> of that PR. The workflow file comes from the base branch, and the
-# job checks out the base branch too (never the PR's code), because it holds NEON_API_KEY.
+# pull_request closed: delete preview/<head_ref> of that PR. The job checks out the default branch (never the PR's
+# code), because it holds NEON_API_KEY.
 # schedule / workflow_dispatch: sweep every preview/* whose PR is closed or that no open PR uses.
 on:
   pull_request:
@@ -30,15 +30,21 @@ concurrency:
 
 jobs:
   cleanup:
-    # A fork's PR gets no secrets, and its branch name is not ours to clean.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    # A fork's PR gets no secrets, and its branch name is not ours to clean. A release PR (develop → production) has
+    # head develop, whose Neon branch preview/develop is the Dev database: nothing to clean, so the job does not run
+    # (NS-112; the script refuses preview/develop too).
+    if: >-
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       github.event.pull_request.head.ref != 'develop')
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # The default branch on schedule / dispatch, the PR's base on pull_request: never the PR head.
-          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          # Always the default branch (develop): never the PR head, and never the PR's base, which for a PR into
+          # production is a commit that may predate scripts/neon-cleanup.mjs (NS-112).
+          ref: ${{ github.event.repository.default_branch }}
           persist-credentials: false
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

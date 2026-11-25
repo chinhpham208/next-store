@@ -4,7 +4,6 @@ import { expect, test } from './test'
 import { BROKEN_DB_LOG, BROKEN_DB_URL, HUNG_DB_LOG, HUNG_DB_URL } from '../playwright.config'
 import { expectNoSeriousA11yViolations } from './axe'
 import { VIEWPORT_INDEPENDENT } from './catalog'
-import { getUnknownProduct } from './product-fail-open'
 
 const NOT_FOUND_TITLE = 'Không tìm thấy trang · next-store'
 const PRERENDERED_SLUG = 'ao-git-push-force'
@@ -72,10 +71,10 @@ test('US-05: trang 404 không có lỗi a11y serious / critical', async ({ page 
 test.describe('HTTP', () => {
   test.skip(({ isMobile }) => isMobile, VIEWPORT_INDEPENDENT)
 
-  // On Production a fail-open (200) of the lookup is only a warning (NS-79, e2e/product-fail-open.ts).
+  // The proxy answers from the static registry (ADR-0017), so this holds in every environment, Production included.
   test('US-05: slug chưa từng được mở vẫn trả 404 ngay lần đầu', async ({ request }) => {
-    const response = await getUnknownProduct(request, `/products/${freshSlug()}`)
-    if (!response) return
+    const response = await request.get(`/products/${freshSlug()}`)
+    expect(response.status()).toBe(404)
     const html = await response.text()
     expect(html.match(/<title>[^<]*<\/title>/g)).toEqual([`<title>${NOT_FOUND_TITLE}</title>`])
     expect(html).toContain('Xem tất cả sản phẩm')
@@ -92,7 +91,8 @@ test.describe('HTTP', () => {
     ['segment prefetch', '.segments/_tree.segment.rsc', { RSC: '1' }, false],
   ] as const) {
     test(`US-05: dạng vận chuyển ${form} của slug lạ trả 404 ngay lần đầu`, async ({ request }) => {
-      await getUnknownProduct(request, `/products/${freshSlug()}${suffix}`, { headers })
+      const unknown = await request.get(`/products/${freshSlug()}${suffix}`, { headers })
+      expect(unknown.status(), 'slug lạ').toBe(404)
       if (!knownServes) return
       const known = await request.get(`/products/${PRERENDERED_SLUG}${suffix}`, { headers })
       expect(known.status(), 'slug có thật').toBe(200)
@@ -150,11 +150,13 @@ test.describe('DB không đọc được', () => {
     expectCleanLog(BROKEN_DB_LOG, 'cart: cart count unavailable')
   })
 
-  // NS-109: an unknown slug is answered from the cached list of catalogue slugs, which the prerendered shell of
-  // /products/[slug] carries from the build, so with the database down it still gets the not-found UI (no query, no
-  // hang) instead of the error page. The error page itself is covered by /products and ?q= below.
+  // ADR-0017: the proxy answers an unknown slug from the static registry, before the page, so with the database down
+  // it still gets a real 404 and the not-found UI (no query, no hang) instead of the error page. Behind the proxy the
+  // page's own guard (the cached list of catalogue slugs, NS-109) would answer the same. The error page itself is
+  // covered by /products and ?q= below.
   test('US-05: DB chết thì slug lạ vẫn hiện trang không tìm thấy, không treo', async ({ page }) => {
-    await page.goto(`${BROKEN_DB_URL}/products/${freshSlug()}`, { timeout: 15_000 })
+    const response = await page.goto(`${BROKEN_DB_URL}/products/${freshSlug()}`, { timeout: 15_000 })
+    expect(response?.status()).toBe(404)
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Không tìm thấy trang', { timeout: 15_000 })
     await expect(page.getByRole('heading', { level: 1, name: 'Đã có lỗi xảy ra' })).toHaveCount(0)
   })

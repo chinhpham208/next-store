@@ -1,6 +1,6 @@
 # ADR-0014: Giỏ hàng lưu trong DB, cookie chỉ giữ id giỏ
 
-- Trạng thái: Đã chấp nhận (chủ dự án duyệt 2026-11-23, PR #66)
+- Trạng thái: Đã chấp nhận (chủ dự án duyệt 2026-11-23, PR #66); bổ sung bởi [ADR-0019](./0019-product-edits-and-cache-tags.md) (đề xuất, M5: mục Hệ quả "Xoá cứng sản phẩm…" (NS-101) chốt là **ẩn** bằng `archived_at`, trang chi tiết của sản phẩm ẩn vẫn 200 + `noindex`; giá trong giỏ vẫn là giá hiện tại, không báo "Giá đã đổi")
 - Ngày: 2026-11-23
 - Quyết định của chủ dự án: 2026-11-23 (plan M4, Cổng 1, quyết định 1, 2, 3, 4, 5, 6, 7, 9, 10, 11)
 - Bổ sung: [ADR-0003](./0003-cache-strategy.md) (gạch đầu dòng "Blog: tĩnh hoàn toàn lúc build"), [ADR-0012](./0012-blog-static-registry.md) (mục Cache: blog vẫn prerender nhưng header có một lỗ động), [ADR-0009](./0009-product-404-in-proxy.md) (proxy bỏ qua request không phải `GET` / `HEAD`)

@@ -58,6 +58,19 @@ module.exports = {
       },
     },
     {
+      name: 'proxy-no-db',
+      severity: 'error',
+      comment:
+        'The proxy answers product and blog slugs from static registries (ADR-0012, ADR-0017, NS-79): on Vercel it ' +
+        'runs at the edge nearest the visitor, far from the database, so it must never reach @/db or a driver, not ' +
+        'even transitively.',
+      from: { path: '^src/proxy\\.ts$' },
+      to: {
+        path: '^(src/db/|node_modules/(postgres|pg|@neondatabase/serverless|@electric-sql/pglite|drizzle-orm)/)',
+        reachable: true,
+      },
+    },
+    {
       name: 'db-public-api-only',
       severity: 'error',
       comment:

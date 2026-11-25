@@ -3,7 +3,6 @@ import { createServer, type Server } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import type { BrowserContext, Page } from '@playwright/test'
 import { VIEWPORT_INDEPENDENT } from './catalog'
-import { FAIL_OPEN_ANNOTATION, getUnknownProduct, productFailOpenTolerated } from './product-fail-open'
 import { grepInvertFor, isProductionUrl, PRODUCTION_ORIGINS } from './production'
 import { expect, guardContext, READ_ONLY_MESSAGE, readOnlyRequest, test, withWriteGuard } from './test'
 
@@ -21,10 +20,6 @@ const received: string[] = []
 test.beforeAll(async () => {
   server = createServer((request, response) => {
     received.push(`${request.method} ${request.url}`)
-    // For the NS-79 helper: a product slug that fails open (200) or gets its 404.
-    if (request.url === '/products/fail-open') return void response.writeHead(200).end('vỏ trang')
-    if (request.url === '/products/khong-co') return void response.writeHead(404).end('Không tìm thấy trang')
-    if (request.url === '/products/loi') return void response.writeHead(500).end('lỗi')
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end('<!doctype html><title>guard</title>')
   })
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
@@ -75,42 +70,6 @@ test('bỏ qua test gắn @ghi trên Production', () => {
   expect(grepInvertFor('https://next-store-iota-silk.vercel.app')?.test('thêm vào giỏ @ghi')).toBe(true)
   expect(grepInvertFor('https://next-store-iota-silk.vercel.app')?.test('US-01: trang chủ hiện 6 sản phẩm')).toBe(false)
   expect(grepInvertFor('http://localhost:3100')).toBeUndefined()
-})
-
-test('NS-79: fail-open của slug sản phẩm chỉ được bỏ qua khi có cờ warn và BASE_URL là Production', () => {
-  expect(productFailOpenTolerated(PRODUCTION, 'warn')).toBe(true)
-  expect(productFailOpenTolerated(`${PRODUCTION}/`, 'warn')).toBe(true)
-  for (const [url, flag] of [
-    [PRODUCTION, undefined],
-    [PRODUCTION, ''],
-    ['https://next-store-dev-ginpham.vercel.app', 'warn'],
-    ['https://next-store-abc-chinhpham208s-projects.vercel.app', 'warn'],
-    ['http://localhost:3100', 'warn'],
-    [undefined, 'warn'],
-  ] as const)
-    expect(productFailOpenTolerated(url, flag), `${url} ${flag}`).toBe(false)
-  expect(() => productFailOpenTolerated(PRODUCTION, 'yes')).toThrow('SMOKE_PRODUCT_FAIL_OPEN không hợp lệ')
-})
-
-test('NS-79: getUnknownProduct cảnh báo khi được bỏ qua, đỏ khi không', async ({ request }) => {
-  const annotations = test.info().annotations
-  expect(await getUnknownProduct(request, `${local}/products/fail-open`, undefined, true)).toBeUndefined()
-  expect(annotations.filter((entry) => entry.type === FAIL_OPEN_ANNOTATION)).toEqual([
-    {
-      type: FAIL_OPEN_ANNOTATION,
-      description: expect.stringMatching(
-        /^GET .*\/products\/fail-open trả 200 sau \d+ ms: lookup DB của proxy fail-open \(SMOKE_PRODUCT_FAIL_OPEN=warn, NS-79\)$/,
-      ),
-    },
-  ])
-  annotations.length = 0
-  // A 404 is returned for the caller to check, tolerated or not.
-  for (const tolerated of [true, false])
-    expect((await getUnknownProduct(request, `${local}/products/khong-co`, undefined, tolerated))?.status()).toBe(404)
-  // Without the tolerance a 200 fails; with it, any status other than 200 / 404 still fails.
-  await expect(getUnknownProduct(request, `${local}/products/fail-open`, undefined, false)).rejects.toThrow(/404/)
-  await expect(getUnknownProduct(request, `${local}/products/loi`, undefined, true)).rejects.toThrow(/404/)
-  expect(annotations).toEqual([])
 })
 
 test.describe('bộ chặn ghi ở chế độ Production (server local)', () => {
