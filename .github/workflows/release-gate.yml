@@ -1,0 +1,75 @@
+name: Release gate
+
+# NS-111: smoke before a release reaches Production. Runs on every PR into `production`; scripts/pr-gate.sh requires the
+# check-run `release-smoke` = success for such a PR, and the owner's Gate 3 is asked only after that (docs/process.md).
+#
+# Two smokes, both with SMOKE_PRODUCT_FAIL_OPEN=warn exactly as production-e2e.yml runs smoke on Production:
+#   1. Dev: the Vercel deployment of the PR's head commit (the tip of `develop`), with the bypass secret and
+#      SMOKE_ROBOTS=disallow like preview-e2e.yml.
+#   2. Forced fail-open: a local `next start` of the same commit whose every query waits 600 ms (e2e/far-db.mjs), so
+#      the proxy's slug lookup always fails open, as on Production from GitHub's US runners. On Dev the lookup answers in
+#      time (every e2e-preview run of v0.4.0 / v0.4.1 got its 404 in ~300 ms), so smoke there never reached the
+#      fail-open path where the OG 500 of v0.4.0 (NS-109) and the 405 of v0.4.1 (NS-110) lived. Step 2 reproduces the
+#      OG 500 of v0.4.0 (measured on 6eb7bf8, NS-111 PR).
+on:
+  pull_request:
+    branches: [production]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  deployments: read
+
+concurrency:
+  group: release-gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  release-smoke:
+    # A fork's PR gets no secrets; it is never a release. Skipped is not a pass for scripts/pr-gate.sh.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      # Checks the creator, environment and URL allowlist before anything touches the bypass secret.
+      - name: wait for the Dev deployment of the head commit
+        id: dev
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WAIT_DEPLOY_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          url=$(bash scripts/wait-vercel-deploy.sh "$HEAD_SHA")
+          echo "base_url=$url" >> "$GITHUB_OUTPUT"
+          echo "BASE_URL=$url"
+
+      - name: smoke on Dev
+        env:
+          BASE_URL: ${{ steps.dev.outputs.base_url }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          # Not Production: robots.txt must block crawling (owner decision 15, NS-65), as in preview-e2e.yml.
+          SMOKE_ROBOTS: disallow
+          # Same flag as production-e2e.yml (NS-79).
+          SMOKE_PRODUCT_FAIL_OPEN: warn
+        run: npm run smoke
+
+      # No secret from here on. PGlite, as in ci.yml: no DATABASE_URL.
+      - name: build
+        run: npm run build
+
+      - name: smoke with the proxy lookup failing open
+        run: bash scripts/smoke-fail-open.sh
+
+      # Smoke uploads no artifact (no Playwright report), so scripts/redact-report.mjs has nothing to check here.

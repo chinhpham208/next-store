@@ -118,7 +118,8 @@ gh api repos/chinhpham208/next-store/commits/<sha>/check-runs \
 
 - **Qua** khi có ít nhất một check `e2e-preview` với `conclusion == "success"` trên đúng SHA. Các lần `skipped` (trạng thái deployment khác `success`) không tính.
 - **Không có check `e2e-preview` nào = chưa qua**, không phải "không áp dụng": có thể Vercel chưa deploy xong, sự kiện không tới, hoặc bước kiểm URL đã chặn.
-- **Không** đặt `e2e-preview` làm required check: check này chỉ xuất hiện sau khi Vercel deploy thành công (không có khi deploy lỗi hay khi sự kiện bị tắt), nên required check sẽ treo PR. Orchestrator tự kiểm theo hai quy tắc trên trước khi merge.
+- **Deploy lỗi thì chỉ có `e2e-preview` skipped** (job chỉ chạy khi deployment `success`): đó là chưa qua. #87 và #89 được merge vì skipped bị coi như qua (NS-111). Commit status `Vercel` cho biết deploy có thành công không.
+- Orchestrator không đọc tay các quy tắc trên: trước mọi merge chạy `bash scripts/pr-gate.sh <số PR>` (chờ mọi check xong; cần `Vercel`, `check`, `e2e-preview` = success, PR release cần thêm `release-smoke`; `docs/process.md` §2, "Cổng merge"). Có GitHub Pro thì có thể thêm ruleset (`docs/process.md` §8); PR treo khi deploy lỗi là đúng ý.
 
 - Chạy từ sự kiện `deployment_status`: GitHub đọc workflow từ chính commit được deploy, nên PR sửa workflow này được kiểm bằng bản của chính nó.
 - Cần bật Vercel → Project → Settings → Git → **deployment_status Events** (bật ngày 2026-11-20, PR #23). Tắt thì Vercel chỉ gửi commit status `Vercel`, không có sự kiện nào và check `e2e-preview` không xuất hiện.

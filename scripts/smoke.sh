@@ -4,7 +4,9 @@
 # tham số không hợp lệ; nút "Thêm vào giỏ" dùng được ở sản phẩm còn hàng, vô hiệu ở sản phẩm hết hàng, trang chủ không
 # Set-Cookie; /cart không cookie trả 200, giỏ trống, noindex; /blog và một bài blog trả 200 và có nội dung; slug sản phẩm, slug bài và ảnh OG của slug
 # lạ trả 404 ngay lần đầu, bài và sản phẩm có thật vẫn 200 ở mọi dạng vận chuyển; /sitemap.xml và /robots.txt trả 200, cùng một origin tuyệt đối, robots.txt chặn hay cho crawl đúng môi trường;
-# trang chủ có og:site_name; og:image của trang chủ, một sản phẩm và một bài blog tải được, là PNG.
+# trang chủ có og:site_name; og:image của trang chủ, một sản phẩm và một bài blog tải được, là PNG; header bảo mật
+# của next.config.ts (X-Frame-Options, CSP frame-ancestors, X-Content-Type-Options, Referrer-Policy) có trên trang
+# chủ, trang sản phẩm, trang 404, 404 do proxy rewrite, ảnh OG, /sitemap.xml và /robots.txt.
 #
 #   npm run smoke                                   # chạy `next start` từ bản build hiện có (.next/), kiểm rồi tắt
 #   BASE_URL=https://<deploy>.vercel.app npm run smoke   # kiểm một URL đã deploy
@@ -17,10 +19,11 @@
 #   SMOKE_ROBOTS                     disallow = robots.txt phải `Disallow: /` (Preview / Dev; workflow e2e-preview đặt),
 #                                    allow = phải `Allow: /` (Production). Bỏ trống: chấp nhận một trong hai, in ra
 #                                    (next start: build ngoài Vercel là disallow). Header X-Robots-Tag luôn chỉ được in
-#   SMOKE_PRODUCT_FAIL_OPEN          warn = slug sản phẩm lạ đúng dạng (cần lookup DB trong proxy) trả 200 thì chỉ in
+#   SMOKE_PRODUCT_FAIL_OPEN          warn = slug sản phẩm lạ đúng dạng (cần lookup DB trong proxy) trả 200 (405 cho
+#                                    POST / PUT, 307 cho request `rsc: 1` dưới next start) thì chỉ in
 #                                    ::warning:: kèm thời gian, không fail; áp cho warm-up và mọi dạng (slug mới, RSC,
-#                                    .rsc, segment, ảnh OG sản phẩm). Chỉ workflow Production E2E đặt (NS-79: proxy chạy
-#                                    ở edge gần người gọi, xa Neon, ADR-0009). Slug sai dạng, blog, ảnh OG của bài không
+#                                    .rsc, segment, ảnh OG sản phẩm). Workflow Production E2E và release-smoke đặt (NS-79: proxy chạy
+#                                    ở edge gần người gọi, xa Neon, ADR-0009; NS-111). Slug sai dạng, blog, ảnh OG của bài không
 #                                    chạm DB nên vẫn phải 404. Bỏ trống (mặc định, Preview / CI): fail-open là lỗi
 #   VERCEL_AUTOMATION_BYPASS_SECRET  có thì gửi header x-vercel-protection-bypass (vượt Deployment Protection),
 #                                    chỉ khi BASE_URL là https://
@@ -297,6 +300,29 @@ echo "smoke: GET $POST_PATH → 200, có <h1 và <article"
 # tag is the site URL read at build time (localhost:3000 under next start, K6). A route that built but reads uncached
 # IO answers 500 here (K8). The value comes from the page, so it is reduced to a URL path before it reaches curl.
 # The path is kept in OG_PATH: the 404 checks below swap its slug for an unknown one.
+# NS-108: the security headers of next.config.ts. Vercel serves custom `headers()` as they are and adds none of these
+# itself, so the exact value is checked on every environment. Every checked path is collected and printed once.
+SECURITY_HEADERS=(
+  "x-frame-options: DENY"
+  "content-security-policy: frame-ancestors 'none'"
+  "x-content-type-options: nosniff"
+  "referrer-policy: strict-origin-when-cross-origin"
+)
+SECURITY_CHECKED=()
+expect_security_headers() { # expect_security_headers <path> <response-headers-file>
+  local path=$1 file=$2 expected name value
+  for expected in "${SECURITY_HEADERS[@]}"; do
+    name=${expected%%: *}
+    # Case-insensitive name, last value wins (a redirect leaves several header blocks in the dump).
+    value=$(tr -d '\r' < "$file" | awk -v n="$name" 'tolower(substr($0, 1, length(n) + 1)) == n ":" { v = substr($0, length(n) + 2); sub(/^ +/, "", v) } END { print v }')
+    [ "$value" = "${expected#*: }" ] || fail "GET $path thiếu header $name (cần \"${expected#*: }\")"
+  done
+  SECURITY_CHECKED+=("$path")
+}
+expect_security_headers / "$TMP/home.headers"
+expect_security_headers /robots.txt "$TMP/robots.headers"
+expect_security_headers /sitemap.xml "$TMP/sitemap.headers"
+
 OG_PATH=
 expect_og_image() { # expect_og_image <page path> <html file>
   local page=$1 html=$2 url path status type
@@ -308,6 +334,7 @@ expect_og_image() { # expect_og_image <page path> <html file>
   [ "$status" = 200 ] || fail "GET $path (og:image của $page) trả $status, cần 200"
   type=$(tr -d '\r' < "$TMP/og.headers" | sed -n 's/^[Cc]ontent-[Tt]ype: *//p' | tail -n 1)
   [ "$type" = image/png ] || fail "GET $path (og:image của $page) có content-type \"$type\", cần image/png"
+  expect_security_headers "$path" "$TMP/og.headers"
   echo "smoke: og:image của $page → GET $path → 200, image/png"
   OG_PATH=$path
 }
@@ -316,6 +343,13 @@ expect_og_image "$DETAIL_PATH" "$TMP/detail.html"
 DETAIL_OG_PATH=$OG_PATH
 expect_og_image "$POST_PATH" "$TMP/post.html"
 POST_OG_PATH=$OG_PATH
+# The 404 page, and the proxy's rewrite to it for an unknown slug: a blog slug, so the answer never depends on the
+# database lookup failing open (NS-79). A product page goes through the proxy and is let through.
+for SECURITY_PATH in /khong-ton-tai "/blog/smoke-headers-$RUN_ID" "$DETAIL_PATH"; do
+  fetch "$BASE$SECURITY_PATH" "$TMP/security-body" '' "$TMP/security.headers" > /dev/null || fail "không kết nối được $BASE$SECURITY_PATH"
+  expect_security_headers "$SECURITY_PATH" "$TMP/security.headers"
+done
+echo "smoke: header bảo mật có trên ${SECURITY_CHECKED[*]}"
 [[ $DETAIL_OG_PATH == "$DETAIL_PATH/opengraph-image"* ]] || fail "og:image của $DETAIL_PATH không nằm dưới $DETAIL_PATH/opengraph-image"
 [[ $POST_OG_PATH == "$POST_PATH/opengraph-image"* ]] || fail "og:image của $POST_PATH không nằm dưới $POST_PATH/opengraph-image"
 
@@ -334,9 +368,11 @@ expect_404() { check_404 '' "$@"; } # expect_404 <path> <label> [header] [method
 expect_product_404() { check_404 product "$@"; } # expect_product_404 <path> <label> [header] [method]: slug đi qua lookup DB
 # A fail-open GET renders the page (200). A fail-open POST without next-action or PUT reaches the prerendered page,
 # and Next answers 405 without rendering, caching or querying (NS-110), so 405 counts as fail-open for those methods.
-product_fail_open_warned() { # product_fail_open_warned <status> <message> [method]: 0 = cảnh báo thay cho lỗi
+# Under `next start` (scripts/smoke-fail-open.sh) a fail-open RSC request (`rsc: 1`) answers 307 to <path>?_rsc where
+# Vercel answers 200 (NS-111), so 307 counts as fail-open for that request only.
+product_fail_open_warned() { # product_fail_open_warned <status> <message> [method] [header]: 0 = cảnh báo thay cho lỗi
   [ "${SMOKE_PRODUCT_FAIL_OPEN:-}" = warn ] || return 1
-  [ "$1" = 200 ] || { [ "$1" = 405 ] && [ "${3:-GET}" != GET ]; } || return 1
+  [ "$1" = 200 ] || { [ "$1" = 405 ] && [ "${3:-GET}" != GET ]; } || { [ "$1" = 307 ] && [ "${4:-}" = 'rsc: 1' ]; } || return 1
   # A workflow command on purpose: visible on the run summary, not only in the log.
   echo "::warning::smoke: $2 sau $(last_time_ms): lookup DB của proxy fail-open (SMOKE_PRODUCT_FAIL_OPEN=warn, NS-79)"
   PRODUCT_FAIL_OPEN_COUNT=$((PRODUCT_FAIL_OPEN_COUNT + 1))
@@ -344,7 +380,7 @@ product_fail_open_warned() { # product_fail_open_warned <status> <message> [meth
 check_404() { # check_404 <kind> <path> <label> [header] [method]
   local kind=$1 path=$2 label=$3 header=${4:-} method=${5:-GET} status
   status=$(fetch "$BASE$path" "$TMP/not-found" "$header" /dev/null "$method") || fail "không kết nối được $BASE$path"
-  if [ "$kind" = product ] && product_fail_open_warned "$status" "$method $path ($label) trả $status" "$method"; then return 0; fi
+  if [ "$kind" = product ] && product_fail_open_warned "$status" "$method $path ($label) trả $status" "$method" "$header"; then return 0; fi
   if [ "$status" != 404 ]; then
     echo "smoke: LỖI: $method $path ($label) trả $status ngay lần đầu, cần 404" >&2
     NOT_FOUND_FAILED=1
