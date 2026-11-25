@@ -27,8 +27,8 @@ export const HUNG_DB_URL = `http://localhost:${HUNG_DB_PORT}`
 // Server output of the two, read by the NS-55 specs: no SQL, params or host:port may reach it.
 export const BROKEN_DB_LOG = '.verify/e2e-broken-db.log'
 export const HUNG_DB_LOG = '.verify/e2e-hung-db.log'
-// Fifth server of the same build whose every query first waits like a far database (e2e/far-db.mjs, NS-109): the
-// proxy's slug lookup fails open on every unknown product slug, as on Production from a far edge (NS-79).
+// Fifth server of the same build whose every query first waits like a far database (e2e/far-db.mjs, NS-109), as Neon
+// seen from a far Vercel edge: the proxy must still answer an unknown product slug at once (ADR-0017, NS-79).
 export const FAR_DB_URL = `http://localhost:${FAR_DB_PORT}`
 export const FAR_DB_LOG = '.verify/e2e-far-db.log'
 // PGlite has no cross-process lock (next.config.ts): two servers on one data directory corrupt it, so this server

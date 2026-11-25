@@ -91,7 +91,7 @@ BASE_URL=https://next-store-dev-ginpham.vercel.app npm run smoke
 BASE_URL=https://<url-preview> npm run smoke
 ```
 
-URL preview của từng deploy có thể bị Vercel Deployment Protection chặn (trang đăng nhập Vercel); khi đó cần `VERCEL_AUTOMATION_BYPASS_SECRET` (script gửi header `x-vercel-protection-bypass`, không in giá trị). Thiếu secret, smoke báo rõ là bị Deployment Protection chặn. `SMOKE_TEXT` đổi chuỗi cần có trên trang chủ. `SMOKE_ROBOTS=disallow` bắt buộc `robots.txt` có `Disallow: /` (workflow `e2e-preview` luôn đặt), `SMOKE_ROBOTS=allow` bắt buộc `Allow: /` (khi kiểm Production); bỏ trống thì chấp nhận một trong hai và in ra. `SMOKE_PRODUCT_FAIL_OPEN=warn` (chỉ workflow `Production E2E` đặt) biến slug sản phẩm lạ đúng dạng trả 200 (lookup DB của proxy fail-open, NS-79) thành `::warning::` kèm thời gian thay vì lỗi; slug sai dạng, slug bài và ảnh OG của bài vẫn phải 404. Header `X-Robots-Tag` của `/`, `/robots.txt`, `/sitemap.xml` luôn được in, không bắt buộc.
+URL preview của từng deploy có thể bị Vercel Deployment Protection chặn (trang đăng nhập Vercel); khi đó cần `VERCEL_AUTOMATION_BYPASS_SECRET` (script gửi header `x-vercel-protection-bypass`, không in giá trị). Thiếu secret, smoke báo rõ là bị Deployment Protection chặn. `SMOKE_TEXT` đổi chuỗi cần có trên trang chủ. `SMOKE_ROBOTS=disallow` bắt buộc `robots.txt` có `Disallow: /` (workflow `e2e-preview` luôn đặt), `SMOKE_ROBOTS=allow` bắt buộc `Allow: /` (khi kiểm Production); bỏ trống thì chấp nhận một trong hai và in ra. Slug sản phẩm lạ (mọi dạng: trang, RSC, `.rsc`, segment, ảnh OG, `POST` không `next-action`, `PUT`) phải 404 ngay lần đầu ở mọi môi trường, kể cả Production: proxy đối chiếu registry slug tĩnh, không tra DB ([ADR-0017](./docs/adr/0017-product-slug-registry-in-proxy.md), NS-79). Cờ `SMOKE_PRODUCT_FAIL_OPEN` cũ đã bỏ: đặt nó (giá trị nào cũng vậy) thì smoke dừng với lỗi trước mọi request. Header `X-Robots-Tag` của `/`, `/robots.txt`, `/sitemap.xml` luôn được in, không bắt buộc.
 
 E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMATION_BYPASS_SECRET`. Header bypass chỉ được gửi khi `BASE_URL` là `https://` và không phải Production, và chỉ tới **đúng origin** của `BASE_URL` (NS-54, `e2e/bypass.ts`); không dùng `extraHTTPHeaders`:
 
@@ -103,7 +103,7 @@ E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMA
 
 Khi bypass bật, trace luôn tắt vì trace ghi lại mọi header. `playwright.config.ts` đặt `trace: 'off'`; nếu spec bật lại bằng `test.use({ trace })` hoặc chạy với `--trace`, fixture cho test đỏ trước khi gửi request. ESLint cũng cấm `trace` khác `'off'` trong `test.use` của spec.
 
-Không có `BASE_URL`, `npm run e2e` tự chạy bốn `next start` từ cùng bản build: cổng 3100; cổng 3101 với `DATABASE_URL` trỏ vào cổng đóng (trang lỗi của US-05); cổng 3102 với `DATABASE_URL` trỏ vào một listener TCP im lặng ở cổng 3103 và `DB_QUERY_TIMEOUT_MS=1000` (DB treo, NS-55); cổng 3104 nạp `e2e/far-db.mjs` (mỗi truy vấn PGlite chờ 600 ms như Neon nhìn từ edge xa, nên lookup slug của proxy fail-open, NS-109) và đọc bản sao `.data/pglite` ở `.verify/e2e-far-db-pglite` (PGlite không khoá giữa các tiến trình). Log của ba server này ghi vào `.verify/e2e-broken-db.log`, `.verify/e2e-hung-db.log`, `.verify/e2e-far-db.log`. Các nhóm test này bỏ qua khi có `BASE_URL`. `E2E_PORT=<n>` dời năm cổng sang `n` … `n+4`. `scripts/verify.sh` đọc `E2E_PORT` và `SMOKE_PORT`; chỉ đặt một biến thì biến kia lấy cùng giá trị. Nó chỉ tắt tiến trình do chính nó khởi động; cổng bận bởi tiến trình khác thì dừng với lỗi.
+Không có `BASE_URL`, `npm run e2e` tự chạy bốn `next start` từ cùng bản build: cổng 3100; cổng 3101 với `DATABASE_URL` trỏ vào cổng đóng (trang lỗi của US-05); cổng 3102 với `DATABASE_URL` trỏ vào một listener TCP im lặng ở cổng 3103 và `DB_QUERY_TIMEOUT_MS=1000` (DB treo, NS-55); cổng 3104 nạp `e2e/far-db.mjs` (mỗi truy vấn PGlite chờ 600 ms như Neon nhìn từ edge xa, NS-109: proxy vẫn phải trả 404 cho slug sản phẩm lạ ngay, không chờ DB, ADR-0017) và đọc bản sao `.data/pglite` ở `.verify/e2e-far-db-pglite` (PGlite không khoá giữa các tiến trình). Log của ba server này ghi vào `.verify/e2e-broken-db.log`, `.verify/e2e-hung-db.log`, `.verify/e2e-far-db.log`. Các nhóm test này bỏ qua khi có `BASE_URL`. `E2E_PORT=<n>` dời năm cổng sang `n` … `n+4`. `scripts/verify.sh` đọc `E2E_PORT` và `SMOKE_PORT`; chỉ đặt một biến thì biến kia lấy cùng giá trị. Nó chỉ tắt tiến trình do chính nó khởi động; cổng bận bởi tiến trình khác thì dừng với lỗi.
 
 ### Tự chạy sau mỗi deploy: check `e2e-preview`
 
@@ -130,7 +130,7 @@ gh api repos/chinhpham208/next-store/commits/<sha>/check-runs \
 
 ### Sau release: workflow `Production E2E`
 
-Workflow `Production E2E` (`.github/workflows/production-e2e.yml`, M3 Task 17) chạy smoke (`SMOKE_ROBOTS=allow`: Production phải `Allow: /`; `SMOKE_PRODUCT_FAIL_OPEN=warn`: slug sản phẩm lạ fail-open chỉ cảnh báo, NS-79) rồi toàn bộ E2E trên `https://next-store-iota-silk.vercel.app`. Bước E2E đặt cùng cờ: slug sản phẩm lạ đúng dạng (trang, RSC, `.rsc`, segment, ảnh OG) trả 200 thì test thêm annotation `warning` kèm thời gian thay vì đỏ (`e2e/product-fail-open.ts`, NS-100); cờ chỉ có tác dụng khi `BASE_URL` là Production, các ca không chạm DB vẫn phải 404:
+Workflow `Production E2E` (`.github/workflows/production-e2e.yml`, M3 Task 17) chạy smoke (`SMOKE_ROBOTS=allow`: Production phải `Allow: /`) rồi toàn bộ E2E trên `https://next-store-iota-silk.vercel.app`. Không còn cờ nào cho slug sản phẩm lạ: chúng phải 404 ngay lần đầu như mọi môi trường khác (ADR-0017, NS-79), và E2E chỉ đọc `catalog: sitemap và registry slug khớp nhau` (`e2e/catalog.spec.ts`) kiểm DB Production khớp registry slug sau mỗi release:
 
 - Tự chạy khi Vercel báo một deployment thành công có environment đúng bằng `Production` (deployment và status đều do `vercel[bot]` tạo). Vercel gửi `ref` là SHA của commit, không phải tên nhánh, nên workflow kiểm commit đã deploy nằm trên nhánh `production` (`git merge-base --is-ancestor`, NS-78); test lấy từ commit đó. Bản preview được "Promote to Production" hay `vercel --prod` từ nhánh khác làm job đỏ ở bước kiểm này; khi đó dispatch tay. Sau release không thấy lần chạy nào (ví dụ Vercel đổi tên environment) cũng dispatch tay. Chạy tay: `gh api -X POST repos/chinhpham208/next-store/actions/workflows/production-e2e.yml/dispatches -f ref=production` (test lấy từ nhánh `production`).
 - URL ghi cứng trong workflow và `e2e/production.ts`, không lấy từ sự kiện. Không dùng secret nào (Production là domain custom, không có Deployment Protection, nên không gửi header bypass), không `DATABASE_URL`, không `npm run build`, không lệnh `db:*`.
@@ -166,7 +166,19 @@ less "$SEED_SQL"                       # đọc lướt trước khi dán: begin
 3. Kiểm: `select (select count(*) from public.categories) as categories, (select count(*) from public.products) as products;` phải ra 4 danh mục, 24 sản phẩm.
 4. Xoá file: `rm -f "$SEED_SQL"`.
 
-Câu lệnh dùng `on conflict (slug) do nothing`: chỉ thêm dòng còn thiếu theo slug, không bao giờ ghi đè dòng đã có. Dù vậy, **không** chạy lại trên production sau khi admin đã sửa dữ liệu (từ M5), trừ khi chủ dự án yêu cầu: sản phẩm admin đã xoá sẽ bị thêm lại.
+**Thêm hoặc bỏ một sản phẩm** ([ADR-0017](./docs/adr/0017-product-slug-registry-in-proxy.md)): proxy trả 404 cho mọi slug không có trong registry `src/features/products/catalog-slugs.ts`, không tra DB. Vì vậy:
+
+**Thêm** sản phẩm: DB trước, registry sau (một dòng DB chưa có trong registry vô hại: proxy vẫn 404 slug đó).
+
+1. Một PR sửa `PRODUCT_SEEDS` (`src/db/seed-data.ts`), sửa `PRODUCT_SLUGS` (`catalog-slugs.ts`, cùng thứ tự), thêm ảnh vào repo. Vitest `PRODUCT_SLUGS equals the seed slugs` đỏ nếu hai file lệch nhau. Merge vào `develop`.
+2. **Trước khi release**, chạy SQL seed trên Production như trên (bước 1–4), sinh từ nhánh `develop` đã merge: chỉ thêm dòng còn thiếu theo slug, không ghi đè dòng đã có (kể cả dòng admin đã sửa).
+3. Release. `Production E2E` tự chạy sau deploy; `catalog: sitemap và registry slug khớp nhau` phải xanh. Sitemap và danh sách slug lấy qua cache `hours`: nếu E2E đỏ vì sitemap chưa có slug mới, chạy lại workflow sau khoảng 1 giờ.
+
+**Bỏ** sản phẩm: ngược lại, registry trước, DB sau. Release bản đã bỏ slug khỏi `PRODUCT_SEEDS` / `PRODUCT_SLUGS` (trang của nó 404 ngay), rồi mới ẩn hoặc xoá dòng DB (M5 chọn ẩn, ADR-0019).
+
+Thêm sản phẩm bằng SQL Editor mà không qua PR thì trang của nó 404 (slug không có trong registry) và E2E `catalog` đỏ. Bỏ sản phẩm khỏi registry mà còn trong DB cũng vậy. Admin chỉ sửa tên, giá, mô tả, tồn kho (M5), không đổi tập slug.
+
+Câu lệnh dùng `on conflict (slug) do nothing`: chỉ thêm dòng còn thiếu theo slug, không bao giờ ghi đè dòng đã có. Vì vậy chạy lại khi thêm sản phẩm (ở trên) là an toàn với dữ liệu admin đã sửa. Chỉ cần cẩn thận khi sau này có xoá cứng: sản phẩm đã xoá khỏi DB mà còn trong `PRODUCT_SEEDS` sẽ bị thêm lại (M5 chọn ẩn, không xoá cứng).
 
 ## Role app
 

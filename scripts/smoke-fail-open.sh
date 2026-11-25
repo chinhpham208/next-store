@@ -1,23 +1,27 @@
 #!/usr/bin/env bash
-# Smoke với lookup DB của proxy luôn fail-open (NS-111), như Production nhìn từ runner GitHub ở Mỹ.
+# Smoke với DB ở xa (NS-111; đổi mục đích ở ADR-0017 / NS-79): DB chậm mà slug sản phẩm lạ vẫn 404 ngay.
 #
 #   npm run build && bash scripts/smoke-fail-open.sh
 #
-# Vì sao: lỗi OG 500 của v0.4.0 (NS-109) và 405 của v0.4.1 (NS-110) chỉ lộ khi lookup slug trong proxy quá 400 ms và
-# fail-open. Trên preview / Dev lookup xong kịp (404 sau ~300 ms trong mọi run e2e-preview đã xem), nên smoke ở đó
-# chưa bao giờ đi nhánh fail-open. Ở đây `next start` của bản build hiện có chạy với e2e/far-db.mjs (mỗi truy vấn chờ
-# 600 ms trước), trên một bản sao của PGlite đã seed, và smoke chạy như production-e2e (SMOKE_PRODUCT_FAIL_OPEN=warn).
-# Smoke qua mà không có cảnh báo warm-up fail-open thì lần chạy không chứng minh gì: cũng là lỗi.
+# Vì sao: tới v0.4.x proxy tra slug sản phẩm trong DB và fail-open khi quá 400 ms; trên Production (proxy chạy ở edge
+# gần runner GitHub ở Mỹ, xa Neon ở Singapore) slug lạ vì vậy trả 200, kéo theo OG 500 của v0.4.0 (NS-109) và 405 của
+# v0.4.1 (NS-110). Từ ADR-0017 proxy đối chiếu registry slug tĩnh, không chạm DB. Ở đây `next start` của bản build
+# hiện có chạy với e2e/far-db.mjs (mỗi truy vấn chờ 600 ms trước), trên một bản sao của PGlite đã seed, và smoke chạy
+# như trên Production, không cờ nào. Smoke phải qua, và mọi slug sản phẩm lạ phải 404 dưới SLOW_MS: một lần tra DB
+# đã tốn 600 ms, nên một ca chậm hơn nghĩa là proxy (hay trang 404) lại chờ DB.
 #
-# Không gửi request ra ngoài, không dùng secret: BASE_URL và VERCEL_AUTOMATION_BYPASS_SECRET bị bỏ.
-# Biến tuỳ chọn: SMOKE_PORT (như smoke.sh). Chỉ cho test: SMOKE_FAIL_OPEN_SMOKE, SMOKE_FAIL_OPEN_PGLITE.
+# Không gửi request ra ngoài, không dùng secret: BASE_URL, VERCEL_AUTOMATION_BYPASS_SECRET và SMOKE_PRODUCT_FAIL_OPEN
+# (đã bỏ) bị bỏ. Biến tuỳ chọn: SMOKE_PORT (như smoke.sh). Chỉ cho test: SMOKE_FAIL_OPEN_SMOKE, SMOKE_FAIL_OPEN_PGLITE.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SMOKE=${SMOKE_FAIL_OPEN_SMOKE:-scripts/smoke.sh}
 SOURCE_DB=${SMOKE_FAIL_OPEN_PGLITE:-.data/pglite}
-# Printed by smoke.sh when every warm-up slug answered 200 with SMOKE_PRODUCT_FAIL_OPEN=warn.
-PROOF='slug lạ warm-up đều trả 200'
+# Well under the 600 ms every query of e2e/far-db.mjs waits.
+SLOW_MS=450  # dưới 600 ms của far-db: một lần chờ DB vẫn vượt ngưỡng; chừa chỗ cho runner GitHub chậm (review PR #100 L1)
+# Printed by smoke.sh for every unknown product slug that got its 404: `smoke: <method> /products/… (<label>) → 404, N ms`.
+PRODUCT_404='^smoke: [A-Z]+ /products/[^ ]+ \(.*\) → 404, [0-9]+ ms$'
+FIRST='(slug sản phẩm lạ đầu tiên) → 404'
 
 [ -d "$SOURCE_DB" ] || { echo "smoke-fail-open: LỖI: chưa có $SOURCE_DB (chạy npm run build trước)" >&2; exit 1; }
 
@@ -27,16 +31,25 @@ trap 'rm -rf "$TMP"' EXIT
 cp -R "$SOURCE_DB" "$TMP/pglite"
 
 code=0
-env -u BASE_URL -u VERCEL_AUTOMATION_BYPASS_SECRET \
-  NODE_OPTIONS='--import ./e2e/far-db.mjs' PGLITE_DATA_DIR="$TMP/pglite" SMOKE_PRODUCT_FAIL_OPEN=warn \
+env -u BASE_URL -u VERCEL_AUTOMATION_BYPASS_SECRET -u SMOKE_PRODUCT_FAIL_OPEN \
+  NODE_OPTIONS='--import ./e2e/far-db.mjs' PGLITE_DATA_DIR="$TMP/pglite" \
   bash "$SMOKE" 2>&1 | tee "$TMP/out" || code=$? # pipefail: smoke's exit code
 
 if [ "$code" != 0 ]; then
-  echo "smoke-fail-open: LỖI: smoke thoát $code khi proxy fail-open (xem các dòng LỖI ở trên)" >&2
+  echo "smoke-fail-open: LỖI: smoke thoát $code khi DB ở xa (xem các dòng LỖI ở trên)" >&2
   exit 1
 fi
-if ! grep -qF -- "$PROOF" "$TMP/out"; then
-  echo "smoke-fail-open: LỖI: proxy không fail-open (không có cảnh báo warm-up): lần chạy không kiểm được nhánh fail-open" >&2
+if ! grep -qF -- "$FIRST" "$TMP/out"; then
+  echo "smoke-fail-open: LỖI: không thấy dòng 404 của slug sản phẩm lạ đầu tiên: lần chạy không kiểm được gì" >&2
   exit 1
 fi
-echo "smoke-fail-open: qua (mọi lookup slug sản phẩm fail-open, như Production)"
+grep -E -- "$PRODUCT_404" "$TMP/out" > "$TMP/product-404" || true
+slow=$(awk -v limit="$SLOW_MS" '{ ms = $(NF - 1) + 0; if (ms >= limit) { sub(/^smoke: /, ""); sub(/, [0-9]+ ms$/, " sau " ms " ms"); print } }' "$TMP/product-404")
+if [ -n "$slow" ]; then
+  echo "smoke-fail-open: LỖI: slug sản phẩm lạ trả 404 chậm (từ $SLOW_MS ms): proxy hay trang 404 chờ DB:" >&2
+  printf '  %s\n' "$slow" >&2
+  exit 1
+fi
+count=$(grep -c . "$TMP/product-404")
+max=$(awk '{ ms = $(NF - 1) + 0; if (ms > max) max = ms } END { print max + 0 }' "$TMP/product-404")
+echo "smoke-fail-open: qua ($count slug sản phẩm lạ trả 404, chậm nhất $max ms, với mỗi truy vấn DB chờ 600 ms)"

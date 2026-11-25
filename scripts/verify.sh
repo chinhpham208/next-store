@@ -20,7 +20,7 @@ WAIT=${VERIFY_WAIT:-160}
 # SMOKE_PORT moves both, so a run never lands on another worktree's 3100 by default (audit PR #38 M2). Smoke and
 # e2e run one after the other, so they may share the base. E2E uses five ports (playwright.config.ts): the app,
 # a server with a dead database (M2 Task 15), a server whose database hangs, the silent listener (NS-55), and a
-# server whose database answers slowly, so the proxy fails open (NS-109).
+# server whose database answers slowly, like Neon from a far edge (NS-109; the proxy must not wait on it, ADR-0017).
 port_ok() { [[ $1 =~ ^[0-9]{1,5}$ ]] && [ "$((10#$1))" -ge 1 ] && [ "$((10#$1))" -le "$2" ]; }
 
 resolve_ports() {

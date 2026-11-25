@@ -40,11 +40,11 @@ flowchart LR
   - Gói Free chỉ có **10 nhánh**, và tích hợp **không** tự xoá nhánh khi PR đóng. Đủ 10 nhánh thì deploy preview báo `Resource provisioning failed`.
   - Workflow `neon-preview-cleanup.yml` (NS-111) xoá `preview/<nhánh>` khi PR đóng và quét hằng ngày, luôn giữ `main` và `preview/develop` (`process.md` §4). Cần secret `NEON_API_KEY` của chủ dự án (`process.md` §8).
   - [ADR-0010](./adr/0010-app-role-and-preview-data.md) (M3 Task 5) chuyển preview sang một project Neon riêng không có dữ liệu khách.
-- **Region:** function chạy ở `sin1` cạnh Neon (`vercel.json`). Proxy (`src/proxy.ts`) thì chạy ở edge gần người truy cập; xem [ADR-0009](./adr/0009-product-404-in-proxy.md) và NS-79.
+- **Region:** function chạy ở `sin1` cạnh Neon (`vercel.json`). Proxy (`src/proxy.ts`) thì chạy ở edge gần người truy cập, nên từ M5 nó không chạm DB: slug sản phẩm đối chiếu registry tĩnh `catalog-slugs.ts` ([ADR-0017](./adr/0017-product-slug-registry-in-proxy.md), NS-79), slug bài đối chiếu `posts.ts` ([ADR-0012](./adr/0012-blog-static-registry.md)). Slug lạ vì vậy 404 thật ở mọi region, kể cả khi DB chết.
 - **CI** (`.github/workflows/`):
   - `ci.yml` (`check`): typecheck, lint, test.
   - `preview-e2e.yml` (`e2e-preview`): smoke và E2E trên mỗi bản Preview và Dev, kích hoạt bởi `deployment_status`; deploy lỗi thì job này **skipped**.
-  - `release-gate.yml` (`release-smoke`, NS-111): trên PR vào `production`, smoke trên bản Dev của đúng head commit và smoke với lookup DB của proxy luôn fail-open (như Production), đều với `SMOKE_PRODUCT_FAIL_OPEN=warn`.
+  - `release-gate.yml` (`release-smoke`, NS-111): trên PR vào `production`, smoke trên bản Dev của đúng head commit và smoke với DB ở xa (`scripts/smoke-fail-open.sh`: mỗi truy vấn chờ 600 ms mà slug sản phẩm lạ vẫn phải 404 dưới 200 ms), không cờ nào.
   - `neon-preview-cleanup.yml`: dọn nhánh Neon preview.
   - `production-e2e.yml`: chạy sau mỗi release, chỉ đọc, có bộ chặn ghi.
 - **Role database:** runtime dần chuyển sang role `next_store_app`, chỉ có quyền DML; migration chạy bằng role chủ ([ADR-0010](./adr/0010-app-role-and-preview-data.md)).

@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { isPostSlug } from '@/features/blog/proxy-api'
-import { isKnownProductSlug, isProductSlug } from '@/features/products/proxy-api'
+import { isCatalogSlug, isProductSlug } from '@/features/products/proxy-api'
 
 // Under Cache Components a page's notFound() runs after the 200 shell is sent (K3), so an unknown product or blog
 // slug is answered here, before render (ADR-0009, ADR-0012). So is the Open Graph image of an unknown slug, which
@@ -8,16 +8,6 @@ import { isKnownProductSlug, isProductSlug } from '@/features/products/proxy-api
 // Next.js render app/not-found.tsx with a real 404; rewrite(<route>, { status: 404 }) keeps 200 (K5). A folder
 // starting with `_` is private in the App Router, so this path can never become a route by accident.
 const NOT_FOUND_PATH = '/_khong-tim-thay'
-
-// The database client waits up to 10 s to connect. A product request must not hang that long on a slow or dead
-// database, so past this bound the request goes through as if the slug were known (ADR-0009 lists the cost).
-const LOOKUP_TIMEOUT_MS = 400
-
-// Fixed text only: the error and its `cause` carry the SQL and the database host, and the slug is user input.
-const LOOKUP_FAILED_MESSAGE = 'proxy: product slug lookup failed; letting the request through'
-const LOOKUP_TIMED_OUT_MESSAGE = 'proxy: product slug lookup timed out; letting the request through'
-
-const TIMED_OUT = Symbol('timed out')
 
 // The matcher also runs the proxy for the App Router transport forms of a page URL (Next.js 16.4.6,
 // build/analysis/get-page-static-info.js): `<path>.rsc` and `<path>.segments/<segment path>.segment.rsc`. Measured
@@ -28,44 +18,20 @@ const TIMED_OUT = Symbol('timed out')
 const SLUG_PATH =
   /^\/(products|blog)\/([^/]+?)(?:\/opengraph-image(?:-[a-z0-9]+)?)?(?:\.segments\/.+\.segment)?(?:\.rsc)?$/
 
-const lookupWithin = async (slug: string) => {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  const timeout = new Promise<typeof TIMED_OUT>((resolve) => {
-    timer = setTimeout(() => resolve(TIMED_OUT), LOOKUP_TIMEOUT_MS)
-  })
-  try {
-    // race() keeps a handler on the lookup, so a rejection that arrives after the timeout is not unhandled.
-    return await Promise.race([isKnownProductSlug(slug), timeout])
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
 const notFound = (request: NextRequest) => NextResponse.rewrite(new URL(NOT_FOUND_PATH, request.url))
 
-// Products: the slug shape is checked first, then the database within LOOKUP_TIMEOUT_MS, failing open (ADR-0009).
-const answerProduct = async (request: NextRequest, slug: string | undefined): Promise<NextResponse> => {
-  // Not decoded: product URLs are canonical lower-case slugs, so `%2D`, upper case or anything else outside the
-  // slug pattern is a 404 decided here without a query, which keeps working when the database is down.
+// Products: the slug shape, then the static registry (ADR-0017, NS-79). On Vercel the proxy runs at the edge nearest
+// the visitor, far from the database in sin1, so it never asks the database (dependency-cruiser `proxy-no-db`): the
+// answer is the same in every region and with the database down. Not decoded: product URLs are canonical lower-case
+// slugs, so `%2D`, upper case or anything else outside the slug pattern is a 404.
+const answerProduct = (request: NextRequest, slug: string | undefined): NextResponse => {
   if (!isProductSlug(slug)) return notFound(request)
-
-  try {
-    const result = await lookupWithin(slug)
-    if (result === TIMED_OUT) {
-      console.error(LOOKUP_TIMED_OUT_MESSAGE)
-      return NextResponse.next()
-    }
-    return result ? NextResponse.next() : notFound(request)
-  } catch {
-    // Fail open: a prerendered product page still serves, an unknown one shows the error page (K8).
-    console.error(LOOKUP_FAILED_MESSAGE)
-    return NextResponse.next()
-  }
+  return isCatalogSlug(slug) ? NextResponse.next() : notFound(request)
 }
 
-// A Server Action is a POST to the page that renders it and the matcher cannot filter by method, so without this every
-// action on /products/<slug> waited for the slug lookup (measured on `next start`, M4 C3, NS-92). Next.js 16.4.6 knows
-// a fetch action by this header on a POST (client/components/app-router-headers.js ACTION_HEADER, read in
+// A Server Action is a POST to the page that renders it and the matcher cannot filter by method, so under the database
+// lookup of ADR-0009 every action on /products/<slug> waited for it (measured on `next start`, M4 C3, NS-92). Next.js
+// 16.4.6 knows a fetch action by this header on a POST (client/components/app-router-headers.js ACTION_HEADER, read in
 // server/lib/server-action-request-meta.js) and answers it before render; the action checks the product itself.
 // Any other request is rendered like a GET, whatever its method, so it gets the same slug check: passing every
 // non-GET through let PUT, DELETE or a plain POST leave a 200 and a new route cache entry for any path (NS-103).
@@ -74,12 +40,12 @@ const answerProduct = async (request: NextRequest, slug: string | undefined): Pr
 const ACTION_HEADER = 'next-action'
 const isServerAction = (request: NextRequest) => request.method === 'POST' && request.headers.has(ACTION_HEADER)
 
-export const proxy = async (request: NextRequest): Promise<NextResponse> => {
+export const proxy = (request: NextRequest): NextResponse => {
   if (isServerAction(request)) return NextResponse.next()
   const [, section, slug] = SLUG_PATH.exec(request.nextUrl.pathname) ?? []
   if (section === 'products') return answerProduct(request, slug)
-  // Blog: posts only change with a deploy, so the static registry is the whole truth (ADR-0012). No query, no
-  // timer, no log: the answer is the same with the database down. Not decoded, like products.
+  // Blog: posts only change with a deploy, so the static registry is the whole truth (ADR-0012), as for products.
+  // Not decoded, like products.
   if (section === 'blog' && isPostSlug(slug)) return NextResponse.next()
   return notFound(request)
 }

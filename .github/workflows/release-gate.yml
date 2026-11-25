@@ -3,14 +3,14 @@ name: Release gate
 # NS-111: smoke before a release reaches Production. Runs on every PR into `production`; scripts/pr-gate.sh requires the
 # check-run `release-smoke` = success for such a PR, and the owner's Gate 3 is asked only after that (docs/process.md).
 #
-# Two smokes, both with SMOKE_PRODUCT_FAIL_OPEN=warn exactly as production-e2e.yml runs smoke on Production:
+# Two smokes, with no flag: since ADR-0017 (NS-79) an unknown product slug must 404 on the first hit everywhere,
+# Production included, as production-e2e.yml runs smoke there:
 #   1. Dev: the Vercel deployment of the PR's head commit (the tip of `develop`), with the bypass secret and
 #      SMOKE_ROBOTS=disallow like preview-e2e.yml.
-#   2. Forced fail-open: a local `next start` of the same commit whose every query waits 600 ms (e2e/far-db.mjs), so
-#      the proxy's slug lookup always fails open, as on Production from GitHub's US runners. On Dev the lookup answers in
-#      time (every e2e-preview run of v0.4.0 / v0.4.1 got its 404 in ~300 ms), so smoke there never reached the
-#      fail-open path where the OG 500 of v0.4.0 (NS-109) and the 405 of v0.4.1 (NS-110) lived. Step 2 reproduces the
-#      OG 500 of v0.4.0 (measured on 6eb7bf8, NS-111 PR).
+#   2. Far database: a local `next start` of the same commit whose every query waits 600 ms (e2e/far-db.mjs), like
+#      Neon seen from GitHub's US runners. Until ADR-0017 the proxy's slug lookup failed open there, the path where the
+#      OG 500 of v0.4.0 (NS-109) and the 405 of v0.4.1 (NS-110) lived; now every unknown product slug must get its 404
+#      in under 200 ms (scripts/smoke-fail-open.sh), proof that the proxy never waits on the database.
 on:
   pull_request:
     branches: [production]
@@ -61,15 +61,13 @@ jobs:
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
           # Not Production: robots.txt must block crawling (owner decision 15, NS-65), as in preview-e2e.yml.
           SMOKE_ROBOTS: disallow
-          # Same flag as production-e2e.yml (NS-79).
-          SMOKE_PRODUCT_FAIL_OPEN: warn
         run: npm run smoke
 
       # No secret from here on. PGlite, as in ci.yml: no DATABASE_URL.
       - name: build
         run: npm run build
 
-      - name: smoke with the proxy lookup failing open
+      - name: smoke with a far database
         run: bash scripts/smoke-fail-open.sh
 
       # Smoke uploads no artifact (no Playwright report), so scripts/redact-report.mjs has nothing to check here.
