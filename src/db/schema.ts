@@ -27,6 +27,8 @@ export const products = pgTable(
       .notNull()
       .defaultNow()
       .$onUpdate(() => new Date()),
+    // "Mới nhất" and the featured products sort on it (ADR-0019 11A): no $onUpdate, so an admin edit moves nothing.
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
     // Last line of defence for stock decrements (M4) and admin edits (M5): app checks can race.
@@ -74,7 +76,25 @@ export const cartItems = pgTable(
   ],
 )
 
+// ADR-0018: one row per wrong admin password, counted per IP and globally over 15 minutes, purged after a day.
+// No serial / identity (DML-only app role, ADR-0010) and no raw IP: ip_hash is an HMAC keyed by SESSION_SECRET.
+export const adminLoginFailures = pgTable(
+  'admin_login_failures',
+  {
+    // No default on purpose: the server generates it (crypto.randomUUID()).
+    id: uuid('id').primaryKey(),
+    ipHash: text('ip_hash').notNull(),
+    failedAt: timestamp('failed_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // The per-IP count of the lock check; the global count and the purge scan by age alone.
+    index('admin_login_failures_ip_failed_at_idx').on(table.ipHash, table.failedAt),
+    index('admin_login_failures_failed_at_idx').on(table.failedAt),
+  ],
+)
+
 export type Category = typeof categories.$inferSelect
 export type Product = typeof products.$inferSelect
 export type Cart = typeof carts.$inferSelect
 export type CartItem = typeof cartItems.$inferSelect
+export type AdminLoginFailure = typeof adminLoginFailures.$inferSelect

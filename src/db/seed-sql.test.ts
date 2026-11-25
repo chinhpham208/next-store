@@ -24,13 +24,13 @@ const resetTables = () => db.execute(sql`truncate table cart_items, carts, produ
 const omit = (row: Product, keys: readonly (keyof Product)[]) =>
   Object.fromEntries(Object.entries(row).filter(([key]) => !keys.some((omitted) => omitted === key)))
 
-// updated_at is the time of insert, so it can never match between two runs.
-const withoutUpdatedAt = (row: Product) => omit(row, ['updatedAt'])
+// updated_at and created_at (NS-120) are the time of insert, so they can never match between two runs.
+const withoutInsertTimes = (row: Product) => omit(row, ['updatedAt', 'createdAt'])
 
-// Every column except updated_at; ids included, since both paths insert in the same order.
+// Every column except updated_at and created_at; ids included, since both paths insert in the same order.
 const snapshot = async () => ({
   categories: await db.select().from(categories).orderBy(asc(categories.id)),
-  products: (await db.select().from(products).orderBy(asc(products.id))).map(withoutUpdatedAt),
+  products: (await db.select().from(products).orderBy(asc(products.id))).map(withoutInsertTimes),
 })
 
 beforeAll(async () => {
@@ -184,7 +184,7 @@ describe('applied to a migrated PGlite', () => {
       .values({ name, description, price, slug: 'qua-drizzle', categoryId: category!.id, image: `/images/${categorySlug}.svg` })
 
     const rows = await db.select().from(products).orderBy(asc(products.id))
-    const [viaSql, viaDrizzle] = rows.map((row) => omit(row, ['id', 'slug', 'updatedAt']))
+    const [viaSql, viaDrizzle] = rows.map((row) => omit(row, ['id', 'slug', 'updatedAt', 'createdAt']))
     expect(viaSql).toMatchObject({ stock: 0, featured: false })
     expect(viaSql).toEqual(viaDrizzle)
   })

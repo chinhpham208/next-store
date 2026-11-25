@@ -10,7 +10,14 @@ import { db } from '@/db/client'
 import { runMigrations } from '@/db/migrate'
 import { seed } from '@/db/seed'
 import { PRODUCT_SORTS, type ProductListing, type ProductQuery, type ProductSort } from '@/features/products'
-import { countCatalog, escapeLikePattern, getCatalogPage, getCategories, listProducts } from '@/features/products/queries'
+import {
+  countCatalog,
+  escapeLikePattern,
+  getCatalogPage,
+  getCategories,
+  getFeaturedProducts,
+  listProducts,
+} from '@/features/products/queries'
 
 // cacheTag() throws outside a cacheComponents build and Vitest ignores 'use cache': these tests cover the
 // queries and the branching; the directive's effect is checked by the build of the listing page (Task 13).
@@ -56,11 +63,43 @@ it('US-02: page 2 returns the next 12', async () => {
   expect(slugs(listing)[0]).toBe('sticker-hello-world')
 })
 
+// NS-120 (ADR-0019 11A): "Mới nhất" and the featured products follow created_at, so an admin edit (which sets
+// updated_at) moves nothing. Raw SQL for updated_at: Drizzle's $onUpdate would not run here anyway.
+describe('newest follows created_at, not updated_at (NS-120)', () => {
+  const newestSlugs = async () => [
+    ...slugs(await listProducts(ALL)),
+    ...slugs(await listProducts({ ...ALL, page: 2 })),
+  ]
+  const seedOrder = async () =>
+    (await db.select({ slug: products.slug }).from(products).orderBy(products.id)).map((row) => row.slug)
+
+  it('US-02: newest stays stable on the seed', async () => {
+    // Seed inserts every row in one transaction, so created_at ties and id decides, as before the migration.
+    expect(await newestSlugs()).toEqual(await seedOrder())
+  })
+
+  it('editing a product does not move it in newest or in the featured products', async () => {
+    const before = await newestSlugs()
+    const featuredBefore = (await getFeaturedProducts()).map((item) => item.slug)
+    const edited = before.at(-1) ?? ''
+    const featuredEdited = featuredBefore.at(-1) ?? ''
+    try {
+      await db.execute(
+        sql`update products set updated_at = now() + interval '1 day' where slug in (${edited}, ${featuredEdited})`,
+      )
+      expect(await newestSlugs()).toEqual(before)
+      expect((await getFeaturedProducts()).map((item) => item.slug)).toEqual(featuredBefore)
+    } finally {
+      await db.execute(sql`update products set updated_at = created_at where slug in (${edited}, ${featuredEdited})`)
+    }
+  })
+})
+
 describe('ordering (checked against an order computed outside the query)', () => {
-  type Row = { id: number; slug: string; price: number; updatedAt: Date }
+  type Row = { id: number; slug: string; price: number; createdAt: Date }
   // Primary key first, then id ascending: the order ADR-0008 promises for each sort.
   const PRIMARY: Record<ProductSort, (a: Row, b: Row) => number> = {
-    newest: (a, b) => b.updatedAt.getTime() - a.updatedAt.getTime(),
+    newest: (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
     'price-asc': (a, b) => a.price - b.price,
     'price-desc': (a, b) => b.price - a.price,
   }
@@ -68,7 +107,7 @@ describe('ordering (checked against an order computed outside the query)', () =>
 
   beforeAll(async () => {
     rows = await db
-      .select({ id: products.id, slug: products.slug, price: products.price, updatedAt: products.updatedAt })
+      .select({ id: products.id, slug: products.slug, price: products.price, createdAt: products.createdAt })
       .from(products)
   })
 
@@ -80,7 +119,7 @@ describe('ordering (checked against an order computed outside the query)', () =>
 
   it('has ties to break for every sort, so the tie-breaker is actually exercised', () => {
     expect(rows).toHaveLength(24)
-    expect(new Set(rows.map((row) => row.updatedAt.getTime())).size).toBeLessThan(24)
+    expect(new Set(rows.map((row) => row.createdAt.getTime())).size).toBeLessThan(24)
     expect(new Set(rows.map((row) => row.price)).size).toBeLessThan(24)
   })
 

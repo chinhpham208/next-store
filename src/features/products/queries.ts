@@ -30,10 +30,11 @@ const SUMMARY_FIELDS = {
 }
 
 // Exhaustive by type: adding a sort to PRODUCT_SORTS fails typecheck until it has an ORDER BY here.
-// id is the last key everywhere: seed rows share updated_at and some prices, and without a unique tie-breaker
+// id is the last key everywhere: seed rows share created_at and some prices, and without a unique tie-breaker
 // Postgres may return ties in any order, so a product could appear on two pages or on none.
 const ORDER_BY: Record<ProductSort, readonly SQL[]> = {
-  newest: [desc(products.updatedAt), asc(products.id)],
+  // created_at, not updated_at (ADR-0019 11A): an admin edit must not move a product to the top.
+  newest: [desc(products.createdAt), asc(products.id)],
   'price-asc': [asc(products.price), asc(products.id)],
   'price-desc': [desc(products.price), asc(products.id)],
 }
@@ -58,8 +59,9 @@ export const getFeaturedProducts = async (limit: number = FEATURED_LIMIT): Promi
         .from(products)
         .innerJoin(categories, eq(products.categoryId, categories.id))
         .where(eq(products.featured, true))
-        // Seed inserts every row in one transaction (same updated_at); id breaks the tie so order is stable.
-        .orderBy(desc(products.updatedAt), asc(products.id))
+        // Same order as "Mới nhất" (ADR-0019 11A). Seed inserts every row in one transaction (same created_at);
+        // id breaks the tie so order is stable.
+        .orderBy(...ORDER_BY.newest)
         .limit(limit),
   })
 }

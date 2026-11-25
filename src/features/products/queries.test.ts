@@ -38,24 +38,33 @@ it('tags the cache entry with products and an hours lifetime', async () => {
   expect(cacheTag).toHaveBeenCalledWith('products')
   expect(cacheLife).toHaveBeenCalledWith('hours')
 })
-it('orders by updatedAt newest first, then id', async () => {
+// NS-120 (ADR-0019 11A): created_at, not updated_at, so an admin edit does not reorder the home page.
+it('orders by createdAt newest first, then id', async () => {
   await seed()
   const featuredSlugs = PRODUCT_SEEDS.filter((product) => product.featured).map((product) => product.slug)
   expect((await getFeaturedProducts()).map((item) => item.slug)).toEqual(featuredSlugs)
 
-  // Restore the original updatedAt afterwards so later tests in this file still see seed order.
+  // Restore the original timestamps afterwards so later tests in this file still see seed order.
   const lastSlug = featuredSlugs.at(-1)
   if (lastSlug === undefined) throw new Error('no featured products in PRODUCT_SEEDS')
-  const [before] = await db.select({ at: products.updatedAt }).from(products).where(eq(products.slug, lastSlug))
+  const [before] = await db
+    .select({ createdAt: products.createdAt, updatedAt: products.updatedAt })
+    .from(products)
+    .where(eq(products.slug, lastSlug))
   if (before === undefined) throw new Error(`seeded product not found: ${lastSlug}`)
   try {
     await db
       .update(products)
       .set({ updatedAt: new Date(Date.now() + 60_000) })
       .where(eq(products.slug, lastSlug))
+    expect((await getFeaturedProducts()).map((item) => item.slug)).toEqual(featuredSlugs)
+    await db
+      .update(products)
+      .set({ createdAt: new Date(Date.now() + 60_000) })
+      .where(eq(products.slug, lastSlug))
     expect((await getFeaturedProducts())[0]?.slug).toBe(lastSlug)
   } finally {
-    await db.update(products).set({ updatedAt: before.at }).where(eq(products.slug, lastSlug))
+    await db.update(products).set(before).where(eq(products.slug, lastSlug))
   }
 })
 

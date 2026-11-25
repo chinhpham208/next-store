@@ -419,6 +419,11 @@ describe('scripts/sql/app-role.sql on a parent branch without tables (NS-60)', (
       expect((await explicitGrants(client, 'carts')).sort()).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE'])
       expect((await explicitGrants(client, 'cart_items')).sort()).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE'])
       await asApp(client, () => client.exec("INSERT INTO carts (id) VALUES ('6f1c2a4e-8b3d-4f5a-9c7e-1d2b3a4c5e6f')"))
+      // The failed-login table of M5 (NS-120) likewise, with no GRANT in its migration.
+      expect((await explicitGrants(client, 'admin_login_failures')).sort()).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE'])
+      await asApp(client, () =>
+        client.exec("INSERT INTO admin_login_failures (id, ip_hash) VALUES ('0b6f7c1e-2d3a-4b5c-8d9e-0f1a2b3c4d5e', 'h')"),
+      )
     } finally {
       await closeConnection(connection)
     }

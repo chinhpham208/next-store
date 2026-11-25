@@ -468,6 +468,17 @@ it('does not flag drizzle/0001_*.sql (carts, cart_items)', () => {
   }
 })
 
+// NS-120 (M5 Task 5): products.created_at with a default, admin_login_failures, and a backfill whose UPDATE has its
+// own WHERE; all ship with the code that uses them, so expand only.
+it('does not flag drizzle/0002_*.sql and 0003_*.sql (created_at, admin_login_failures, backfill)', () => {
+  const m5 = readMigrations().filter(({ file }) => /^000[23]_.*\.sql$/.test(file))
+  expect(m5).toHaveLength(2)
+  for (const { file, sql } of m5) {
+    expect(findContractStatements(sql), file).toEqual([])
+    expect(sql, file).not.toMatch(/^-- contract:/m)
+  }
+})
+
 it('every migration with a contract statement names the ticket of its expand step', () => {
   for (const { file, sql } of readMigrations()) {
     if (findContractStatements(sql).length > 0) expect(sql, file).toMatch(/^-- contract: NS-\d+$/m)
