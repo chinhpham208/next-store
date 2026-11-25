@@ -15,8 +15,7 @@ DENY_PORT=3197
 EN_404_PORT=3196
 SOFT_404_PORT=3195
 SOFT_RSC_PORT=3194
-COLD_PORT=3193
-WARM_PORT=3192
+FIRST_PRODUCT_PORT=3193
 SEG_PORT=3191
 NOINDEX_PORT=3190
 SITEMAP_PORT=3189
@@ -24,12 +23,11 @@ OG_PORT=3188
 SOFT_BLOG_PORT=3187
 SOFT_OG_PORT=3186
 POST_SEG_PORT=3185
-FAIL_OPEN_PORT=3184
-MALFORMED_PORT=3183
+UNKNOWN_PRODUCT_PORT=3184
 NON_ACTION_PORT=3182
 NON_ACTION_5XX_PORT=3181
-FAIL_OPEN_405_PORT=3180
-FAIL_OPEN_307_PORT=3179
+UNKNOWN_405_PORT=3180
+UNKNOWN_307_PORT=3179
 REDIRECT_PORT=3178
 SECURITY_PORT=3177
 
@@ -207,21 +205,17 @@ run BASE_URL="http://127.0.0.1:$SOFT_RSC_PORT" -- bash scripts/smoke.sh
 grep -qF '(hậu tố .rsc) trả 200 ngay lần đầu' "$TMP/out" || fail soft-404-rsc "thông báo không nêu hậu tố .rsc"
 echo "ok soft-404-rsc"
 
-# cold-lookup: the proxy never gets a working lookup (every fresh slug answers 200) → smoke fails after 3 warm-up
-# requests, i.e. more than 2 fail-opens.
-start_server "$COLD_PORT" "$TMP/cold-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/smoke-warmup-'
-run BASE_URL="http://127.0.0.1:$COLD_PORT" -- bash scripts/smoke.sh
-[ "$CODE" = 1 ] || fail cold-lookup "thoát $CODE, cần 1"
-grep -qF 'hơn 2 slug fail-open' "$TMP/out" || fail cold-lookup "thiếu thông báo warm-up"
-[ "$(grep -c 'smoke-warmup-' "$TMP/curl-calls")" = 3 ] || fail cold-lookup "cần đúng 3 request warm-up"
-echo "ok cold-lookup"
-
-# warm-up-warning: one fail-open before the first 404 passes smoke with a ::warning:: naming the count.
-start_server "$WARM_PORT" "$TMP/warm-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/smoke-warmup-.*-1$'
-run BASE_URL="http://127.0.0.1:$WARM_PORT" -- bash scripts/smoke.sh
-[ "$CODE" = 0 ] || fail warm-up-warning "thoát $CODE, cần 0"
-grep -qF '::warning::smoke: 1 slug lạ fail-open' "$TMP/out" || fail warm-up-warning "thiếu ::warning:: có số lần fail-open"
-echo "ok warm-up-warning"
+# first-product-404 (ADR-0017, NS-79): the proxy answers product slugs from the static registry, so the very first
+# request for a fresh unknown product slug must be a 404: no warm-up, no fail-open allowed. One request, then smoke
+# fails at once and names it.
+start_server "$FIRST_PRODUCT_PORT" "$TMP/first-product-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/smoke-first-'
+run BASE_URL="http://127.0.0.1:$FIRST_PRODUCT_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail first-product-404 "thoát $CODE, cần 1"
+grep -qE 'GET /products/smoke-first-[0-9-]+ \(slug sản phẩm lạ đầu tiên\) trả 200, cần 404 ngay lần đầu' "$TMP/out" ||
+  fail first-product-404 "thông báo không nêu slug sản phẩm lạ đầu tiên"
+[ "$(grep -c 'smoke-first-' "$TMP/curl-calls")" = 1 ] || fail first-product-404 "cần đúng 1 request cho slug lạ đầu tiên"
+! grep -q 'smoke-warmup-' "$TMP/curl-calls" || fail first-product-404 "còn request warm-up"
+echo "ok first-product-404"
 
 # no-warning: no fail-open → no ::warning::.
 run BASE_URL="http://127.0.0.1:$PORT" -- bash scripts/smoke.sh
@@ -310,82 +304,60 @@ run BASE_URL="http://127.0.0.1:$POST_SEG_PORT" -- bash scripts/smoke.sh
 grep -qF '(bài: segment prefetch dạng đường dẫn) bị proxy rewrite sang not-found' "$TMP/out" || fail known-post-segment-404 "thông báo không nêu segment prefetch của bài"
 echo "ok known-post-segment-404"
 
-# product-fail-open-warn (NS-79): every well-formed unknown product slug answers 200 (the proxy's lookup fails open
-# from a far edge). SMOKE_PRODUCT_FAIL_OPEN=warn turns each of them — warm-up, fixed slug, fresh slug, RSC, .rsc,
-# segment, product OG image — into a ::warning:: with the time taken and smoke passes; without the flag it fails.
-start_server "$FAIL_OPEN_PORT" "$TMP/fail-open-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/(smoke-warmup-|khong-ton-tai)'
-run BASE_URL="http://127.0.0.1:$FAIL_OPEN_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
-[ "$CODE" = 0 ] || fail product-fail-open-warn "có cờ: thoát $CODE, cần 0"
-grep -qE '^::warning::smoke: 3 slug lạ warm-up đều trả 200, lần cuối sau [0-9]+ ms: lookup DB của proxy fail-open' "$TMP/out" ||
-  fail product-fail-open-warn "thiếu ::warning:: của warm-up"
+# product-unknown-404 (ADR-0017, NS-79): every well-formed unknown product slug answering 200 (a proxy that let it
+# through) fails smoke, in every form: fixed slug, fresh slug, RSC, .rsc, segment, product OG image. Every case is
+# reported before smoke fails. POST, PUT and GET after POST: product-unknown-405, non-action-200.
+start_server "$UNKNOWN_PRODUCT_PORT" "$TMP/unknown-product-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/khong-ton-tai'
+run BASE_URL="http://127.0.0.1:$UNKNOWN_PRODUCT_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail product-unknown-404 "thoát $CODE, cần 1"
 for label in 'slug cố định của US-05' 'slug mới' 'request RSC' 'hậu tố .rsc' 'segment prefetch dạng đường dẫn' \
-  'segment prefetch dạng đường dẫn, không header' 'ảnh OG: slug sản phẩm lạ' 'ảnh OG: slug sản phẩm lạ, không hậu tố băm' \
-  'GET sau POST cùng slug' 'POST không có next-action' 'PUT'; do
-  grep -qE "^::warning::smoke: (GET|POST|PUT) /products/[^ ]+ \\($label\\) trả 200 sau [0-9]+ ms" "$TMP/out" ||
-    fail product-fail-open-warn "thiếu ::warning:: có thời gian cho \"$label\""
+  'segment prefetch dạng đường dẫn, không header' 'ảnh OG: slug sản phẩm lạ' 'ảnh OG: slug sản phẩm lạ, không hậu tố băm'; do
+  grep -qE "LỖI: GET /products/[^ ]+ \\($label\\) trả 200 ngay lần đầu, cần 404" "$TMP/out" ||
+    fail product-unknown-404 "thiếu LỖI cho \"$label\""
 done
-[ "$(grep -c '^::warning::smoke: .*SMOKE_PRODUCT_FAIL_OPEN=warn' "$TMP/out")" = 12 ] || fail product-fail-open-warn "cần đúng 12 cảnh báo fail-open"
-grep -qF '(%2D) → 404' "$TMP/out" || fail product-fail-open-warn "ca %2D không còn được kiểm 404"
-grep -qF '(chữ hoa) → 404' "$TMP/out" || fail product-fail-open-warn "ca chữ hoa không còn được kiểm 404"
-grep -qE '^::warning::smoke: POST /products/khong-ton-tai-post-[^ ]+ \(POST không có next-action\) trả 200' "$TMP/out" ||
-  fail product-fail-open-warn "POST không next-action tới slug sản phẩm lạ không đi qua cờ fail-open"
-for label in 'POST không có next-action, chữ hoa' 'bài: POST không có next-action' 'bài: DELETE'; do
-  grep -qF "($label) → 404" "$TMP/out" || fail product-fail-open-warn "ca \"$label\" không còn được kiểm 404"
-done
-run BASE_URL="http://127.0.0.1:$FAIL_OPEN_PORT" -- bash scripts/smoke.sh
-[ "$CODE" = 1 ] || fail product-fail-open-warn "không cờ: thoát $CODE, cần 1"
-grep -qF 'hơn 2 slug fail-open' "$TMP/out" || fail product-fail-open-warn "không cờ: thiếu lỗi warm-up"
-! grep -q 'SMOKE_PRODUCT_FAIL_OPEN=warn' "$TMP/out" || fail product-fail-open-warn "không cờ mà vẫn cảnh báo"
-echo "ok product-fail-open-warn"
+grep -qF '(%2D) → 404' "$TMP/out" || fail product-unknown-404 "ca %2D không còn được kiểm 404"
+grep -qF '(chữ hoa) → 404' "$TMP/out" || fail product-unknown-404 "ca chữ hoa không còn được kiểm 404"
+grep -qF 'slug hoặc ảnh OG không tồn tại không trả 404 ngay lần đầu' "$TMP/out" || fail product-unknown-404 "thiếu dòng tóm tắt"
+! grep -q '::warning::' "$TMP/out" || fail product-unknown-404 "có ::warning:: thay cho lỗi"
+echo "ok product-unknown-404"
 
-# product-fail-open-405 (NS-110): on Production a fail-open POST without next-action or PUT reaches the prerendered
-# product page, and Next answers 405 (no render, no cache entry, no query). With SMOKE_PRODUCT_FAIL_OPEN=warn that is a
-# warning like the GET 200; without the flag it fails. Only unknown product slugs (the soft regex) answer 405 here.
-start_server "$FAIL_OPEN_405_PORT" "$TMP/fail-open-405-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/(smoke-warmup-|khong-ton-tai)' "" "" https://shop.example.test "Allow: /" 200 405
-run BASE_URL="http://127.0.0.1:$FAIL_OPEN_405_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
-[ "$CODE" = 0 ] || fail product-fail-open-405 "có cờ: thoát $CODE, cần 0"
+# product-unknown-405 (NS-110): a POST without next-action or a PUT to an unknown product slug that reaches the page
+# (Next answers 405) is no longer a tolerated fail-open: it fails smoke.
+start_server "$UNKNOWN_405_PORT" "$TMP/unknown-405-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/khong-ton-tai-(post|put)-' "" "" https://shop.example.test "Allow: /" 200 405
+run BASE_URL="http://127.0.0.1:$UNKNOWN_405_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail product-unknown-405 "thoát $CODE, cần 1"
 for label in 'POST không có next-action' 'PUT'; do
-  grep -qE "^::warning::smoke: (POST|PUT) /products/[^ ]+ \\($label\\) trả 405 sau [0-9]+ ms" "$TMP/out" ||
-    fail product-fail-open-405 "thiếu ::warning:: 405 cho \"$label\""
+  grep -qE "LỖI: (POST|PUT) /products/[^ ]+ \\($label\\) trả 405 ngay lần đầu, cần 404" "$TMP/out" ||
+    fail product-unknown-405 "thiếu LỖI 405 cho \"$label\""
 done
-run BASE_URL="http://127.0.0.1:$FAIL_OPEN_405_PORT" -- bash scripts/smoke.sh
-[ "$CODE" = 1 ] || fail product-fail-open-405 "không cờ: thoát $CODE, cần 1"
-echo "ok product-fail-open-405"
+echo "ok product-unknown-405"
 
-# product-fail-open-307 (NS-111): under `next start` with a far database (scripts/smoke-fail-open.sh), a fail-open RSC
-# request (`rsc: 1`) to an unknown product slug answers 307 to <path>?_rsc instead of Vercel's 200. With
-# SMOKE_PRODUCT_FAIL_OPEN=warn that is a warning like the 200; without the flag, or without the rsc header, it fails.
-start_server "$FAIL_OPEN_307_PORT" "$TMP/fail-open-307-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/(smoke-warmup-|khong-ton-tai)' "" "" https://shop.example.test "Allow: /" 200 "" 307
-run BASE_URL="http://127.0.0.1:$FAIL_OPEN_307_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
-[ "$CODE" = 0 ] || fail product-fail-open-307 "có cờ: thoát $CODE, cần 0"
+# product-unknown-307 (NS-111): under `next start` an RSC request (`rsc: 1`) to an unknown product slug that the proxy
+# let through answers 307 to <path>?_rsc; that fails smoke, like a 307 to a request without the rsc header.
+start_server "$UNKNOWN_307_PORT" "$TMP/unknown-307-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/khong-ton-tai' "" "" https://shop.example.test "Allow: /" 200 "" 307
+run BASE_URL="http://127.0.0.1:$UNKNOWN_307_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail product-unknown-307 "thoát $CODE, cần 1"
 for label in 'request RSC' 'segment prefetch dạng đường dẫn'; do
-  grep -qE "^::warning::smoke: GET /products/[^ ]+ \\($label\\) trả 307 sau [0-9]+ ms" "$TMP/out" ||
-    fail product-fail-open-307 "thiếu ::warning:: 307 cho \"$label\""
+  grep -qE "LỖI: GET /products/[^ ]+ \\($label\\) trả 307 ngay lần đầu, cần 404" "$TMP/out" ||
+    fail product-unknown-307 "thiếu LỖI 307 cho \"$label\""
 done
-run BASE_URL="http://127.0.0.1:$FAIL_OPEN_307_PORT" -- bash scripts/smoke.sh
-[ "$CODE" = 1 ] || fail product-fail-open-307 "không cờ: thoát $CODE, cần 1"
-echo "ok product-fail-open-307"
-
-# product-redirect-no-rsc (NS-111): a 307 to a request without the rsc header is never a fail-open, even with the flag.
-start_server "$REDIRECT_PORT" "$TMP/redirect-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/(smoke-warmup-|khong-ton-tai)' "" "" https://shop.example.test "Allow: /" 200 307
-run BASE_URL="http://127.0.0.1:$REDIRECT_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
-[ "$CODE" = 1 ] || fail product-redirect-no-rsc "thoát $CODE, cần 1"
-grep -qE '\(POST không có next-action\) trả 307 ngay lần đầu, cần 404' "$TMP/out" || fail product-redirect-no-rsc "không nêu POST 307"
-echo "ok product-redirect-no-rsc"
+start_server "$REDIRECT_PORT" "$TMP/redirect-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/khong-ton-tai-post-' "" "" https://shop.example.test "Allow: /" 200 307
+run BASE_URL="http://127.0.0.1:$REDIRECT_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail product-unknown-307 "POST 307: thoát $CODE, cần 1"
+grep -qE '\(POST không có next-action\) trả 307 ngay lần đầu, cần 404' "$TMP/out" || fail product-unknown-307 "không nêu POST 307"
+echo "ok product-unknown-307"
 
 # non-action-200 (NS-103): a proxy that lets every non-GET through (the NS-92 behaviour) answers 200 to a POST without
-# next-action, a PUT or a DELETE to an unknown slug; smoke fails, even with SMOKE_PRODUCT_FAIL_OPEN=warn, because the
-# malformed product slug and the blog slugs never reach the database. GET to the same paths is still 404.
+# next-action, a PUT or a DELETE to an unknown slug; smoke fails.
+# GET to the same paths is still 404.
 start_server "$NON_ACTION_PORT" "$TMP/non-action-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 200
-for flag in '' warn; do
-  run BASE_URL="http://127.0.0.1:$NON_ACTION_PORT" SMOKE_PRODUCT_FAIL_OPEN="$flag" -- bash scripts/smoke.sh
-  [ "$CODE" = 1 ] || fail non-action-200 "cờ '$flag': thoát $CODE, cần 1"
-  for line in 'POST /products/KHONG-TON-TAI-POST-[^ ]+ \(POST không có next-action, chữ hoa\) trả 200 ngay lần đầu, cần 404' \
-    'POST /blog/khong-ton-tai-post-[^ ]+ \(bài: POST không có next-action\) trả 200 ngay lần đầu, cần 404' \
-    'DELETE /blog/khong-ton-tai-delete-[^ ]+ \(bài: DELETE\) trả 200 ngay lần đầu, cần 404' \
-    'request không phải Server Action tới slug lạ không trả 404'; do
-    grep -qE "$line" "$TMP/out" || fail non-action-200 "cờ '$flag': thiếu dòng: $line"
-  done
+run BASE_URL="http://127.0.0.1:$NON_ACTION_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail non-action-200 "thoát $CODE, cần 1"
+for line in 'POST /products/KHONG-TON-TAI-POST-[^ ]+ \(POST không có next-action, chữ hoa\) trả 200 ngay lần đầu, cần 404' \
+  'POST /blog/khong-ton-tai-post-[^ ]+ \(bài: POST không có next-action\) trả 200 ngay lần đầu, cần 404' \
+  'DELETE /blog/khong-ton-tai-delete-[^ ]+ \(bài: DELETE\) trả 200 ngay lần đầu, cần 404' \
+  'request không phải Server Action tới slug lạ không trả 404'; do
+  grep -qE "$line" "$TMP/out" || fail non-action-200 "thiếu dòng: $line"
 done
 grep -qE 'GET /products/khong-ton-tai-post-[^ ]+ \(GET sau POST cùng slug\) → 404' "$TMP/out" ||
   fail non-action-200 "GET sau POST không còn được kiểm"
@@ -401,36 +373,15 @@ grep -qE 'PUT /products/khong-ton-tai-put-[^ ]+ \(PUT\) trả 500 ngay lần đ�
   fail non-action-5xx "thông báo không nêu PUT trả 500"
 echo "ok non-action-5xx"
 
-# product-fail-open-warn-single: warm-up fine, only one later product case fails open → warning with the flag, failure
-# without (the existing soft-404 case with the flag added).
-run BASE_URL="http://127.0.0.1:$SOFT_RSC_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
-[ "$CODE" = 0 ] || fail product-fail-open-warn-single "thoát $CODE, cần 0"
-grep -qE '^::warning::smoke: GET /products/khong-ton-tai-suffix-[0-9-]+\.rsc \(hậu tố \.rsc\) trả 200 sau [0-9]+ ms' "$TMP/out" ||
-  fail product-fail-open-warn-single "thiếu ::warning:: cho hậu tố .rsc"
-echo "ok product-fail-open-warn-single"
-
-# fail-open-flag-scope: the flag never covers the cases that do not reach the database. A 200 for a malformed product
-# slug (%2D, upper case), an unknown post or an unknown post's OG image still fails smoke.
-start_server "$MALFORMED_PORT" "$TMP/malformed-headers" 200 "<h1>Không tìm thấy trang</h1>" '^/products/(KHONG-|khong%2D)'
-run BASE_URL="http://127.0.0.1:$MALFORMED_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
-[ "$CODE" = 1 ] || fail fail-open-flag-scope "slug sai dạng: thoát $CODE, cần 1"
-grep -qF '(%2D) trả 200 ngay lần đầu' "$TMP/out" || fail fail-open-flag-scope "thông báo không nêu %2D"
-grep -qF '(chữ hoa) trả 200 ngay lần đầu' "$TMP/out" || fail fail-open-flag-scope "thông báo không nêu chữ hoa"
-run BASE_URL="http://127.0.0.1:$SOFT_BLOG_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
-[ "$CODE" = 1 ] || fail fail-open-flag-scope "slug bài: thoát $CODE, cần 1"
-grep -qF '(bài: slug mới) trả 200 ngay lần đầu' "$TMP/out" || fail fail-open-flag-scope "thông báo không nêu slug bài"
-run BASE_URL="http://127.0.0.1:$SOFT_OG_PORT" SMOKE_PRODUCT_FAIL_OPEN=warn -- bash scripts/smoke.sh
-[ "$CODE" = 1 ] || fail fail-open-flag-scope "ảnh OG của bài: thoát $CODE, cần 1"
-grep -qF '(ảnh OG: slug bài lạ) trả 200 ngay lần đầu' "$TMP/out" || fail fail-open-flag-scope "thông báo không nêu ảnh OG của bài"
-! grep -q '^::warning::' "$TMP/out" || fail fail-open-flag-scope "ảnh OG của bài: có ::warning:: dù không ca sản phẩm nào fail-open"
-echo "ok fail-open-flag-scope"
-
-# bad-fail-open-flag: SMOKE_PRODUCT_FAIL_OPEN is warn or empty; refused before any request.
-run SMOKE_PRODUCT_FAIL_OPEN=yes -- bash scripts/smoke.sh
-[ "$CODE" = 1 ] || fail bad-fail-open-flag "thoát $CODE, cần 1"
-grep -qF 'SMOKE_PRODUCT_FAIL_OPEN không hợp lệ' "$TMP/out" || fail bad-fail-open-flag "thông báo không nêu biến"
-[ ! -s "$TMP/curl-calls" ] || fail bad-fail-open-flag "curl đã được gọi"
-echo "ok bad-fail-open-flag"
+# removed-fail-open-flag (ADR-0017 (e)): SMOKE_PRODUCT_FAIL_OPEN is gone. Any value, `warn` included, is refused before
+# any request, so a workflow still setting it cannot believe it tolerates something.
+for flag in warn yes; do
+  run SMOKE_PRODUCT_FAIL_OPEN="$flag" -- bash scripts/smoke.sh
+  [ "$CODE" = 1 ] || fail removed-fail-open-flag "$flag: thoát $CODE, cần 1"
+  grep -qF 'SMOKE_PRODUCT_FAIL_OPEN đã bỏ' "$TMP/out" || fail removed-fail-open-flag "$flag: thông báo không nêu biến"
+  [ ! -s "$TMP/curl-calls" ] || fail removed-fail-open-flag "$flag: curl đã được gọi"
+done
+echo "ok removed-fail-open-flag"
 
 # proxy-timing (NS-79): the time of /robots.txt and of an unknown blog slug (through the proxy, no database) is printed
 # next to each other; information only.
@@ -439,6 +390,8 @@ run BASE_URL="http://127.0.0.1:$PORT" -- bash scripts/smoke.sh
 grep -qE '^smoke: thời gian: GET /robots.txt [0-9]+ ms; GET /blog/smoke-proxy-[0-9-]+ \(qua proxy, không chạm DB\) → 404, [0-9]+ ms$' "$TMP/out" ||
   fail proxy-timing "thiếu dòng thời gian của /robots.txt và slug bài lạ"
 grep -qE '^smoke: GET /products/khong-ton-tai \(slug cố định của US-05\) → 404, [0-9]+ ms$' "$TMP/out" || fail proxy-timing "dòng 404 thiếu thời gian"
+grep -qE '^smoke: GET /products/smoke-first-[0-9-]+ \(slug sản phẩm lạ đầu tiên\) → 404, [0-9]+ ms$' "$TMP/out" ||
+  fail proxy-timing "thiếu thời gian của slug sản phẩm lạ đầu tiên"
 echo "ok proxy-timing"
 
 # security-headers (NS-108): every checked response must carry the four security headers of next.config.ts. A response

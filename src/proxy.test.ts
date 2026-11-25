@@ -2,30 +2,35 @@ import { unstable_doesMiddlewareMatch } from 'next/experimental/testing/server'
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { isPostSlug } from '@/features/blog/proxy-api'
-import { isKnownProductSlug } from '@/features/products/proxy-api'
+import { isCatalogSlug } from '@/features/products/proxy-api'
 import { config, proxy } from './proxy'
 
-// Only the database lookup is replaced; isProductSlug stays real, so the malformed-slug tests prove the proxy
-// itself refuses them before any lookup.
-vi.mock('@/features/products/proxy-api', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/features/products/proxy-api')>()),
-  isKnownProductSlug: vi.fn(),
-}))
+// The proxy answers product slugs from the static registry (ADR-0017, NS-79): on Vercel it runs at the edge nearest
+// the visitor, far from the database. If anything in its graph imported @/db, this factory would run and every
+// query would throw; both are checked below. dependency-cruiser `proxy-no-db` checks the same statically.
+const database = vi.hoisted(() => ({ imported: false, query: vi.fn() }))
+vi.mock('@/db', () => {
+  database.imported = true
+  return { dbQuery: database.query }
+})
 
-// The real registry check, wrapped only to see that the blog branch asks it (and nothing else).
+// The real registry checks, wrapped only to see which branch asks which (and nothing else). isProductSlug stays real,
+// so the malformed-slug tests prove the proxy refuses them before the registry is asked.
+vi.mock('@/features/products/proxy-api', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/features/products/proxy-api')>()
+  return { ...real, isCatalogSlug: vi.fn(real.isCatalogSlug) }
+})
 vi.mock('@/features/blog/proxy-api', async (importOriginal) => {
   const real = await importOriginal<typeof import('@/features/blog/proxy-api')>()
   return { ...real, isPostSlug: vi.fn(real.isPostSlug) }
 })
 
-const known = vi.mocked(isKnownProductSlug)
+const catalogCheck = vi.mocked(isCatalogSlug)
 const postCheck = vi.mocked(isPostSlug)
 const KNOWN_POST = '/blog/chao-mung-den-next-store'
 const KNOWN_PRODUCT = '/products/ao-git-push-force'
 const call = (path: string) => proxy(new NextRequest(`https://shop.test${path}`))
 const NOT_FOUND = 'https://shop.test/_khong-tim-thay'
-// What the audit asked for (PR #20): well under the 10 s connect_timeout of the database client.
-const LOOKUP_BOUND_MS = 500
 
 const isPassThrough = (response: Response) =>
   response.headers.get('x-middleware-next') === '1' && response.headers.get('x-middleware-rewrite') === null
@@ -47,26 +52,57 @@ let log: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // The database is down for every test: no answer may depend on it.
+  database.query.mockImplementation(() => {
+    throw new Error('db down')
+  })
   log = vi.spyOn(console, 'error').mockImplementation(() => {})
+  vi.useFakeTimers()
 })
 afterEach(() => {
+  // No answer may wait on a timer, log, or touch the database.
+  expect(vi.getTimerCount()).toBe(0)
+  expect(log).not.toHaveBeenCalled()
+  expect(database.query).not.toHaveBeenCalled()
   vi.useRealTimers()
   vi.restoreAllMocks()
 })
 
 describe('proxy', () => {
-  it('passes a known slug through', async () => {
-    known.mockResolvedValue(true)
-    const response = await call('/products/ao-git-push-force')
-    expect(known).toHaveBeenCalledWith('ao-git-push-force')
+  it('passes a known slug through', () => {
+    const response = call(KNOWN_PRODUCT)
+    expect(catalogCheck).toHaveBeenCalledWith('ao-git-push-force')
     expect(isPassThrough(response)).toBe(true)
   })
 
-  it('US-05: rewrites an unknown slug to the not-found path', async () => {
-    known.mockResolvedValue(false)
-    const response = await call('/products/khong-ton-tai')
-    expect(known).toHaveBeenCalledWith('khong-ton-tai')
+  it('answers synchronously: nothing to wait for', () => {
+    expect(call(KNOWN_PRODUCT)).not.toBeInstanceOf(Promise)
+    expect(call('/products/khong-ton-tai')).not.toBeInstanceOf(Promise)
+  })
+
+  it('passes every registry slug through', async () => {
+    const { PRODUCT_SLUGS } = await import('@/features/products/catalog-slugs')
+    for (const slug of PRODUCT_SLUGS) expect(isPassThrough(call(`/products/${slug}`))).toBe(true)
+  })
+
+  it('US-05: rewrites an unknown slug to the not-found path', () => {
+    const response = call('/products/khong-ton-tai')
+    expect(catalogCheck).toHaveBeenCalledWith('khong-ton-tai')
     expect(response.headers.get('x-middleware-rewrite')).toBe(NOT_FOUND)
+  })
+
+  it('proxy answers an unknown product slug without the database', () => {
+    expect(isNotFound(call('/products/khong-ton-tai'))).toBe(true)
+    expect(isPassThrough(call(KNOWN_PRODUCT))).toBe(true)
+    expect(database.imported).toBe(false)
+  })
+
+  it('answers the same with the database down', () => {
+    // beforeEach makes every query throw; the answers are those of a healthy database.
+    expect(isNotFound(call('/products/chua-ai-mo'))).toBe(true)
+    expect(isNotFound(call('/products/chua-ai-mo/opengraph-image-16g1u1'))).toBe(true)
+    expect(isPassThrough(call('/products/sticker-git'))).toBe(true)
+    expect(isPassThrough(call('/products/sticker-git/opengraph-image-16g1u1'))).toBe(true)
   })
 
   it.each([
@@ -77,25 +113,21 @@ describe('proxy', () => {
     '/products/ao%2Dgit%2Dpush%2Dforce',
     '/products/khong-ton-tai%00',
     `/products/${'a'.repeat(81)}`,
-  ])('rewrites the malformed %s to not-found without a lookup, even with the database down', async (path) => {
-    known.mockRejectedValue(new Error('db down'))
-    const response = await call(path)
+  ])('rewrites the malformed %s to not-found without asking the registry', (path) => {
+    const response = call(path)
     expect(response.headers.get('x-middleware-rewrite')).toBe(NOT_FOUND)
-    expect(known).not.toHaveBeenCalled()
-    expect(log).not.toHaveBeenCalled()
+    expect(catalogCheck).not.toHaveBeenCalled()
   })
 
-  it.each(TRANSPORT_SUFFIXES)('passes a known slug in the %s transport form through', async (suffix) => {
-    known.mockResolvedValue(true)
-    const response = await call(`/products/ao-git-push-force${suffix}`)
-    expect(known).toHaveBeenCalledWith('ao-git-push-force')
+  it.each(TRANSPORT_SUFFIXES)('passes a known slug in the %s transport form through', (suffix) => {
+    const response = call(`/products/ao-git-push-force${suffix}`)
+    expect(catalogCheck).toHaveBeenCalledWith('ao-git-push-force')
     expect(isPassThrough(response)).toBe(true)
   })
 
-  it.each(TRANSPORT_SUFFIXES)('rewrites an unknown slug in the %s transport form to not-found', async (suffix) => {
-    known.mockResolvedValue(false)
-    const response = await call(`/products/khong-ton-tai${suffix}`)
-    expect(known).toHaveBeenCalledWith('khong-ton-tai')
+  it.each(TRANSPORT_SUFFIXES)('rewrites an unknown slug in the %s transport form to not-found', (suffix) => {
+    const response = call(`/products/khong-ton-tai${suffix}`)
+    expect(catalogCheck).toHaveBeenCalledWith('khong-ton-tai')
     expect(response.headers.get('x-middleware-rewrite')).toBe(NOT_FOUND)
   })
 
@@ -109,71 +141,21 @@ describe('proxy', () => {
     '/products/ao-git-push-force.segment.rsc',
     '/products/ao-git-push-force.segments/.segment.rsc',
     '/products/ao-git-push-force.json',
-  ])('rewrites the malformed transport path %s to not-found without a lookup', async (path) => {
-    known.mockRejectedValue(new Error('db down'))
-    const response = await call(path)
+  ])('rewrites the malformed transport path %s to not-found without asking the registry', (path) => {
+    const response = call(path)
     expect(response.headers.get('x-middleware-rewrite')).toBe(NOT_FOUND)
-    expect(known).not.toHaveBeenCalled()
-  })
-
-  it('lets the request through when the lookup throws, logging one fixed line without the error', async () => {
-    const cause = new Error('select "id" from "products" where "slug" = $1 — host ep-x.neon.tech')
-    known.mockRejectedValue(new Error('connect ECONNREFUSED postgres://u:secret@h/db', { cause }))
-    const response = await call('/products/sticker-git')
-    expect(isPassThrough(response)).toBe(true)
-    expect(log).toHaveBeenCalledTimes(1)
-    expect(log.mock.calls[0]).toHaveLength(1)
-    expect(typeof log.mock.calls[0]?.[0]).toBe('string')
-    const logged = JSON.stringify(log.mock.calls)
-    for (const leak of ['secret', 'postgres://', 'select', 'neon.tech', 'sticker-git']) expect(logged).not.toContain(leak)
-  })
-
-  it('lets the request through when the lookup throws synchronously', async () => {
-    known.mockImplementation(() => {
-      throw new Error('db down')
-    })
-    expect(isPassThrough(await call('/products/sticker-git'))).toBe(true)
-    expect(log).toHaveBeenCalledTimes(1)
-  })
-
-  it(`lets the request through within ${LOOKUP_BOUND_MS} ms when the lookup never settles`, async () => {
-    vi.useFakeTimers()
-    known.mockReturnValue(new Promise<boolean>(() => {}))
-    let settled: Response | undefined
-    void call('/products/chua-ai-mo').then((response) => {
-      settled = response
-    })
-    await vi.advanceTimersByTimeAsync(LOOKUP_BOUND_MS)
-    expect(settled).toBeDefined()
-    expect(settled && isPassThrough(settled)).toBe(true)
-    expect(log).toHaveBeenCalledTimes(1)
-    expect(JSON.stringify(log.mock.calls)).not.toContain('chua-ai-mo')
-  })
-
-  it('does not wait for the timer once the lookup has answered', async () => {
-    vi.useFakeTimers()
-    known.mockResolvedValue(false)
-    const response = await call('/products/khong-ton-tai')
-    expect(response.headers.get('x-middleware-rewrite')).toBe(NOT_FOUND)
-    expect(vi.getTimerCount()).toBe(0)
+    expect(catalogCheck).not.toHaveBeenCalled()
   })
 })
 
-// Blog (ADR-0012, Task 13 M3): the slug is checked against the static registry only. No database, no timer, no log,
-// so the answer is the same with the database down and an unknown slug never reaches the page (K3: 200 + cache entry).
+// Blog (ADR-0012, Task 13 M3): the slug is checked against the static registry only, like products since ADR-0017.
+// An unknown slug never reaches the page (K3: 200 + cache entry).
 describe('proxy: blog', () => {
-  beforeEach(() => {
-    known.mockRejectedValue(new Error('db down'))
-  })
-
-  it('lets a known blog post through without touching the database', async () => {
-    vi.useFakeTimers()
-    const response = await call(KNOWN_POST)
+  it('lets a known blog post through', () => {
+    const response = call(KNOWN_POST)
     expect(isPassThrough(response)).toBe(true)
     expect(postCheck).toHaveBeenCalledWith('chao-mung-den-next-store')
-    expect(known).not.toHaveBeenCalled()
-    expect(vi.getTimerCount()).toBe(0)
-    expect(log).not.toHaveBeenCalled()
+    expect(catalogCheck).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -193,60 +175,50 @@ describe('proxy: blog', () => {
     '/blog/chao-mung-den-next-store.segment.rsc',
     '/blog/chao-mung-den-next-store.segments/_tree',
     `/blog/${'a'.repeat(81)}`,
-  ])('rewrites an unknown blog slug to the not-found path without touching the database (%s)', async (path) => {
-    vi.useFakeTimers()
-    const response = await call(path)
-    expect(isNotFound(response)).toBe(true)
-    expect(known).not.toHaveBeenCalled()
-    expect(vi.getTimerCount()).toBe(0)
-    expect(log).not.toHaveBeenCalled()
+  ])('rewrites an unknown blog slug to the not-found path (%s)', (path) => {
+    expect(isNotFound(call(path))).toBe(true)
+    expect(catalogCheck).not.toHaveBeenCalled()
   })
 
-  it.each(TRANSPORT_SUFFIXES)('lets the %s transport form of a known post through', async (suffix) => {
-    const response = await call(`${KNOWN_POST}${suffix}`)
+  it.each(TRANSPORT_SUFFIXES)('lets the %s transport form of a known post through', (suffix) => {
+    const response = call(`${KNOWN_POST}${suffix}`)
     expect(isPassThrough(response)).toBe(true)
     expect(postCheck).toHaveBeenCalledWith('chao-mung-den-next-store')
-    expect(known).not.toHaveBeenCalled()
+    expect(catalogCheck).not.toHaveBeenCalled()
   })
 
-  it.each(TRANSPORT_SUFFIXES)('rewrites the %s transport form of an unknown post to not-found', async (suffix) => {
-    const response = await call(`/blog/khong-ton-tai${suffix}`)
-    expect(isNotFound(response)).toBe(true)
-    expect(known).not.toHaveBeenCalled()
+  it.each(TRANSPORT_SUFFIXES)('rewrites the %s transport form of an unknown post to not-found', (suffix) => {
+    expect(isNotFound(call(`/blog/khong-ton-tai${suffix}`))).toBe(true)
+    expect(catalogCheck).not.toHaveBeenCalled()
   })
 
-  it('never treats a product slug as a post, or a post slug as a product', async () => {
-    known.mockResolvedValue(true)
-    expect(isNotFound(await call('/blog/ao-git-push-force'))).toBe(true)
-    expect(known).not.toHaveBeenCalled()
-    known.mockResolvedValue(false)
-    expect(isNotFound(await call('/products/chao-mung-den-next-store'))).toBe(true)
-    expect(known).toHaveBeenCalledWith('chao-mung-den-next-store')
+  it('never treats a product slug as a post, or a post slug as a product', () => {
+    expect(isNotFound(call('/blog/ao-git-push-force'))).toBe(true)
+    expect(catalogCheck).not.toHaveBeenCalled()
+    expect(isNotFound(call('/products/chao-mung-den-next-store'))).toBe(true)
+    expect(catalogCheck).toHaveBeenCalledWith('chao-mung-den-next-store')
   })
 })
 
 // Open Graph image routes (K10): inside a route group the file gets a hash suffix (`opengraph-image-16g1u1`); without
 // the proxy an unknown slug answers a 200 image and leaves a new cache entry. The suffix-less form is covered too: it is
-// the route's own name, and Vercel or a later Next.js may serve it.
+// the route's own name, and Vercel or a later Next.js may serve it. Since ADR-0017 an unknown product's image is a
+// 404 here even with the database down, so the route handler never runs for it (NS-109: it answered 500).
 describe('proxy: open graph image paths', () => {
   const IMAGE_SUFFIXES = ['/opengraph-image-16g1u1', '/opengraph-image-11vtts', '/opengraph-image']
 
-  beforeEach(() => {
-    known.mockImplementation(async (slug: string) => slug === 'ao-git-push-force')
+  it.each(IMAGE_SUFFIXES)('lets the image %s of a known post and a known product through', (image) => {
+    expect(isPassThrough(call(`${KNOWN_POST}${image}`))).toBe(true)
+    expect(isPassThrough(call(`${KNOWN_PRODUCT}${image}`))).toBe(true)
+    expect(catalogCheck).toHaveBeenCalledTimes(1)
+    expect(catalogCheck).toHaveBeenCalledWith('ao-git-push-force')
   })
 
-  it.each(IMAGE_SUFFIXES)('lets the image %s of a known post and a known product through', async (image) => {
-    expect(isPassThrough(await call(`${KNOWN_POST}${image}`))).toBe(true)
-    expect(isPassThrough(await call(`${KNOWN_PRODUCT}${image}`))).toBe(true)
-    expect(known).toHaveBeenCalledTimes(1)
-    expect(known).toHaveBeenCalledWith('ao-git-push-force')
-  })
-
-  it.each(IMAGE_SUFFIXES)('rewrites the open graph image %s of an unknown slug', async (image) => {
-    expect(isNotFound(await call(`/blog/khong-ton-tai${image}`))).toBe(true)
-    expect(known).not.toHaveBeenCalled()
-    expect(isNotFound(await call(`/products/khong-ton-tai${image}`))).toBe(true)
-    expect(known).toHaveBeenCalledWith('khong-ton-tai')
+  it.each(IMAGE_SUFFIXES)('rewrites the open graph image %s of an unknown slug', (image) => {
+    expect(isNotFound(call(`/blog/khong-ton-tai${image}`))).toBe(true)
+    expect(catalogCheck).not.toHaveBeenCalled()
+    expect(isNotFound(call(`/products/khong-ton-tai${image}`))).toBe(true)
+    expect(catalogCheck).toHaveBeenCalledWith('khong-ton-tai')
   })
 
   it.each([
@@ -265,82 +237,57 @@ describe('proxy: open graph image paths', () => {
     [`${KNOWN_PRODUCT}/opengraph-image.png`, true],
     [`${KNOWN_PRODUCT}/twitter-image-16g1u1`, true],
     [`${KNOWN_POST}/opengraph-image-11vtts/them`, true],
-  ])('open graph image path %s → rewritten: %s', async (path, rewritten) => {
-    const response = await call(path)
+  ])('open graph image path %s → rewritten: %s', (path, rewritten) => {
+    const response = call(path)
     expect(isNotFound(response)).toBe(rewritten)
     expect(isPassThrough(response)).toBe(!rewritten)
-  })
-
-  it('still fails open for a product image when the lookup throws', async () => {
-    known.mockRejectedValue(new Error('db down'))
-    expect(isPassThrough(await call(`${KNOWN_PRODUCT}/opengraph-image-16g1u1`))).toBe(true)
-    expect(log).toHaveBeenCalledTimes(1)
-  })
-
-  it(`still fails open for a product image within ${LOOKUP_BOUND_MS} ms when the lookup never settles`, async () => {
-    vi.useFakeTimers()
-    known.mockReturnValue(new Promise<boolean>(() => {}))
-    let settled: Response | undefined
-    void call('/products/chua-ai-mo/opengraph-image-16g1u1').then((response) => {
-      settled = response
-    })
-    await vi.advanceTimersByTimeAsync(LOOKUP_BOUND_MS)
-    expect(settled && isPassThrough(settled)).toBe(true)
-    expect(log).toHaveBeenCalledTimes(1)
   })
 })
 
 // M4 decision 11 (C3, NS-92), narrowed by NS-103: a Server Action is a POST to the page that renders it, carrying the
 // `next-action` header (Next.js 16.4.6 client/components/app-router-headers.js ACTION_HEADER, read in
 // server/lib/server-action-request-meta.js), and the matcher does not filter by method. Only that request goes
-// straight on, so "add to cart" never waits for the slug lookup from the edge (up to 400 ms, NS-79). Any other method,
-// and a POST without the header, is rendered by Next.js like a GET: it gets the same slug check, or an unknown slug
-// would answer 200 and leave a new route cache entry (audit NS-96, ADR-0014 (e)).
+// straight on; the action checks the product itself. Any other method, and a POST without the header, is rendered by
+// Next.js like a GET: it gets the same slug check, or an unknown slug would answer 200 and leave a new route cache
+// entry (audit NS-96, ADR-0014 (e)).
 describe('proxy: Server Actions and other methods', () => {
   const callWith = (method: string, path: string, headers?: Record<string, string>) =>
     proxy(new NextRequest(`https://shop.test${path}`, { method, headers }))
   const ACTION = { 'next-action': '7f3a9c' }
 
-  beforeEach(() => {
-    known.mockRejectedValue(new Error('db down'))
-  })
-
   it.each([KNOWN_PRODUCT, '/products/khong-ton-tai', '/products/KHONG-TON-TAI', `${KNOWN_PRODUCT}.rsc`])(
-    'lets a Server Action POST to a product path through without a lookup (%s)',
-    async (path) => {
-      vi.useFakeTimers()
-      const response = await callWith('POST', path, ACTION)
-      expect(isPassThrough(response)).toBe(true)
-      expect(known).not.toHaveBeenCalled()
-      expect(vi.getTimerCount()).toBe(0)
-      expect(log).not.toHaveBeenCalled()
+    'lets a Server Action POST to a product path through without checking the slug (%s)',
+    (path) => {
+      expect(isPassThrough(callWith('POST', path, ACTION))).toBe(true)
+      expect(catalogCheck).not.toHaveBeenCalled()
     },
   )
 
-  it('lets a Server Action POST to a blog path or an open graph image path through without checking the slug', async () => {
+  it('lets a Server Action POST to a blog path or an open graph image path through without checking the slug', () => {
     for (const path of ['/blog/khong-ton-tai', KNOWN_POST, '/products/khong-ton-tai/opengraph-image-16g1u1']) {
-      expect(isPassThrough(await callWith('POST', path, ACTION))).toBe(true)
+      expect(isPassThrough(callWith('POST', path, ACTION))).toBe(true)
     }
     expect(postCheck).not.toHaveBeenCalled()
-    expect(known).not.toHaveBeenCalled()
+    expect(catalogCheck).not.toHaveBeenCalled()
   })
 
   // Header names are case-insensitive on the wire; Headers.has matches them all, as Next.js's own headers.get does.
   // An empty value is still a fetch action to Next.js (typeof '' === 'string'), answered before render.
-  it.each(['next-action', 'Next-Action', 'NEXT-ACTION', 'nExT-aCtIoN'])('recognises the %s header', async (name) => {
-    expect(isPassThrough(await callWith('POST', '/products/khong-ton-tai', { [name]: '7f3a9c' }))).toBe(true)
-    expect(known).not.toHaveBeenCalled()
+  it.each(['next-action', 'Next-Action', 'NEXT-ACTION', 'nExT-aCtIoN'])('recognises the %s header', (name) => {
+    expect(isPassThrough(callWith('POST', '/products/khong-ton-tai', { [name]: '7f3a9c' }))).toBe(true)
+    expect(catalogCheck).not.toHaveBeenCalled()
   })
 
-  it('recognises a next-action header with an empty value', async () => {
-    expect(isPassThrough(await callWith('POST', '/blog/khong-ton-tai', { 'next-action': '' }))).toBe(true)
+  it('recognises a next-action header with an empty value', () => {
+    expect(isPassThrough(callWith('POST', '/blog/khong-ton-tai', { 'next-action': '' }))).toBe(true)
     expect(postCheck).not.toHaveBeenCalled()
   })
 
-  it.each(['PUT', 'PATCH', 'DELETE', 'OPTIONS'])('does not take next-action on %s as a Server Action', async (method) => {
-    expect(isNotFound(await callWith(method, '/products/KHONG-TON-TAI', ACTION))).toBe(true)
-    expect(isNotFound(await callWith(method, '/blog/khong-ton-tai', ACTION))).toBe(true)
-    expect(known).not.toHaveBeenCalled()
+  it.each(['PUT', 'PATCH', 'DELETE', 'OPTIONS'])('does not take next-action on %s as a Server Action', (method) => {
+    expect(isNotFound(callWith(method, '/products/KHONG-TON-TAI', ACTION))).toBe(true)
+    expect(isNotFound(callWith(method, '/blog/khong-ton-tai', ACTION))).toBe(true)
+    expect(isNotFound(callWith(method, '/products/khong-ton-tai', ACTION))).toBe(true)
+    expect(catalogCheck).toHaveBeenCalledWith('khong-ton-tai')
   })
 
   it.each([
@@ -352,7 +299,7 @@ describe('proxy: Server Actions and other methods', () => {
     ['PATCH', {}],
     ['DELETE', {}],
     ['OPTIONS', {}],
-  ])('rewrites a %s %j to an unknown or malformed slug to not-found', async (method, headers) => {
+  ])('rewrites a %s %j to an unknown or malformed slug to not-found', (method, headers) => {
     for (const path of [
       '/products/KHONG-TON-TAI',
       '/products/a..b',
@@ -361,38 +308,29 @@ describe('proxy: Server Actions and other methods', () => {
       '/blog/constructor',
       '/blog/khong-ton-tai/opengraph-image-11vtts',
     ]) {
-      expect(isNotFound(await callWith(method, path, headers))).toBe(true)
+      expect(isNotFound(callWith(method, path, headers))).toBe(true)
     }
-    expect(known).not.toHaveBeenCalled()
-    known.mockResolvedValue(false)
-    expect(isNotFound(await callWith(method, '/products/khong-ton-tai', headers))).toBe(true)
-    expect(known).toHaveBeenCalledWith('khong-ton-tai')
+    expect(catalogCheck).not.toHaveBeenCalled()
+    expect(isNotFound(callWith(method, '/products/khong-ton-tai', headers))).toBe(true)
+    expect(isNotFound(callWith(method, '/products/khong-ton-tai/opengraph-image-16g1u1', headers))).toBe(true)
+    expect(catalogCheck).toHaveBeenCalledWith('khong-ton-tai')
   })
 
-  it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])('lets %s without next-action to a known slug through', async (method) => {
-    known.mockResolvedValue(true)
-    expect(isPassThrough(await callWith(method, KNOWN_PRODUCT))).toBe(true)
-    expect(known).toHaveBeenCalledWith('ao-git-push-force')
-    expect(isPassThrough(await callWith(method, KNOWN_POST))).toBe(true)
-    expect(isPassThrough(await callWith(method, `${KNOWN_PRODUCT}/opengraph-image-16g1u1`))).toBe(true)
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])('lets %s without next-action to a known slug through', (method) => {
+    expect(isPassThrough(callWith(method, KNOWN_PRODUCT))).toBe(true)
+    expect(catalogCheck).toHaveBeenCalledWith('ao-git-push-force')
+    expect(isPassThrough(callWith(method, KNOWN_POST))).toBe(true)
+    expect(isPassThrough(callWith(method, `${KNOWN_PRODUCT}/opengraph-image-16g1u1`))).toBe(true)
   })
 
-  it('still fails open for a product POST without next-action when the lookup throws', async () => {
-    expect(isPassThrough(await callWith('POST', '/products/sticker-git'))).toBe(true)
-    expect(known).toHaveBeenCalledWith('sticker-git')
-    expect(log).toHaveBeenCalledTimes(1)
-  })
-
-  it.each(['GET', 'HEAD'])('still checks the slug on %s, with or without next-action', async (method) => {
-    known.mockResolvedValue(false)
+  it.each(['GET', 'HEAD'])('still checks the slug on %s, with or without next-action', (method) => {
     for (const headers of [{}, ACTION]) {
-      expect(isNotFound(await callWith(method, '/products/khong-ton-tai', headers))).toBe(true)
-      expect(isNotFound(await callWith(method, '/products/KHONG-TON-TAI', headers))).toBe(true)
-      expect(isNotFound(await callWith(method, '/blog/khong-ton-tai', headers))).toBe(true)
+      expect(isNotFound(callWith(method, '/products/khong-ton-tai', headers))).toBe(true)
+      expect(isNotFound(callWith(method, '/products/KHONG-TON-TAI', headers))).toBe(true)
+      expect(isNotFound(callWith(method, '/blog/khong-ton-tai', headers))).toBe(true)
     }
-    expect(known).toHaveBeenCalledWith('khong-ton-tai')
-    known.mockResolvedValue(true)
-    expect(isPassThrough(await callWith(method, KNOWN_PRODUCT))).toBe(true)
+    expect(catalogCheck).toHaveBeenCalledWith('khong-ton-tai')
+    expect(isPassThrough(callWith(method, KNOWN_PRODUCT))).toBe(true)
   })
 })
 

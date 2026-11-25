@@ -22,8 +22,7 @@
 | `schema.ts` | Zod schema cho dữ liệu đầu vào |
 | `types.ts` | Kiểu dùng chung trong feature |
 | `metadata.ts` | Dựng `Metadata` của trang từ dữ liệu feature (`generateMetadata` của `page.tsx` gọi vào) |
-| `slug-guard.ts` | Kiểm slug tồn tại, không cache, cho `src/proxy.ts` trước khi render. **Bỏ ở M5** (NS-79, Task 3) khi `catalog-slugs.ts` thay nó — [ADR-0017](./adr/0017-product-slug-registry-in-proxy.md) |
-| `catalog-slugs.ts` | Registry slug sản phẩm (M5): mảng `as const` khớp seed và hàm tra đồng bộ; **không import gì**, để `proxy-api.ts` và Vitest dùng được — [ADR-0017](./adr/0017-product-slug-registry-in-proxy.md) |
+| `catalog-slugs.ts` | Registry slug sản phẩm (M5, thay `slug-guard.ts` cũ): mảng `as const` khớp seed và hàm tra đồng bộ; **không import gì**, để `proxy-api.ts` và Vitest dùng được; proxy không bao giờ tra DB (dependency-cruiser `proxy-no-db`) — [ADR-0017](./adr/0017-product-slug-registry-in-proxy.md) |
 | `cache-tags.ts` | Mọi tag cache của feature (hằng và hàm dựng tag) và danh sách tag cho mỗi loại ghi (`tagsForProductWrite`); **không import gì**; `cacheTag` / `updateTag` chỉ dùng hằng từ đây — [ADR-0019](./adr/0019-product-edits-and-cache-tags.md) |
 | `config.ts` | Đọc và kiểm biến môi trường của feature (ví dụ `readAdminConfig`); thiếu hoặc yếu → cấu hình tắt (fail-closed), không bao giờ log giá trị; `server-only` — [ADR-0018](./adr/0018-admin-auth.md) |
 | `session.ts` | Ký / xác minh phiên admin bằng Web Crypto; nơi **duy nhất** ký hay xác minh token; không `server-only`, không `zod`, để proxy dùng qua `proxy-api.ts` — [ADR-0018](./adr/0018-admin-auth.md) |
