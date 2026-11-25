@@ -2,6 +2,7 @@ import 'server-only'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { readAdminConfig } from '@/features/admin/config'
+import { type AdminCookieName, adminCookieNameFor } from '@/features/admin/cookie-name'
 import { ADMIN_SESSION_TTL_SECONDS, signSession, verifySession } from '@/features/admin/session'
 import { getSiteUrl } from '@/lib/site-url'
 
@@ -10,15 +11,12 @@ import { getSiteUrl } from '@/lib/site-url'
 
 const LOGIN_PATH = '/admin/login'
 
-type AdminCookieName = '__Host-ns_admin' | 'ns_admin'
-
 type AdminCookieOptions = { httpOnly: true; sameSite: 'strict'; path: '/'; secure: boolean; maxAge: number }
 
 const isSecureSite = (): boolean => getSiteUrl().protocol === 'https:'
 
-// __Host- makes the browser refuse the cookie unless it is Secure, Path=/ and has no Domain. The prefix needs
-// HTTPS, hence the plain name locally and in CI (same rule as the cart cookie).
-export const adminCookieName = (): AdminCookieName => (isSecureSite() ? '__Host-ns_admin' : 'ns_admin')
+// Same rule as the proxy (cookie-name.ts): __Host-ns_admin on an https site, ns_admin on http.
+export const adminCookieName = (): AdminCookieName => adminCookieNameFor(getSiteUrl())
 
 // Strict: a request started from another site never carries it (CSRF, ADR-0018 7A). maxAge equals the absolute TTL
 // inside the token; the token, not the browser, decides validity.

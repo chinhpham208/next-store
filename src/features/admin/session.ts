@@ -6,6 +6,11 @@
 
 export const ADMIN_SESSION_TTL_SECONDS = 8 * 60 * 60
 
+// How far the verifying machine's clock may lag the signing one (sign in one instance, verify in the proxy, layout or
+// action of another; self-host on several machines, ADR-0020). Without it a fresh token is refused for the first δ
+// seconds. Only widens the upper bound: `exp ≤ now` is still refused.
+export const CLOCK_SKEW_SECONDS = 60
+
 export const MIN_SESSION_SECRET_LENGTH = 32
 
 const VERSION = 'v1'
@@ -52,8 +57,8 @@ export const signSession = async ({ secret, now }: { secret: string; now: Date }
 }
 
 /**
- * True only for a well-formed token, not expired, expiring no later than `now` + TTL, whose signature
- * crypto.subtle.verify accepts (constant-time comparison inside Web Crypto, never `===` on strings). Every other
+ * True only for a well-formed token, not expired, expiring no later than `now` + TTL + CLOCK_SKEW_SECONDS, whose
+ * signature crypto.subtle.verify accepts (constant-time comparison inside Web Crypto, never `===` on strings). Every other
  * case, a Web Crypto error included, is false. A secret under 32 characters throws: callers check the config first.
  */
 export const verifySession = async ({
@@ -73,7 +78,7 @@ export const verifySession = async ({
   if (exp === undefined || signature === undefined) return false
   const expiry = Number(exp)
   const current = unixSeconds(now)
-  if (expiry <= current || expiry > current + ADMIN_SESSION_TTL_SECONDS) return false
+  if (expiry <= current || expiry > current + ADMIN_SESSION_TTL_SECONDS + CLOCK_SKEW_SECONDS) return false
   try {
     return await crypto.subtle.verify(
       'HMAC',

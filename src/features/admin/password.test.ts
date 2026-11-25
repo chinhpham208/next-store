@@ -10,9 +10,11 @@ vi.mock('node:crypto', async (importOriginal) => {
 })
 
 const { passwordMatches } = await import('@/features/admin/password')
+const { readAdminConfig } = await import('@/features/admin/config')
 
-// Fake value, test only.
+// Fake values, test only.
 const EXPECTED = 'test-admin-password-0123'
+const SECRET = 'test-session-secret-0123456789abcdef'
 
 afterEach(() => {
   nodeCrypto.createHash.mockClear()
@@ -55,5 +57,14 @@ describe('passwordMatches', () => {
     const [left, right] = nodeCrypto.timingSafeEqual.mock.calls[0] ?? []
     expect(Buffer.isBuffer(left) ? left.byteLength : 0).toBe(32)
     expect(Buffer.isBuffer(right) ? right.byteLength : 0).toBe(32)
+  })
+
+  it('compares against the trimmed ADMIN_PASSWORD from the config', () => {
+    // A password pasted into Vercel with a trailing newline must not lock the admin out.
+    const config = readAdminConfig({ ADMIN_PASSWORD: `${EXPECTED}\n`, SESSION_SECRET: SECRET })
+    expect(config.enabled).toBe(true)
+    if (!config.enabled) return
+    expect(passwordMatches(EXPECTED, config.password)).toBe(true)
+    expect(passwordMatches(`${EXPECTED}\n`, config.password)).toBe(false)
   })
 })

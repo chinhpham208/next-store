@@ -58,6 +58,23 @@ describe('readAdminConfig', () => {
       enabled: false,
       reason: 'weak',
     })
+    // Equal once surrounding whitespace is gone: still one value for both.
+    for (const env of [
+      { ADMIN_PASSWORD: `${SECRET} `, SESSION_SECRET: SECRET },
+      { ADMIN_PASSWORD: SECRET, SESSION_SECRET: `${SECRET}\n` },
+      { ADMIN_PASSWORD: `\t${SECRET}`, SESSION_SECRET: `${SECRET}\r\n` },
+    ]) {
+      expect(readAdminConfig(env)).toEqual({ enabled: false, reason: 'weak' })
+    }
+  })
+
+  it('returns both values trimmed, so a value pasted with a newline still works', () => {
+    // Vercel keeps a trailing newline pasted into the dashboard; the owner never meant it as part of the value.
+    expect(readAdminConfig({ ADMIN_PASSWORD: `${PASSWORD}\n`, SESSION_SECRET: ` ${SECRET}\r\n` })).toEqual({
+      enabled: true,
+      password: PASSWORD,
+      sessionSecret: SECRET,
+    })
   })
 
   it('reads process.env by default', () => {

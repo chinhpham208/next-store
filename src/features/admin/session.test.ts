@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { ADMIN_SESSION_TTL_SECONDS, signSession, verifySession } from '@/features/admin/session'
+import { ADMIN_SESSION_TTL_SECONDS, CLOCK_SKEW_SECONDS, signSession, verifySession } from '@/features/admin/session'
 
 // Fake values, test only: 32+ characters, never used anywhere real.
 const SECRET = 'test-session-secret-0123456789abcdef'
@@ -83,10 +83,33 @@ describe('signSession / verifySession', () => {
     expect(await verifySession({ token, secret: SECRET, now: later })).toBe(false)
   })
 
-  it('rejects an expiry further than the TTL', async () => {
-    const atLimit = await tokenFor(NOW_SECONDS + ADMIN_SESSION_TTL_SECONDS)
+  it('has a clock skew allowance of 60 seconds', () => {
+    expect(CLOCK_SKEW_SECONDS).toBe(60)
+  })
+
+  it('accepts a fresh token on a verifier whose clock lags the signer by up to 60 s', async () => {
+    // Signed in one instance, verified in another (proxy, layout, action) whose clock is behind by δ.
+    const token = await signSession({ secret: SECRET, now: NOW })
+    for (const lagMs of [1, 1000, 59_000, 60_000]) {
+      const verifierNow = new Date(NOW.getTime() - lagMs)
+      expect(await verifySession({ token, secret: SECRET, now: verifierNow }), `${String(lagMs)} ms`).toBe(true)
+    }
+  })
+
+  it('rejects a fresh token on a verifier whose clock lags the signer by more than 60 s', async () => {
+    const token = await signSession({ secret: SECRET, now: NOW })
+    for (const lagMs of [61_000, 3_600_000]) {
+      const verifierNow = new Date(NOW.getTime() - lagMs)
+      expect(await verifySession({ token, secret: SECRET, now: verifierNow }), `${String(lagMs)} ms`).toBe(false)
+    }
+  })
+
+  it('rejects an expiry further than the TTL plus the skew allowance', async () => {
+    const atTtl = await tokenFor(NOW_SECONDS + ADMIN_SESSION_TTL_SECONDS)
+    expect(await verifySession({ token: atTtl, secret: SECRET, now: NOW })).toBe(true)
+    const atLimit = await tokenFor(NOW_SECONDS + ADMIN_SESSION_TTL_SECONDS + CLOCK_SKEW_SECONDS)
     expect(await verifySession({ token: atLimit, secret: SECRET, now: NOW })).toBe(true)
-    const beyond = await tokenFor(NOW_SECONDS + ADMIN_SESSION_TTL_SECONDS + 1)
+    const beyond = await tokenFor(NOW_SECONDS + ADMIN_SESSION_TTL_SECONDS + CLOCK_SKEW_SECONDS + 1)
     expect(await verifySession({ token: beyond, secret: SECRET, now: NOW })).toBe(false)
     const farFuture = await tokenFor(9_999_999_999)
     expect(await verifySession({ token: farFuture, secret: SECRET, now: NOW })).toBe(false)

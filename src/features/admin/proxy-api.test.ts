@@ -7,10 +7,14 @@ import { signSession } from '@/features/admin/session'
 const PASSWORD = 'test-admin-password-0123'
 const SECRET = 'test-session-secret-0123456789abcdef'
 
-const requestWith = (cookie?: string): NextRequest =>
-  new NextRequest('https://shop.example.vn/admin/products', cookie === undefined ? {} : { headers: { cookie } })
+const HTTPS_SITE = 'https://shop.example.vn'
+const HTTP_SITE = 'http://localhost:3100'
+
+const requestWith = (cookie?: string, origin = HTTPS_SITE): NextRequest =>
+  new NextRequest(`${origin}/admin/products`, cookie === undefined ? {} : { headers: { cookie } })
 
 beforeEach(() => {
+  vi.stubEnv('SITE_URL', HTTPS_SITE)
   vi.stubEnv('ADMIN_PASSWORD', PASSWORD)
   vi.stubEnv('SESSION_SECRET', SECRET)
 })
@@ -75,26 +79,52 @@ describe('isAdminLoginPath', () => {
 })
 
 describe('hasValidAdminCookie', () => {
-  it('accepts a valid session under either cookie name', async () => {
+  it('on an https site reads only __Host-ns_admin', async () => {
+    vi.stubEnv('SITE_URL', HTTPS_SITE)
     const token = await signSession({ secret: SECRET, now: new Date() })
     expect(await hasValidAdminCookie(requestWith(`__Host-ns_admin=${token}`))).toBe(true)
-    expect(await hasValidAdminCookie(requestWith(`ns_admin=${token}`))).toBe(true)
     expect(await hasValidAdminCookie(requestWith(`ns_cart=x; ns_admin=junk; __Host-ns_admin=${token}`))).toBe(true)
+    // The plain name could be set over http or from a sibling host; the app would not accept it either.
+    expect(await hasValidAdminCookie(requestWith(`ns_admin=${token}`))).toBe(false)
+  })
+
+  it('on an http site reads only ns_admin', async () => {
+    vi.stubEnv('SITE_URL', HTTP_SITE)
+    const token = await signSession({ secret: SECRET, now: new Date() })
+    expect(await hasValidAdminCookie(requestWith(`ns_admin=${token}`))).toBe(true)
+    expect(await hasValidAdminCookie(requestWith(`__Host-ns_admin=${token}`))).toBe(false)
+  })
+
+  it('picks the name from the site URL, like the app, not from the request scheme', async () => {
+    // Behind a proxy that terminates TLS the request may arrive as http while the browser sent __Host-ns_admin.
+    const token = await signSession({ secret: SECRET, now: new Date() })
+    vi.stubEnv('SITE_URL', HTTPS_SITE)
+    expect(await hasValidAdminCookie(requestWith(`__Host-ns_admin=${token}`, 'http://shop.example.vn'))).toBe(true)
+    expect(await hasValidAdminCookie(requestWith(`ns_admin=${token}`, 'http://shop.example.vn'))).toBe(false)
+    vi.stubEnv('SITE_URL', HTTP_SITE)
+    expect(await hasValidAdminCookie(requestWith(`ns_admin=${token}`, 'https://shop.example.vn'))).toBe(true)
+    expect(await hasValidAdminCookie(requestWith(`__Host-ns_admin=${token}`, 'https://shop.example.vn'))).toBe(false)
+  })
+
+  it('closes without throwing when SITE_URL is invalid', async () => {
+    const token = await signSession({ secret: SECRET, now: new Date() })
+    vi.stubEnv('SITE_URL', 'ftp://shop.example.vn')
+    expect(await hasValidAdminCookie(requestWith(`__Host-ns_admin=${token}; ns_admin=${token}`))).toBe(false)
   })
 
   it('rejects no cookie, junk, a tampered or foreign token', async () => {
     const token = await signSession({ secret: SECRET, now: new Date() })
     const foreign = await signSession({ secret: 'other-session-secret-0123456789abcdef', now: new Date() })
     expect(await hasValidAdminCookie(requestWith())).toBe(false)
-    expect(await hasValidAdminCookie(requestWith('ns_admin=junk'))).toBe(false)
-    expect(await hasValidAdminCookie(requestWith(`ns_admin=${token.slice(0, -2)}AA`))).toBe(false)
+    expect(await hasValidAdminCookie(requestWith('__Host-ns_admin=junk'))).toBe(false)
+    expect(await hasValidAdminCookie(requestWith(`__Host-ns_admin=${token.slice(0, -2)}AA`))).toBe(false)
     expect(await hasValidAdminCookie(requestWith(`__Host-ns_admin=${foreign}`))).toBe(false)
     expect(await hasValidAdminCookie(requestWith(`ns_session=${token}`))).toBe(false)
   })
 
   it('closes when SESSION_SECRET or ADMIN_PASSWORD is missing or weak, without throwing', async () => {
     const token = await signSession({ secret: SECRET, now: new Date() })
-    const cookie = `ns_admin=${token}`
+    const cookie = `__Host-ns_admin=${token}`
     vi.stubEnv('SESSION_SECRET', '')
     expect(await hasValidAdminCookie(requestWith(cookie))).toBe(false)
     vi.stubEnv('SESSION_SECRET', SECRET)
@@ -106,12 +136,18 @@ describe('hasValidAdminCookie', () => {
     expect(await hasValidAdminCookie(requestWith(cookie))).toBe(false)
   })
 
-  it('an empty secret can never sign a token the proxy accepts', async () => {
-    // A token an attacker could compute if the code ever fell back to signing with ''.
+  it('rejects a token signed with an empty secret while a real secret is configured', async () => {
+    // What an attacker could compute if the code ever fell back to signing with ''.
     const { createHmac } = await import('node:crypto')
     const exp = String(Math.floor(Date.now() / 1000) + 60)
     const mac = createHmac('sha256', '').update(`v1.${exp}`).digest('base64url')
-    vi.stubEnv('SESSION_SECRET', '')
-    expect(await hasValidAdminCookie(requestWith(`ns_admin=v1.${exp}.${mac}`))).toBe(false)
+    expect(await hasValidAdminCookie(requestWith(`__Host-ns_admin=v1.${exp}.${mac}`))).toBe(false)
+  })
+
+  it('verifies with the trimmed SESSION_SECRET when the env value carries whitespace', async () => {
+    vi.stubEnv('SESSION_SECRET', `${SECRET}\n`)
+    vi.stubEnv('ADMIN_PASSWORD', ` ${PASSWORD}\r\n`)
+    const token = await signSession({ secret: SECRET, now: new Date() })
+    expect(await hasValidAdminCookie(requestWith(`__Host-ns_admin=${token}`))).toBe(true)
   })
 })

@@ -101,6 +101,19 @@ describe('hasAdminSession', () => {
   })
 })
 
+describe('a SESSION_SECRET with surrounding whitespace', () => {
+  it('signs and verifies with the trimmed value', async () => {
+    vi.stubEnv('SESSION_SECRET', `${SECRET}\n`)
+    await writeAdminSession()
+    const [, value] = jar.set.mock.calls[0] ?? []
+    expect(typeof value === 'string' && (await verifySession({ token: value, secret: SECRET, now: new Date() }))).toBe(
+      true,
+    )
+    jar.incoming.set('ns_admin', await signSession({ secret: SECRET, now: new Date() }))
+    expect(await hasAdminSession()).toBe(true)
+  })
+})
+
 describe('writeAdminSession / clearAdminSession', () => {
   it('writes a fresh signed token under the scheme name with the session options', async () => {
     vi.stubEnv('SITE_URL', HTTPS_SITE)
