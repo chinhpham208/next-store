@@ -5,10 +5,12 @@ import 'server-only'
 export { type Db } from '@/db/client'
 export { dbQuery, resolveQueryTimeout, type DbQueryName } from '@/db/query'
 export {
+  adminLoginFailures,
   cartItems,
   carts,
   categories,
   products,
+  type AdminLoginFailure,
   type Cart,
   type CartItem,
   type Category,
