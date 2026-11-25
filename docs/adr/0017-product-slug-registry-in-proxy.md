@@ -80,3 +80,4 @@ Quyết định 1A và 2A áp như sau.
   - `npm run check:deps`: `proxy-no-db` báo vi phạm trước khi sửa proxy, không vi phạm sau (C2, Task 3 Step 1).
   - E2E `catalog.spec.ts` (chỉ đọc) trên CI, preview, Dev, Production.
   - Sau `v0.5.0` (Task 3 Step 5): `Production E2E` xanh không có annotation fail-open; smoke Production in `x-vercel-id` ở region Mỹ và mọi slug sản phẩm lạ 404 ngay lần đầu. Số đo được ghi vào mục này sau release.
+  - **Kết quả trên Production sau `v0.5.0` (2026-11-25, run `Production E2E` 45585251084, xanh):** smoke chạy từ runner GitHub, `x-vercel-id` có edge `sfo1` (Mỹ). Mọi slug sản phẩm lạ (trang, RSC, `.rsc`, segment prefetch có và không có header, ảnh OG có và không có hậu tố băm, `POST` không `next-action`, `PUT`, `GET` sau `POST`) trả 404 ngay lần đầu trong 92–128 ms; slug bài viết lạ 91–159 ms. Không còn cảnh báo fail-open; cờ `SMOKE_PRODUCT_FAIL_OPEN` không còn. Trước đó (v0.4.x) proxy fail-open sau khoảng 1,2 s rồi trả 200 / 405. C2 đúng.
