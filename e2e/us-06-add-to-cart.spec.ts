@@ -17,6 +17,7 @@ import {
   waitForHydration,
 } from './cart'
 import { WRITE_TAG } from './production'
+import { delayActionTitleRow, heldTitleRows, titleCount, titleGaps, watchTitle } from './title'
 import { CART_NETWORK_ERROR } from '@/features/cart/messages'
 
 // US-06: the number on the cart icon goes up before the server answers, and goes back when the server fails. Every
@@ -30,6 +31,12 @@ const PRODUCT = productWithStock('ao-git-push-force', 3)
 // The first write after Neon's compute has slept can take 1–2 s (plan M4 Global Constraints); the default 5 s of
 // expect is tight for an action plus the route's new render.
 const SERVER_ANSWER = { timeout: 15_000 }
+
+// NS-107: enough adds to catch a race seen in 2 of 8 runs, within the line limit (MAX_LINE_QUANTITY) and the stock.
+const TITLE_ADDS = 8
+const TITLE_PRODUCT = productWithStock('ao-git-push-force', TITLE_ADDS)
+// Longer than the gap measured on a loaded server (about 300 ms), short enough for 8 adds in one test.
+const TITLE_ROW_DELAY_MS = 600
 
 test.describe('ghi vào giỏ', { tag: WRITE_TAG }, () => {
   test('US-06: bấm "Thêm vào giỏ" thì số trên biểu tượng giỏ tăng trước khi server trả lời', async ({
@@ -87,6 +94,34 @@ test.describe('ghi vào giỏ', { tag: WRITE_TAG }, () => {
     })
   }
 
+  // NS-107 (WCAG 2.4.2): every successful add re-renders the route in the action's response (plan M4 D2), and
+  // Next.js remounts the head's metadata on each response, so the title was gone until its row arrived (2 of 8 runs
+  // on a loaded `next start`). Adds in a row, each answered before the next, with the title watched throughout; the
+  // second test holds the title row back on every add, which is the order that loses the title.
+  for (const [variant, slowTitleRow] of [
+    ['', false],
+    [', hàng <title> của response đến chậm', true],
+  ] as const) {
+    test(`US-06: tiêu đề trang không bao giờ rỗng trong lúc thêm vào giỏ${variant}`, async ({ page }) => {
+      if (slowTitleRow) await delayActionTitleRow(page, TITLE_ROW_DELAY_MS)
+      await openProduct(page, TITLE_PRODUCT.slug)
+      await watchTitle(page)
+      for (let added = 1; added <= TITLE_ADDS; added++) {
+        const answered = waitForActionResponse(page)
+        await addToCartButton(page).click()
+        expect((await answered).status(), `lần thêm ${added}`).toBe(200)
+        await expect(cartBadgePending(page)).toHaveCount(0, SERVER_ANSWER)
+        await expect.poll(() => cartCount(page), SERVER_ANSWER).toBe(added)
+        // The held row lands after the count: wait until it has, so every add goes through the whole gap.
+        await expect.poll(() => heldTitleRows(page), SERVER_ANSWER).toBe(0)
+        await expect(page).toHaveTitle(`${TITLE_PRODUCT.name} · next-store`)
+        // Settled, the head has exactly one title again: nothing stays behind after the add.
+        await expect.poll(() => titleCount(page)).toBe(1)
+      }
+      expect(await titleGaps(page)).toEqual([])
+    })
+  }
+
   test('US-06: thêm hai lần cùng sản phẩm thì số là 2', async ({ page }) => {
     await openProduct(page, PRODUCT.slug)
     // Two clicks without waiting: the second queues behind the first (plan M4 D3), the button is never disabled.
@@ -115,9 +150,7 @@ test.describe('ghi vào giỏ', { tag: WRITE_TAG }, () => {
     const status = page.getByRole('region', { name: 'Mua hàng' }).getByRole('status')
     const link = status.getByRole('link', { name: 'Xem giỏ hàng', exact: true })
     await expect(link).toHaveAttribute('href', '/cart')
-    // The success state (status with a link) is part of the main flow too (requirements §5, a11y). The action's
-    // render of the route drops <title> for a moment and puts it back (NS-107); axe reads the settled page.
-    await expect(page).toHaveTitle(`${PRODUCT.name} · next-store`)
+    // The success state (status with a link) is part of the main flow too (requirements §5, a11y).
     await expectNoSeriousA11yViolations(page)
     await waitForHydration(link)
     await link.click()
