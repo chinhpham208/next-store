@@ -32,7 +32,7 @@ Việc DevOps (CI, cấu hình Vercel / Neon, script) là ticket bình thường
 6. Auditor soát toàn mốc (M4–M6)
 7. Orchestrator mở release PR develop → production, chạy `scripts/pr-gate.sh <n>` trên PR đó (gồm `release-smoke`), chỉ khi
    thoát 0 mới gửi demo: link Dev, link release PR, danh sách ticket, kết quả QA, output của pr-gate
-     ──► [CỔNG 3] chủ dự án nghiệm thu; chủ dự án duyệt bằng lời trong chat là đủ (repo riêng tư, không có branch protection)
+     ──► [CỔNG 3] chủ dự án nghiệm thu; chủ dự án duyệt bằng lời trong chat là đủ (chưa bật branch protection / ruleset)
 8. Orchestrator merge release PR bằng merge commit (pr-gate vừa thoát 0 trên PR đó), gắn tag v0.<mốc>.<n> (`n` tiếp theo trong mốc; xem conventions §8), smoke trên Production; sau release chạy workflow `Production E2E` (có hiệu lực khi M3 Task 17 merge)     ticket → Done
 ```
 
@@ -78,7 +78,7 @@ Nhánh, merge method, tag, hotfix và back-merge: [`conventions.md`](./conventio
 
 - Agent làm việc trong workspace cloud: Orchestrator ở `/home/claude/next-store`, mỗi ticket một worktree `/home/claude/wt/NS-xx` (xem §4).
 - Seed production: `npm run db:seed:sql` sinh SQL, chạy trong Neon SQL Editor trên nhánh `main` (README, mục Seed production); `db:seed` bị từ chối trên production.
-- Source of truth là GitHub `chinhpham208/next-store` (riêng tư). Máy Mac của chủ dự án kéo code từ GitHub vào một bản clone riêng; chủ dự án không chạy `npm` trong workspace.
+- Source of truth là GitHub `chinhpham208/next-store` (public từ 2026-11-25: chủ dự án chuyển để có phút GitHub Actions miễn phí, sau khi Orchestrator quét lịch sử git không có secret; Vercel Git Fork Protection bật, workflow từ fork cần duyệt, secret scanning + push protection bật). Máy Mac của chủ dự án kéo code từ GitHub vào một bản clone riêng; chủ dự án không chạy `npm` trong workspace.
 - Shell trên máy ảo Linux; mỗi lệnh tối đa 180 giây → lệnh dài (`npm ci`, `next build`, Playwright) chạy qua `scripts/verify.sh` (chạy nền + đọc log).
 - `yt` (YouTrack CLI) và `gh` đã đăng nhập sẵn trong workspace.
 - Sau release, Orchestrator chạy workflow `Production E2E` (chỉ đọc; có hiệu lực khi M3 Task 17 merge).
@@ -99,7 +99,7 @@ GraphQL bị chặn bởi proxy của phiên, nên dùng REST:
   - Tag trên merge commit (`merge_commit_sha` trong kết quả merge): `gh api repos/chinhpham208/next-store/git/refs -f ref=refs/tags/v0.x.y -f sha=<merge_commit_sha>`
 - Hotfix: PR `head=hotfix/NS-xx-…`, `base=production`, `merge_method=merge`, rồi tag. Back-merge: tạo nhánh tạm từ `production` — `gh api repos/chinhpham208/next-store/git/refs -f ref=refs/heads/sync/production-to-develop-v0.x.y -f sha=<sha của production>` — rồi PR `head=sync/production-to-develop-v0.x.y`, `base=develop`, `merge_method=merge`. Không dùng `production` làm head (sẽ bị tự xoá sau khi merge).
 - Cài đặt repo: nhánh mặc định `develop`; cho phép squash và merge commit, tắt rebase; nhánh head tự xoá sau khi merge (nhánh mặc định không bị xoá). Thường không cần xoá nhánh thủ công; nếu còn nhánh cần xoá, lệnh xoá qua proxy bị chặn → Orchestrator xử lý.
-- Branch protection không khả dụng (GitHub Free, repo riêng tư), nên quy tắc "chỉ merge khi `pr-gate.sh` qua và review đã duyệt", đúng base và đúng merge method do Orchestrator đảm bảo. Nếu chủ dự án nâng lên GitHub Pro, xem §8.
+- Branch protection / ruleset chưa bật (repo public dùng được miễn phí, xem §8), nên quy tắc "chỉ merge khi `pr-gate.sh` qua và review đã duyệt", đúng base và đúng merge method do Orchestrator đảm bảo. Nếu chủ dự án nâng lên GitHub Pro, xem §8.
 
 ## 6. Cuối mỗi mốc
 
@@ -118,7 +118,7 @@ Orchestrator ghi ngắn vào `docs/retro/M<n>.md`: điều gì chậm, vòng rev
    Thiếu secret thì workflow `Neon preview cleanup` **fail** với thông báo "thiếu secret NEON_API_KEY", không bỏ qua âm thầm. Sau khi thêm, chạy tay một lần: Actions → Neon preview cleanup → Run workflow, tích `dry_run`, xem danh sách nhánh sẽ xoá, rồi chạy lại không tích.
 
    Lưu ý ADR-0010 (audit L3): khi resource 2 (project Neon riêng cho Preview, M3 Task 5 / NS-61) đã nối, các nhánh `preview/*` nằm ở project đó: đổi `NEON_PROJECT_ID` sang id của project resource 2 và thay key bằng key project-scoped của project đó. Tới lúc ấy, preview vẫn nằm trong `frosty-queen-67078672` (project production), nên key tạm thời gắn với project production; script không bao giờ xoá `main` hay nhánh mặc định / protected.
-2. **Ruleset (chỉ khi tài khoản có GitHub Pro: repo riêng tư cần Pro để dùng branch protection / ruleset).** Settings → Rules → Rulesets → New branch ruleset, một cho `develop`, một cho `production`: bật "Require status checks to pass", thêm đúng các tên sau (như chúng hiện trên GitHub):
+2. **Ruleset (miễn phí khi repo public; nếu repo chuyển lại riêng tư thì cần GitHub Pro).** Settings → Rules → Rulesets → New branch ruleset, một cho `develop`, một cho `production`: bật "Require status checks to pass", thêm đúng các tên sau (như chúng hiện trên GitHub):
    - `develop`: `check`, `e2e-preview` (GitHub Actions), `Vercel` (commit status của Vercel);
    - `production`: `check`, `e2e-preview`, `Vercel`, `release-smoke`.
 

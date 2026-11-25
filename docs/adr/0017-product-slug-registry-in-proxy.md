@@ -1,6 +1,6 @@
 # ADR-0017: Proxy trả 404 cho slug sản phẩm bằng registry tĩnh trong repo
 
-- Trạng thái: Đề xuất (Proposed), chờ chủ dự án duyệt ADR sau PR NS-116
+- Trạng thái: Đã chấp nhận (chủ dự án duyệt 2026-11-25, PR #99)
 - Ngày: 2026-11-25
 - Quyết định của chủ dự án: 2026-11-25 (plan M5, Cổng 1, quyết định 1, 2, phương án A)
 - Thay thế một phần: [ADR-0009](./0009-product-404-in-proxy.md) (gạch đầu dòng "Slug đúng dạng → `isKnownProductSlug`", "Slug đã thấy tồn tại được nhớ trong một `Set`", "Fail-open", và các mục Hệ quả "Fail-open để lọt slug lạ vào route cache", "Kết nối lạnh làm mất 404", "Tạm thời ở v0.3.1", "Sửa thật: M5", "Tập slug đã biết bị cũ sau khi xoá", "Kết nối DB riêng của proxy trên Vercel")

@@ -1,6 +1,6 @@
 # ADR-0020: CSP nền toàn site, CSP nonce cho `/admin`, HSTS mặc định của Vercel
 
-- Trạng thái: Đề xuất (Proposed), chờ chủ dự án duyệt ADR sau PR NS-116
+- Trạng thái: Đã chấp nhận (chủ dự án duyệt 2026-11-25, PR #99)
 - Ngày: 2026-11-25
 - Quyết định của chủ dự án: 2026-11-25 (plan M5, Cổng 1, quyết định 9, 10, phương án A)
 - Thay thế một phần: [ADR-0016](./0016-security-headers-and-action-body-limit.md) (gạch đầu dòng "CSP chỉ có `frame-ancestors`"; `Content-Security-Policy: frame-ancestors 'none'` đơn lẻ được thay bằng CSP nền đầy đủ, vẫn có `frame-ancestors 'none'`)

@@ -1,6 +1,6 @@
 # ADR-0018: Xác thực admin: mật khẩu trong env, phiên cookie ký HMAC, giới hạn đăng nhập sai trong app
 
-- Trạng thái: Đề xuất (Proposed), chờ chủ dự án duyệt ADR sau PR NS-116
+- Trạng thái: Đã chấp nhận (chủ dự án duyệt 2026-11-25, PR #99)
 - Ngày: 2026-11-25
 - Quyết định của chủ dự án: 2026-11-25 (plan M5, Cổng 1, quyết định 5, 6, 7, 8, 15, 16, phương án A)
 - Bổ sung: [ADR-0015](./0015-edge-rate-limit.md) (quy tắc WAF cho Server Action cũng đếm `loginAction`; giới hạn đăng nhập sai nằm trong app vì Hobby chỉ có một quy tắc rate limit)

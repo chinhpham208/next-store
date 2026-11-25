@@ -1,6 +1,6 @@
 # ADR-0019: Sửa sản phẩm, tag cache `product-slugs`, chính sách xoá = ẩn
 
-- Trạng thái: Đề xuất (Proposed), chờ chủ dự án duyệt ADR sau PR NS-116
+- Trạng thái: Đã chấp nhận (chủ dự án duyệt 2026-11-25, PR #99)
 - Ngày: 2026-11-25
 - Quyết định của chủ dự án: 2026-11-25 (plan M5, Cổng 1, quyết định 3, 4, 11, 12, 13, phương án A)
 - Bổ sung: [ADR-0003](./0003-cache-strategy.md) (danh sách slug `getCatalogSlugs` mang tag riêng `product-slugs` thay cho `products`; danh sách tag của mỗi lần ghi sản phẩm), [ADR-0014](./0014-cart-storage-and-cookie.md) (mục Hệ quả "Xoá cứng sản phẩm xoá nó khỏi mọi giỏ", NS-101: chọn **ẩn**; giá trong giỏ vẫn là giá hiện tại)
