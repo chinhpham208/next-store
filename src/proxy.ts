@@ -42,19 +42,19 @@ const ACTION_HEADER = 'next-action'
 const isServerAction = (request: NextRequest) => request.method === 'POST' && request.headers.has(ACTION_HEADER)
 
 // US-12 (ADR-0018, plan M5 Task 8): an optimistic check of the session cookie alone, no database (D2, `proxy-no-db`);
-// the layout and every admin action check again. It is the source of the real 307: a redirect() in the streamed
-// layout is only a meta tag (D5). Both cookie names are cleared when the request carries them, so a junk or stale
-// cookie of either scheme does not stay behind (audit PR #104 note). __Host- needs Secure and Path=/ on the deleting
-// Set-Cookie too. Not logged.
+// every admin page, admin read and admin action checks again itself (the layout cannot: audit PR #106 H1). Action ids
+// are global and /admin/login lets everything through, so an admin action posted there is not stopped here: it
+// must refuse without a session on its own (ADR-0018 7A, audit PR #106 L1). The proxy is the source of the real 307:
+// a redirect() in a streamed page is only a meta tag (D5). Both cookie names are cleared when the request carries
+// them, so a junk or stale cookie of either scheme does not stay behind (audit PR #104 note). __Host- needs Secure and
+// Path=/ on the deleting Set-Cookie too. Not logged.
 const LOGIN_PATH = '/admin/login'
 const ADMIN_COOKIES = [
   { name: '__Host-ns_admin', secure: true },
   { name: 'ns_admin', secure: false },
 ] as const
 
-const redirectToLogin = (request: NextRequest): NextResponse => {
-  // No next / returnTo parameter: nothing to turn into an open redirect.
-  const response = NextResponse.redirect(new URL(LOGIN_PATH, request.url), 307)
+const clearAdminCookies = (request: NextRequest, response: NextResponse): NextResponse => {
   for (const { name, secure } of ADMIN_COOKIES) {
     if (!request.cookies.has(name)) continue
     response.cookies.set({ name, value: '', path: '/', maxAge: 0, httpOnly: true, sameSite: 'strict', secure })
@@ -62,13 +62,19 @@ const redirectToLogin = (request: NextRequest): NextResponse => {
   return response
 }
 
+// No next / returnTo parameter: nothing to turn into an open redirect.
+const redirectToLogin = (request: NextRequest): NextResponse =>
+  clearAdminCookies(request, NextResponse.redirect(new URL(LOGIN_PATH, request.url), 307))
+
 const answerAdmin = async (request: NextRequest): Promise<NextResponse> => {
   // Canonical spelling only: `/Admin/login` or `/%61dmin/login` is guarded like any other admin page.
   if (isAdminLoginPath(request.nextUrl.pathname)) return NextResponse.next()
   if (await hasValidAdminCookie(request)) return NextResponse.next()
   if (request.method === 'GET' || request.method === 'HEAD') return redirectToLogin(request)
-  // A Server Action (POST + next-action) or any other method: no redirect for a fetch to follow, an empty 401.
-  return new NextResponse(null, { status: 401 })
+  // A Server Action (POST + next-action) or any other method: no redirect for a fetch to follow, an empty 401. It
+  // clears a junk or stale cookie like the 307 (audit PR #106 L2): the client sends a refused tab to /admin/login
+  // (LogoutButton; the edit form of Task 10), and that GET then carries no broken cookie.
+  return clearAdminCookies(request, new NextResponse(null, { status: 401 }))
 }
 
 // Fixed order (plan M5 Global Constraints): (1) admin, (2) the Server Action shortcut, (3) product and blog slugs.

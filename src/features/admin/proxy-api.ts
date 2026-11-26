@@ -6,12 +6,12 @@ import { getSiteUrl } from '@/lib/site-url'
 
 // The only entry src/proxy.ts uses for the admin area (dependency-cruiser `proxy-entry-only`, `proxy-narrow-entry`,
 // `admin-proxy-api-narrow`). No `server-only` file, no zod, no database: the proxy checks the session optimistically
-// from the cookie alone (plan M5 D2); the layout and every admin action check again (ADR-0018).
+// from the cookie alone (plan M5 D2); every admin page, read and action checks again (ADR-0018, audit PR #106 H1).
 
 // One cookie name, chosen like the app does (adminCookieName in cookie.ts): from getSiteUrl(), not from
 // request.nextUrl.protocol. The site URL is what the cookie was written under; behind a proxy that terminates TLS
 // the request can arrive as http while the browser holds __Host-ns_admin. Reading only that name means the proxy
-// never lets through a cookie the layout and actions would refuse (audit PR #104 L1).
+// never lets through a cookie the pages and actions would refuse (audit PR #104 L1).
 const siteCookieName = (): AdminCookieName | undefined => {
   try {
     return adminCookieNameFor(getSiteUrl())

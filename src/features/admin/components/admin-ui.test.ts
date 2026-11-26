@@ -1,13 +1,15 @@
 import { readFileSync } from 'node:fs'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { redirect } from 'next/navigation'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { logoutAction } from '@/features/admin/actions'
 import { requireAdminPage } from '@/features/admin/cookie'
 import { AdminGate } from '@/features/admin/components/admin-gate'
 import { AdminHeader } from '@/features/admin/components/admin-header'
 import { AdminShell, AdminShellSkeleton } from '@/features/admin/components/admin-shell'
 import { LoginForm } from '@/features/admin/components/login-form'
-import { LogoutButton } from '@/features/admin/components/logout-button'
+import { LogoutButton, submitLogout } from '@/features/admin/components/logout-button'
 
 // The action module pulls in cookies, headers and the database; the components only hold a reference to it.
 vi.mock('@/features/admin/actions', () => ({ loginAction: vi.fn(), logoutAction: vi.fn() }))
@@ -16,6 +18,7 @@ vi.mock('@/features/admin/cookie', () => ({ requireAdminPage: vi.fn() }))
 
 afterEach(() => {
   vi.clearAllMocks()
+  vi.unstubAllGlobals()
 })
 
 const render = (element: Parameters<typeof renderToStaticMarkup>[0]) => renderToStaticMarkup(element)
@@ -87,6 +90,42 @@ describe('LogoutButton', () => {
     expect(html).toMatch(/^<form [^>]*class="ml-auto"/)
     expect(html).toMatch(/<button [^>]*type="submit"[^>]*min-h-11[^>]*>Đăng xuất<\/button>/)
   })
+
+  // Audit PR #106 M1 (a): on a protected page a stale tab's logout is refused by the proxy (an empty 401, which also
+  // clears the cookie), and Next.js rejects the action. The tab goes to /admin/login instead of the error page.
+  const stubLocation = () => {
+    const assign = vi.fn()
+    vi.stubGlobal('window', { location: { assign } })
+    return assign
+  }
+
+  it('sends the tab to /admin/login when the action is refused', async () => {
+    const assign = stubLocation()
+    vi.mocked(logoutAction).mockRejectedValue(new Error('An unexpected response was received from the server.'))
+    await submitLogout()
+    expect(logoutAction).toHaveBeenCalledTimes(1)
+    expect(assign).toHaveBeenCalledExactlyOnceWith('/admin/login')
+  })
+
+  it("lets the action's own redirect through to the router", async () => {
+    const assign = stubLocation()
+    let redirectError: unknown
+    try {
+      redirect('/admin/login')
+    } catch (error) {
+      redirectError = error
+    }
+    vi.mocked(logoutAction).mockRejectedValue(redirectError)
+    await expect(submitLogout()).rejects.toBe(redirectError)
+    expect(assign).not.toHaveBeenCalled()
+  })
+
+  it('does nothing more when the action succeeds', async () => {
+    const assign = stubLocation()
+    vi.mocked(logoutAction).mockResolvedValue(undefined)
+    await submitLogout()
+    expect(assign).not.toHaveBeenCalled()
+  })
 })
 
 describe('AdminShell (Gate 2 decision 1, M5 Task 8)', () => {
@@ -128,12 +167,14 @@ describe('AdminGate', () => {
     expect(html).toContain('<p>bí mật</p>')
   })
 
-  it('renders nothing of the page when the check redirects', async () => {
+  // Only the shell (nav, "Đăng xuất") is kept back. The page is not: Next.js renders a page alongside its layout,
+  // not inside it, so the page has already run and its content is in the flight payload and the prerendered
+  // `.segments/*.rsc` when this rejects (measured, audit PR #106 H1). Each page checks the session itself
+  // (src/admin-session-checks.test.ts).
+  it('renders no shell when the check redirects; it does not keep the page from rendering', async () => {
     const redirect = new Error('NEXT_REDIRECT')
     gate.mockRejectedValue(redirect)
-    const page = vi.fn(() => createElement('p', null, 'bí mật'))
-    await expect(AdminGate({ children: createElement(page) })).rejects.toBe(redirect)
-    expect(page).not.toHaveBeenCalled()
+    await expect(AdminGate({ children: createElement('p', null, 'trang') })).rejects.toBe(redirect)
   })
 
   it('is the gate of the (protected) layout, inside Suspense with the skeleton as fallback', () => {

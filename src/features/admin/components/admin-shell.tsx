@@ -6,7 +6,8 @@ import { LogoutButton } from '@/features/admin/components/logout-button'
 export type AdminShellProps = { children: ReactNode }
 
 // The signed-in admin bar (Gate 2 decision 1, design-system.md "Component M5"): title, "Sản phẩm", "Đăng xuất"; then
-// the page. Rendered only by AdminGate, after the session check: nothing of it reaches a visitor without a session.
+// the page. Rendered only by AdminGate, after the session check: nothing of the bar reaches a visitor without a
+// session. The page passed in is not protected by this (audit PR #106 H1): it checks the session itself.
 // No aria-current: a Server Component does not know the path (same decision as the shop header, NS-50).
 export const AdminShell = ({ children }: AdminShellProps) => (
   <>

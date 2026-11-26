@@ -492,6 +492,26 @@ describe('proxy: admin', () => {
     }
   })
 
+  // Audit PR #106 L2 / M1 (a): the 401 clears a junk or stale cookie like the 307 does, so the next GET (the stale
+  // tab sent to /admin/login by LogoutButton) carries no broken cookie.
+  it('clears the admin cookies on a 401, like the 307', async () => {
+    const expired = await signSession({ secret: SECRET, now: new Date(Date.now() - 9 * 60 * 60 * 1000) })
+    for (const value of ['junk', expired]) {
+      for (const init of [{ method: 'POST', headers: ACTION }, { method: 'PUT' }]) {
+        const response = await admin('/admin/products/x', withCookie(`${COOKIE}=${value}; ns_admin=junk; ns_cart=keep`, init))
+        expect(response.status).toBe(401)
+        expect(clears(response, COOKIE)).toBe(true)
+        expect(clears(response, 'ns_admin')).toBe(true)
+        const host = setCookies(response).find((line) => line.startsWith(`${COOKIE}=`)) ?? ''
+        expect(host).toMatch(/; Secure/i)
+        expect(setCookies(response).some((line) => line.startsWith('ns_cart='))).toBe(false)
+        expect(await response.text()).toBe('')
+      }
+    }
+    // Nothing to clear without a cookie.
+    expect(setCookies(await admin('/admin/products', { method: 'POST', headers: ACTION }))).toEqual([])
+  })
+
   it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])('answers 401 to %s without a session', async (method) => {
     const response = await admin('/admin/products', { method })
     expect(response.status).toBe(401)
