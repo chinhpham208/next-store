@@ -72,6 +72,7 @@ Phương án được chọn, chép nguyên văn từ plan:
 **Lối vào `admin.ts`**
 
 - Phần admin của `orders` và `monitoring` lộ qua `@/features/orders/admin` và `@/features/monitoring/admin` (`admin.ts`), cùng kiểu với `products` (ADR-0019). Chỉ `src/app/admin/**` được import chúng: dependency-cruiser `products-admin-entry-only-from-admin` đổi thành `admin-entries-only-from-admin` cho `^src/features/(products|orders|monitoring)/admin\.ts$`. `index.ts` của hai miền không re-export phần admin, để bundle cửa hàng không chở code admin (`check:bundle` kiểm 1, 2).
+- **Phụ thuộc:** `orders` và `monitoring` import `admin` (`hasAdminSession` trong `admin-queries.ts`, như `products`), nên `architecture.md` §2 có thêm `orders → admin` và `monitoring → admin`; `admin` vẫn không import miền nào.
 - Mỗi hàm đọc admin (`listOrdersForAdmin`, `listErrorEventsForAdmin`) bắt đầu bằng `if (!(await hasAdminSession())) throw new Error('admin: no session')`, trước mọi truy vấn. Dữ liệu đơn và lỗi không bao giờ nằm trong `'use cache'`.
 - **Không route handler dưới `/admin`** (ADR-0018 vẫn hiệu lực). Không thêm Server Action admin nào ở M6.
 
@@ -86,6 +87,7 @@ Phương án được chọn, chép nguyên văn từ plan:
 
 - **`needs_refund` không bao giờ "xong" trong app.** Danh sách đó chỉ dài thêm; dải "N đơn cần hoàn tiền" đếm mãi. Điều kiện làm tiếp nằm ở "Cố ý không làm" của plan M6 (cổng thật có API hoàn tiền, hoặc Production có đơn `needs_refund` thật).
 - **Offset 50 / trang đủ nhanh** tới vài chục nghìn đơn với index `(created_at desc, id desc)`. Xét keyset khi bảng `orders` quá 10.000 hàng hoặc truy vấn `orders.admin-list` quá 300 ms.
+- **Luật 16 ký tự khác nhau từ chối nhiều passphrase kiểu diceware:** 4 đến 5 từ thường chỉ có 13 đến 17 chữ cái khác nhau, nên có cụm dài vẫn bị từ chối. Chủ dự án dùng `openssl rand -base64 24` (hoặc trình quản lý mật khẩu sinh ngẫu nhiên), không dùng passphrase.
 - **Luật 16 ký tự khác nhau không đo entropy.** Mật khẩu dễ đoán mà đa dạng ký tự vẫn qua. An toàn chống đoán vẫn dựa vào việc mật khẩu được sinh ngẫu nhiên (ADR-0018 audit PR #112 L1), cho nên xác nhận của chủ dự án vẫn cần.
 - **Mật khẩu không đạt thì khu admin Production đóng** tới khi đổi (fail-closed). Vì vậy PR Task 14 đi cùng xác nhận của chủ dự án.
 - **Thêm hai route dưới `(protected)`** nên `check-admin-bundle.mjs` kiểm 3 (mọi route `/admin…` có `response: "empty"`, `htmlSize` 0) liệt kê `/admin/orders`, `/admin/errors` là bắt buộc.

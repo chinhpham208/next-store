@@ -125,12 +125,12 @@ Chi tiết và lý do: [ADR-0014](./adr/0014-cart-storage-and-cookie.md); giới
 
 ### Thanh toán
 Chi tiết và lý do: [ADR-0021](./adr/0021-payment-orders-and-webhook.md).
-1. Khách bấm thanh toán → Server Action kiểm tra tồn kho, tạo `orders` trạng thái `pending` (giá chụp vào `items`; tổng 0 ₫ bị từ chối), gọi `PaymentProvider.createCheckout()`. Ở chế độ `TEST_PAYMENTS_ACCESS` khác `public` (Production), bốn lối vào của thanh toán thử (ô thanh toán của `/cart`, `startCheckoutAction`, `/checkout/test`, `fakeGatewayAction`) đòi phiên admin; khách thấy "Thanh toán chưa mở.".
+1. Khách bấm thanh toán → Server Action kiểm tra tồn kho, tạo `orders` trạng thái `pending` (giá chụp vào `items`; tổng 0 ₫ bị từ chối), gọi `PaymentProvider.createCheckout()`. Ở chế độ `public`, cổng thử nghiệm còn đòi cookie giỏ khớp `orders.cart_id`, nên `ref` bị lộ một mình không lấy được chữ ký. Ở chế độ `TEST_PAYMENTS_ACCESS` khác `public` (Production), bốn lối vào của thanh toán thử (ô thanh toán của `/cart`, `startCheckoutAction`, `/checkout/test`, `fakeGatewayAction`) đòi phiên admin; khách thấy "Thanh toán chưa mở.".
 2. Khách được chuyển tới trang thanh toán của provider (hiện tại: `/checkout/test` của `FakeProvider`, có nhãn rõ "Môi trường thử nghiệm — không thu tiền"). Nút bấm gọi một Server Action ký sự kiện ở server; trình duyệt chuyển tiếp sự kiện ký đó bằng `fetch` tới `/api/webhooks/payment`, nên webhook đi đúng HTTP như cổng thật.
 3. Route Handler đọc thân tối đa 8 KB, xác minh chữ ký (HMAC-SHA256, hạn 5 phút) **trước** mọi đọc DB, rồi trong một transaction: khoá hàng `orders` theo `paymentRef`; đơn không còn `pending` thì trả "đã xử lý"; đủ kho thì trừ kho bằng câu lệnh có điều kiện `stock >= quantity` (đặt `updated_at`), đổi đơn sang `paid`, xoá giỏ.
 4. Kho không đủ (hai người cùng mua món cuối): **không trừ dòng nào**, đơn chuyển `needs_refund`, giỏ giữ nguyên. Số tiền khác `orders.total` cũng là `needs_refund`.
-5. `paymentRef` unique → webhook gửi lặp chỉ được xử lý một lần.
-6. Sau khi trừ kho: `revalidateTag('product:<slug>', 'max')` cho các sản phẩm liên quan (Route Handler không gọi được `updateTag`; `updateTag` chỉ dùng trong Server Action).
+5. Webhook gửi lặp chỉ được xử lý một lần: khoá hàng `orders` và kiểm `status` trong cùng transaction (`paymentRef` unique chỉ giữ một hàng cho một ref). Lần gửi lại của đơn đã `paid` vẫn làm mới cache (bước 6).
+6. Sau khi trừ kho: `revalidateTag(tag, 'max')` cho `tagsForProductWrite({ slug, change: 'fields' })` (`product:<slug>`, `products`) của các sản phẩm liên quan (Route Handler không gọi được `updateTag`; `updateTag` chỉ dùng trong Server Action).
 7. Khách huỷ ở trang thanh toán → đơn `cancelled`, giỏ giữ nguyên.
 
 Luồng này không phụ thuộc provider cụ thể; xem ADR-0004.

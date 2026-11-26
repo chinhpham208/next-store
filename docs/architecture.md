@@ -45,11 +45,13 @@ flowchart LR
   cart --> products
   checkout --> cart
   checkout --> orders
+  checkout --> products
   checkout --> admin
   orders --> products
+  orders --> admin
   products --> admin
   blog
-  monitoring
+  monitoring --> admin
 ```
 
 | Miền | Trách nhiệm | Mốc |
@@ -58,9 +60,9 @@ flowchart LR
 | `blog` | Registry bài viết (`posts.ts`, không import gì), nội dung MDX (`content.ts`), metadata bài viết | M3 |
 | `cart` | Cookie giỏ hàng, thêm / sửa / xoá, kiểm tra tồn kho | M4 |
 | `admin` | Cấu hình và mật khẩu admin, phiên đăng nhập (ký / xác minh cookie HMAC), giới hạn đăng nhập sai, thanh admin; không import miền nào khác. CSP nonce cho `/admin` ([ADR-0018](./adr/0018-admin-auth.md), [ADR-0020](./adr/0020-content-security-policy-and-hsts.md)) | M5 |
-| `checkout` | `PaymentProvider`, `FakeProvider`, chữ ký webhook (`signature.ts`), xử lý webhook (`webhook.ts`), cấu hình fail-closed, cửa thanh toán thử `checkoutAccess` (gọi `hasAdminSession`, nên có chiều `checkout → admin`), Server Action bắt đầu thanh toán, cổng thử nghiệm ([ADR-0021](./adr/0021-payment-orders-and-webhook.md)) | M6 |
-| `orders` | Tạo đơn, áp sự kiện thanh toán, trừ kho, đọc đơn của khách; danh sách đơn cho admin qua `admin.ts` ([ADR-0021](./adr/0021-payment-orders-and-webhook.md), [ADR-0023](./adr/0023-admin-orders-and-password-strength.md)) | M6 |
-| `monitoring` | Ghi lỗi server (`onRequestError`) vào `error_events`, không dữ liệu người dùng; danh sách lỗi cho admin qua `admin.ts`; không import miền nào khác ([ADR-0022](./adr/0022-error-tracking-and-web-vitals.md)) | M6 |
+| `checkout` | `PaymentProvider`, `FakeProvider`, chữ ký webhook (`signature.ts`), xử lý webhook (`webhook.ts`, gọi `tagsForProductWrite` nên có chiều `checkout → products`), cấu hình fail-closed, cửa thanh toán thử `checkoutAccess` (gọi `hasAdminSession`, nên có chiều `checkout → admin`), Server Action bắt đầu thanh toán, cổng thử nghiệm ([ADR-0021](./adr/0021-payment-orders-and-webhook.md)) | M6 |
+| `orders` | Tạo đơn, áp sự kiện thanh toán, trừ kho, đọc đơn của khách; danh sách đơn cho admin qua `admin.ts`, kiểm phiên bằng `hasAdminSession` (chiều `orders → admin`) ([ADR-0021](./adr/0021-payment-orders-and-webhook.md), [ADR-0023](./adr/0023-admin-orders-and-password-strength.md)) | M6 |
+| `monitoring` | Ghi lỗi server (`onRequestError`) vào `error_events`, không dữ liệu người dùng; danh sách lỗi cho admin qua `admin.ts`; chỉ import `admin` (kiểm phiên ở `admin-queries.ts`), không miền nào khác ([ADR-0022](./adr/0022-error-tracking-and-web-vitals.md)) | M6 |
 
 ## 3. Luồng thanh toán
 
@@ -86,12 +88,12 @@ sequenceDiagram
   alt kho không đủ
     W->>DB: không trừ dòng nào, order → needs_refund, giỏ giữ
   end
-  W->>W: revalidateTag('product:<slug>', 'max')
+  W->>W: revalidateTag('product:<slug>' và 'products', 'max')<br/>(cả khi gửi lại đơn đã paid)
   W-->>K: 200 OK
   K->>K: Chuyển sang /checkout/success
 ```
 
-Cổng thật (khi mở bán) tự gọi `/api/webhooks/payment` từ server của nó thay cho bước trình duyệt chuyển tiếp; phần từ `W` trở xuống không đổi. `paymentRef` là unique: webhook gửi lặp lại chỉ được xử lý một lần.
+Cổng thật (khi mở bán) tự gọi `/api/webhooks/payment` từ server của nó thay cho bước trình duyệt chuyển tiếp; phần từ `W` trở xuống không đổi. Webhook gửi lặp lại chỉ được xử lý một lần nhờ khoá hàng `orders` và kiểm `status` trong cùng transaction; `paymentRef` unique chỉ giữ một hàng cho một ref. Ở chế độ `public`, `fakeGatewayAction` và `/checkout/test` còn đòi cookie giỏ khớp `orders.cart_id`.
 
 ## 4. Luồng cache
 
