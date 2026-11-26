@@ -1,5 +1,17 @@
 import { sql } from 'drizzle-orm'
-import { boolean, check, index, integer, pgTable, primaryKey, serial, text, timestamp, uuid } from 'drizzle-orm/pg-core'
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  serial,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core'
 
 export const categories = pgTable('categories', {
   id: serial('id').primaryKey(),
@@ -93,8 +105,67 @@ export const adminLoginFailures = pgTable(
   ],
 )
 
+// ADR-0021: the order statuses and refund reasons; the CHECKs below and the order store read the same lists.
+export const ORDER_STATUSES = ['pending', 'paid', 'needs_refund', 'cancelled'] as const
+export const REFUND_REASONS = ['out-of-stock', 'amount-mismatch'] as const
+
+const inList = (values: readonly string[]) => sql.raw(values.map((value) => `'${value}'`).join(', '))
+
+// ADR-0021: the one serial of the schema (the order code sent to the gateway); the app role has USAGE / SELECT on
+// sequences (ADR-0010). No $onUpdate: every write sets updated_at, as for carts. payment_ref is attached after the
+// provider answers, so it is nullable (Postgres lets many NULLs share a unique column).
+export const orders = pgTable(
+  'orders',
+  {
+    id: serial('id').primaryKey(),
+    // Snapshot of the cart lines with the price at the time of the order (ADR-0014 (c)).
+    items: jsonb('items').notNull(),
+    total: integer('total').notNull(),
+    status: text('status', { enum: ORDER_STATUSES }).notNull().default('pending'),
+    refundReason: text('refund_reason', { enum: REFUND_REASONS }),
+    provider: text('provider').notNull(),
+    paymentRef: text('payment_ref').unique(),
+    cartId: uuid('cart_id').references(() => carts.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check('orders_total_positive', sql`${table.total} > 0`),
+    check('orders_status_known', sql`${table.status} IN (${inList(ORDER_STATUSES)})`),
+    check('orders_refund_reason_known', sql`${table.refundReason} IS NULL OR ${table.refundReason} IN (${inList(REFUND_REASONS)})`),
+    // A refund reason exists exactly when the order needs a refund.
+    check('orders_refund_reason_matches_status', sql`(${table.status} = 'needs_refund') = (${table.refundReason} IS NOT NULL)`),
+    // /admin/orders: newest first, optionally one status (ADR-0023).
+    index('orders_created_at_idx').on(table.createdAt.desc(), table.id.desc()),
+    index('orders_status_created_at_idx').on(table.status, table.createdAt.desc()),
+  ],
+)
+
+// ADR-0022: one row per fingerprint of (routeType | routePath | errorName | message); the digest is a column of its
+// own (latest value, to find the log line) and not part of the fingerprint. No serial / identity (DML-only role).
+export const errorEvents = pgTable(
+  'error_events',
+  {
+    fingerprint: text('fingerprint').primaryKey(),
+    routeType: text('route_type').notNull(),
+    routePath: text('route_path').notNull(),
+    method: text('method').notNull(),
+    digest: text('digest'),
+    errorName: text('error_name').notNull(),
+    // Only the fixed message of dbQuery (ADR-0011); null for every other error.
+    message: text('message'),
+    count: integer('count').notNull().default(1),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  // /admin/errors and the retention purge scan by age.
+  (table) => [index('error_events_last_seen_at_idx').on(table.lastSeenAt)],
+)
+
 export type Category = typeof categories.$inferSelect
 export type Product = typeof products.$inferSelect
 export type Cart = typeof carts.$inferSelect
 export type CartItem = typeof cartItems.$inferSelect
 export type AdminLoginFailure = typeof adminLoginFailures.$inferSelect
+export type Order = typeof orders.$inferSelect
+export type ErrorEvent = typeof errorEvents.$inferSelect

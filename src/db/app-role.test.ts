@@ -169,6 +169,36 @@ describe('scripts/sql/app-role.sql on a migrated database (NS-60)', () => {
     }
   })
 
+  // NS-138 (M6 Task 4): the statements the order store and the error recorder need, as the DML-only role. orders.id is
+  // the one serial of the schema (ADR-0021), so the INSERT … RETURNING id proves the role may use its sequence.
+  it('orders and error_events queries run as a DML-only role', async () => {
+    await asApp(client, async () => {
+      const id = (await client.query<{ id: number }>(
+        "INSERT INTO orders (items, total, provider) VALUES ('[]'::jsonb, 1000, 'fake') RETURNING id",
+      )).rows[0]?.id
+      expect(id).toBeTypeOf('number')
+      expect((await client.query('SELECT id FROM orders WHERE id = $1 FOR UPDATE', [id])).rows).toHaveLength(1)
+      await client.query("UPDATE orders SET payment_ref = 'role-ref', updated_at = now() WHERE id = $1", [id])
+      const upsert = `INSERT INTO error_events (fingerprint, route_type, route_path, method, error_name)
+        VALUES ('role', 'render', '/app/x', 'GET', 'Error')
+        ON CONFLICT (fingerprint) DO UPDATE SET count = error_events.count + 1, last_seen_at = now()`
+      await client.query(upsert)
+      await client.query(upsert)
+      expect((await client.query('SELECT count FROM error_events WHERE fingerprint = $1', ['role'])).rows).toEqual([{ count: 2 }])
+      await client.query(
+        "DELETE FROM error_events WHERE fingerprint IN (SELECT fingerprint FROM error_events WHERE last_seen_at < now() - interval '30 days' ORDER BY last_seen_at LIMIT 50)",
+      )
+      await client.query('DELETE FROM error_events WHERE fingerprint = $1', ['role'])
+      await client.query('DELETE FROM orders WHERE id = $1', [id])
+      for (const statement of ['TRUNCATE orders', 'TRUNCATE error_events', 'ALTER TABLE orders ADD COLUMN x int']) {
+        expect(await sqlState(() => client.exec(statement)), statement).toBe('42501')
+      }
+    })
+    expect((await explicitGrants(client, 'orders')).sort()).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE'])
+    expect((await explicitGrants(client, 'error_events')).sort()).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE'])
+    expect(await check(client)).toEqual(DML_ONLY)
+  })
+
   it.each([
     ['TRUNCATE products'],
     ['DROP TABLE products'],
