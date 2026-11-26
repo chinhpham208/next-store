@@ -2,7 +2,7 @@
 
 import { headers } from 'next/headers'
 import { redirect } from 'next/navigation'
-import { hashClientIp, readClientIp } from '@/features/admin/client-ip'
+import { clientLimitKey, hashClientIp, readClientIp } from '@/features/admin/client-ip'
 import { readAdminConfig } from '@/features/admin/config'
 import { clearAdminSession, writeAdminSession } from '@/features/admin/cookie'
 import { MAX_PASSWORD_LENGTH } from '@/features/admin/limits'
@@ -43,7 +43,8 @@ export async function loginAction(_previous: LoginState, formData: FormData): Pr
 
   // One clock per request: the lock window, the row's failed_at and the purge agree.
   const now = new Date()
-  const ipHash = await hashClientIp({ ip: readClientIp(await headers()), secret: config.sessionSecret })
+  // Counted per IPv4 address or IPv6 /64 (NS-132), stored as an HMAC only.
+  const ipHash = await hashClientIp({ ip: clientLimitKey(readClientIp(await headers())), secret: config.sessionSecret })
 
   let locked: boolean
   try {
@@ -58,8 +59,8 @@ export async function loginAction(_previous: LoginState, formData: FormData): Pr
     try {
       await recordLoginFailure({ ipHash, now })
     } catch {
-      // The answer is the same either way; a failure that went unrecorded is one more guess, the global limit and
-      // the WAF rule (ADR-0015) still count the rest. A timed-out insert may have committed (ADR-0011): no retry.
+      // The answer is the same either way; a failure that went unrecorded is one more guess, the WAF rule
+      // (ADR-0015) still counts every request. A timed-out insert may have committed (ADR-0011): no retry.
       console.error(RECORD_FAILED_LOG)
     }
     return refused('wrong-password')

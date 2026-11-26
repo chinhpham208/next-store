@@ -36,6 +36,7 @@ HSTS_PORT=3174
 HSTS_SHORT_PORT=3173
 CSP_PREVIEW_PORT=3172
 CSP_PREVIEW_ALLOW_PORT=3171
+ADMIN_TWO_CSP_PORT=3170
 
 TMP=$(mktemp -d)
 PIDS=()
@@ -87,7 +88,9 @@ start_server() {
     const adminCsp = (nonce) => `default-src \x27self\x27; script-src \x27self\x27 \x27nonce-${nonce}\x27 \x27strict-dynamic\x27${adminMode === "csp-unsafe-inline" ? " \x27unsafe-inline\x27" : ""}; style-src \x27self\x27 \x27nonce-${nonce}\x27; object-src \x27none\x27; frame-ancestors \x27none\x27`
     const loginPage = (res) => {
       const nonce = adminMode === "csp-same-nonce" ? "AAAAAAAAAAAAAAAAAAAAAA==" : require("node:crypto").randomBytes(16).toString("base64")
-      if (adminMode !== "csp-missing") res.setHeader("content-security-policy", adminCsp(nonce))
+      if (adminMode === "csp-none") res.removeHeader("content-security-policy")
+      else if (adminMode === "csp-two-headers") res.setHeader("content-security-policy", [BASELINE_CSP, adminCsp(nonce)])
+      else if (adminMode !== "csp-missing") res.setHeader("content-security-policy", adminCsp(nonce))
       const second = adminMode === "csp-script-without-nonce" ? "<script>self.x=1</script>" : `<script nonce="${nonce}">self.x=1</script>`
       res.writeHead(200, { "content-type": "text/html; charset=utf-8" })
       res.end(`<meta name="robots" content="noindex, nofollow"/><h1>Đăng nhập quản trị</h1><script src="/_next/a.js" async="" nonce="${nonce}"></script>${second}`)
@@ -508,12 +511,24 @@ for line in 'smoke: GET /admin/products (không cookie) → 307 /admin/login' \
   'smoke: GET /%61dmin/products (đường dẫn admin viết khác) → 307' \
   'smoke: GET /Admin/products (đường dẫn admin viết khác) → 404' \
   'smoke: GET /admin/login → 200, noindex, không Set-Cookie' \
-  "smoke: GET /admin/login (lần nữa) → CSP nonce 'strict-dynamic', 2 / 2 <script> mang nonce"; do
+  "smoke: GET /admin/login (lần nữa) → CSP nonce 'strict-dynamic', 2 / 2 <script> mang nonce" \
+  'smoke: GET /admin/login (lần nữa) → 1 header content-security-policy' \
+  "smoke:   content-security-policy: default-src 'self'; script-src 'self' 'nonce-"; do
   grep -qF -- "$line" "$TMP/out" || fail admin-guard "thiếu dòng \"$line\""
 done
 # The next-action header reaches only /admin/* (the fake server logs every request's headers).
 grep -c '"next-action"' "$TMP/headers" | grep -qx 2 || fail admin-guard "next-action được gửi ngoài hai request admin"
-for mode in open keep-cookie action-open encoded-open login-guarded csp-missing csp-script-without-nonce csp-same-nonce csp-unsafe-inline; do
+# Vercel may send the baseline of next.config.ts as a second CSP header (audit PR #110 L3): safe, smoke passes and
+# says so (NS-133).
+start_server "$ADMIN_TWO_CSP_PORT" "$TMP/admin-two-csp-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 "" "" "" csp-two-headers
+run BASE_URL="http://127.0.0.1:$ADMIN_TWO_CSP_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail admin-guard "csp-two-headers: thoát $CODE, cần 0"
+for line in 'smoke: GET /admin/login (lần cuối) → 2 header content-security-policy' \
+  "smoke:   content-security-policy: default-src 'self'; script-src 'self' 'unsafe-inline';" \
+  "smoke: GET /admin/login (lần cuối) → CSP nonce 'strict-dynamic', 2 / 2 <script> mang nonce"; do
+  grep -qF -- "$line" "$TMP/out" || fail admin-guard "csp-two-headers: thiếu dòng \"$line\""
+done
+for mode in open keep-cookie action-open encoded-open login-guarded csp-none csp-missing csp-script-without-nonce csp-same-nonce csp-unsafe-inline; do
   start_server "$ADMIN_PORT" "$TMP/admin-headers-$mode" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 "" "" "" "$mode"
   run BASE_URL="http://127.0.0.1:$ADMIN_PORT" -- bash scripts/smoke.sh
   [ "$CODE" = 1 ] || fail admin-guard "$mode: thoát $CODE, cần 1"
@@ -524,6 +539,7 @@ for mode in open keep-cookie action-open encoded-open login-guarded csp-missing 
     action-open) expected='LỖI: POST /admin/products (Server Action, không phiên) trả 200, cần 401' ;;
     encoded-open) expected='LỖI: GET /%61dmin/products (đường dẫn admin viết khác) trả 200 kèm nội dung khu admin' ;;
     login-guarded) expected='LỖI: GET /admin/login trả 307, cần 200' ;;
+    csp-none) expected='LỖI: GET /admin/login (lần cuối) không có header content-security-policy nào' ;;
     csp-missing) expected="LỖI: GET /admin/login (lần cuối) không có CSP nonce 'strict-dynamic'" ;;
     csp-script-without-nonce) expected='LỖI: GET /admin/login (lần cuối): 1 / 2 thẻ <script> mang nonce của response' ;;
     csp-same-nonce) expected='LỖI: GET /admin/login hai lần trả cùng một nonce' ;;

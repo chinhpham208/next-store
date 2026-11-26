@@ -7,8 +7,8 @@ import {
   FAILURE_RETENTION_HOURS,
   isLoginLocked,
   LOGIN_WINDOW_MINUTES,
-  MAX_FAILURES_GLOBAL,
   MAX_FAILURES_PER_IP,
+  MAX_RECORDED_FAILURES,
   purgeLoginFailures,
   recordLoginFailure,
 } from '@/features/admin/login-limit'
@@ -53,12 +53,12 @@ beforeEach(async () => {
   calls.log = []
 })
 
-describe('limits (ADR-0018 8A)', () => {
-  it('are 5 per IP and 50 overall in 15 minutes, kept for 24 hours', () => {
-    expect({ LOGIN_WINDOW_MINUTES, MAX_FAILURES_PER_IP, MAX_FAILURES_GLOBAL, FAILURE_RETENTION_HOURS }).toEqual({
+describe('limits (ADR-0018 8A, NS-132)', () => {
+  it('are 5 per IP in 15 minutes, at most 1000 rows written per window, kept for 24 hours', () => {
+    expect({ LOGIN_WINDOW_MINUTES, MAX_FAILURES_PER_IP, MAX_RECORDED_FAILURES, FAILURE_RETENTION_HOURS }).toEqual({
       LOGIN_WINDOW_MINUTES: 15,
       MAX_FAILURES_PER_IP: 5,
-      MAX_FAILURES_GLOBAL: 50,
+      MAX_RECORDED_FAILURES: 1000,
       FAILURE_RETENTION_HOURS: 24,
     })
   })
@@ -70,7 +70,7 @@ describe('isLoginLocked', () => {
     expect(await isLoginLocked({ ipHash: IP, now: NOW })).toBe(false)
     await recordLoginFailure({ ipHash: IP, now: minutesAgo(1) })
     expect(await isLoginLocked({ ipHash: IP, now: NOW })).toBe(true)
-    // Another address is not locked by them: 5 is far below the global limit.
+    // Another address is not locked by them.
     expect(await isLoginLocked({ ipHash: OTHER_IP, now: NOW })).toBe(false)
   })
 
@@ -82,15 +82,13 @@ describe('isLoginLocked', () => {
     expect(await isLoginLocked({ ipHash: IP, now: NOW })).toBe(false)
   })
 
-  it('locks everyone after 50 failures in 15 minutes', async () => {
-    // 50 addresses with one failure each: no address reaches its own limit.
-    await insertFailures(Array.from({ length: 49 }, (_, n) => ({ ipHash: hashOf(100 + n), failedAt: minutesAgo(5) })))
+  it('the global limit cannot be held: 2000 failures of other addresses lock nobody else (NS-132)', async () => {
+    await insertFailures(Array.from({ length: 2000 }, (_, n) => ({ ipHash: hashOf(100 + (n % 400)), failedAt: minutesAgo(5) })))
     expect(await isLoginLocked({ ipHash: IP, now: NOW })).toBe(false)
-    await insertFailures([{ ipHash: hashOf(200), failedAt: minutesAgo(2) }])
-    expect(await isLoginLocked({ ipHash: IP, now: NOW })).toBe(true)
+    expect(await isLoginLocked({ ipHash: hashOf(100), now: NOW })).toBe(true)
   })
 
-  it('counts both limits in one query named admin.login-lock', async () => {
+  it('counts in one query named admin.login-lock', async () => {
     await isLoginLocked({ ipHash: IP, now: NOW })
     expect(calls.log).toEqual([{ name: 'admin.login-lock', transaction: false }])
   })
@@ -104,6 +102,25 @@ describe('recordLoginFailure', () => {
     expect(rows[0]).toMatchObject({ ipHash: IP, failedAt: NOW })
     expect(rows[0]?.id).toMatch(/^[0-9a-f-]{36}$/)
     expect(calls.log).toEqual([{ name: 'admin.login-failure', transaction: true }])
+  })
+
+  it('stops writing rows past 1000 in the window, still purges, and locks nobody for it (NS-132)', async () => {
+    await insertFailures(
+      Array.from({ length: MAX_RECORDED_FAILURES - 1 }, (_, n) => ({ ipHash: hashOf(1000 + n), failedAt: minutesAgo(3) })),
+    )
+    await insertFailures(Array.from({ length: 10 }, (_, n) => ({ ipHash: hashOf(n + 10), failedAt: hoursAgo(FAILURE_RETENTION_HOURS + 1) })))
+    // The last one under the ceiling is written…
+    await recordLoginFailure({ ipHash: IP, now: NOW })
+    expect(await total()).toBe(MAX_RECORDED_FAILURES)
+    // …then nothing more, while the window is full; the old rows are purged all the same.
+    await recordLoginFailure({ ipHash: OTHER_IP, now: NOW })
+    expect(await total()).toBe(MAX_RECORDED_FAILURES)
+    expect(await olderThan(hoursAgo(FAILURE_RETENTION_HOURS))).toBe(0)
+    expect(await isLoginLocked({ ipHash: OTHER_IP, now: NOW })).toBe(false)
+    // Rows older than the window do not count toward the ceiling.
+    expect(await total()).toBe(MAX_RECORDED_FAILURES)
+    await recordLoginFailure({ ipHash: OTHER_IP, now: new Date(NOW.getTime() + (LOGIN_WINDOW_MINUTES + 1) * MINUTE_MS) })
+    expect(await total()).toBe(MAX_RECORDED_FAILURES + 1)
   })
 
   it('purges failures older than one day, at most 100 per call', async () => {

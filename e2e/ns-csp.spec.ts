@@ -26,6 +26,18 @@ const withoutToolbar = async (page: Page): Promise<void> => {
   if (BASE_URL) await page.setExtraHTTPHeaders({ 'x-vercel-skip-toolbar': '1' })
 }
 
+const logIn = async (page: Page): Promise<void> => {
+  await page.goto('/admin/login')
+  const submit = page.getByRole('button', { name: 'Đăng nhập' })
+  await waitForHydration(submit)
+  // Set without fill(): a fill step records the value in the report (as in ns-123-admin-guard.spec.ts).
+  await page.locator('#admin-password').evaluate((input, value) => {
+    if (input instanceof HTMLInputElement) input.value = value
+  }, PASSWORD ?? '')
+  await submit.click()
+  await expect(page).toHaveURL(/\/admin\/products$/, { timeout: 20_000 })
+}
+
 const watchCsp = async (page: Page): Promise<string[]> => {
   const violations: string[] = []
   await page.exposeFunction('__nsCspViolation', (line: string) => violations.push(line))
@@ -98,15 +110,7 @@ test.describe('NS-127: CSP nonce cho /admin', () => {
     test.skip(!PASSWORD, 'Không có E2E_ADMIN_PASSWORD: không đăng nhập được')
     await withoutToolbar(page)
     const violations = await watchCsp(page)
-    await page.goto('/admin/login')
-    const submit = page.getByRole('button', { name: 'Đăng nhập' })
-    await waitForHydration(submit)
-    // Set without fill(): a fill step records the value in the report (as in ns-123-admin-guard.spec.ts).
-    await page.locator('#admin-password').evaluate((input, value) => {
-      if (input instanceof HTMLInputElement) input.value = value
-    }, PASSWORD ?? '')
-    await submit.click()
-    await expect(page).toHaveURL(/\/admin\/products$/, { timeout: 20_000 })
+    await logIn(page)
 
     const response = await page.goto('/admin/products/ao-git-push-force')
     expect(response?.headers()['content-security-policy'] ?? '').toMatch(NONCE_POLICY)
@@ -119,6 +123,29 @@ test.describe('NS-127: CSP nonce cho /admin', () => {
     await expect(page.getByText('Giá không được âm')).toBeVisible()
     expect(violations).toEqual([])
   })
+})
+
+// NS-133 (audit M5 L1): with a session, an /admin URL no route matches used to get the static /_not-found, whose
+// scripts carry no nonce (24 violations, no hydration). The catch-all (protected)/[...rest] renders it per request.
+// Its status is 200 (notFound() after the shell, like audit M5 L2), so only the page is checked, not the status.
+test('NS-133: trang 404 dưới /admin khi đã đăng nhập hydrate dưới CSP nonce', { tag: WRITE_TAG }, async ({ page }) => {
+  test.skip(!PASSWORD, 'Không có E2E_ADMIN_PASSWORD: không đăng nhập được')
+  await withoutToolbar(page)
+  const violations = await watchCsp(page)
+  await logIn(page)
+  for (const path of ['/admin/khong-co-trang-nay', '/admin/products/ao-git-push-force/khong-co']) {
+    const response = await page.goto(path)
+    const policy = response?.headers()['content-security-policy'] ?? ''
+    expect(policy).toMatch(NONCE_POLICY)
+    const nonce = /'nonce-([^']+)'/.exec(policy)?.[1]
+    const scripts = ((await response?.text()) ?? '').match(/<script[ >][^>]*/g) ?? []
+    expect(scripts.length).toBeGreaterThan(0)
+    for (const script of scripts) expect(script).toContain(`nonce="${nonce}"`)
+    await expect(page.getByRole('heading', { level: 1, name: 'Không tìm thấy trang' })).toBeVisible()
+    await expect(page).toHaveTitle('Không tìm thấy trang · Quản trị')
+    await waitForHydration(page.getByRole('link', { name: 'Xem tất cả sản phẩm' }))
+  }
+  expect(violations).toEqual([])
 })
 
 // ADR-0020 10A: HSTS comes from Vercel (`*.vercel.app` is preloaded). Not set by the app, so not checked locally.
