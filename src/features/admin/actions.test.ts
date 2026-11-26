@@ -179,12 +179,23 @@ describe('loginAction', () => {
 
   it('stores only an HMAC of the IP', async () => {
     await loginAction(IDLE, form('not-the-password'))
+    // An IPv4 address is its own key (clientLimitKey, NS-132).
     const expected = await hashClientIp({ ip: IP, secret: SECRET })
     expect(store.isLoginLocked).toHaveBeenCalledWith({ ipHash: expected, now: expect.any(Date) })
     expect(store.recordLoginFailure).toHaveBeenCalledWith({ ipHash: expected, now: expect.any(Date) })
     expect(expected).toMatch(/^[0-9a-f]{64}$/)
     expect(JSON.stringify(store.recordLoginFailure.mock.calls)).not.toContain(IP)
     expect(JSON.stringify(store.isLoginLocked.mock.calls)).not.toContain(IP)
+  })
+
+  it('stores the HMAC of the /64 for an IPv6 address, never the address (NS-132)', async () => {
+    request.headers = new Headers({ 'x-forwarded-for': '2001:DB8:abcd:12::7' })
+    await loginAction(IDLE, form('not-the-password'))
+    expect(store.recordLoginFailure).toHaveBeenCalledWith({
+      ipHash: await hashClientIp({ ip: '2001:db8:abcd:12::/64', secret: SECRET }),
+      now: expect.any(Date),
+    })
+    expect(JSON.stringify(store.recordLoginFailure.mock.calls)).not.toMatch(/2001|db8/i)
   })
 
   it('counts a request without x-forwarded-for under one shared address', async () => {

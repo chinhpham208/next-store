@@ -4,8 +4,12 @@
 // src/proxy.ts sets it on the request, so Next.js 16.4.6 reads the nonce back from script-src
 // (server/app-render/get-script-nonce-from-header.js) and puts it on every script and inline style it renders, and on
 // the response, so the browser enforces it. 'strict-dynamic': a script with the nonce may load the page's chunks, any
-// other script (inline or not) is refused. A nonce needs a page rendered per request: every admin page is dynamic
-// (src/app/admin/layout.tsx); a prerendered shell would carry scripts without it (D3, audit PR #105 L3).
+// other script (inline or not) is refused. A nonce needs a page rendered per request, and a prerendered shell would
+// carry scripts without it (D3, audit PR #105 L3). The admin root layout (src/app/admin/layout.tsx) does nothing for
+// that: src/app/admin/login/page.tsx and src/app/admin/(protected)/layout.tsx await `connection()` first (with
+// `instant = false`), and (protected)/[...rest] keeps unknown /admin URLs off the static /_not-found (NS-133).
+// scripts/check-admin-bundle.mjs fails the build check when an /admin route has a prerendered shell; the only static
+// one is the /admin redirect (a 307, no page rendered).
 // Shop pages never get this policy: they keep the baseline of next.config.ts and stay prerendered.
 
 // What Next.js accepts as a nonce (same file, CSP_NONCE_SOURCE_REGEX). Anything else could close the source and add
