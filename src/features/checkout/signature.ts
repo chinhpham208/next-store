@@ -2,10 +2,12 @@
 // Crypto only, like admin/session.ts.
 //
 // Header `x-fake-signature: t=<unix seconds, 10 digits>,v1=<base64url HMAC-SHA256 of "<t>.<body>">`. The MAC is over
-// the bytes of the body as received, never over JSON parsed and written again.
+// the bytes of the body as received (a Uint8Array, never text decoded and encoded again: a BOM or an invalid UTF-8
+// sequence changes the MAC), never over JSON parsed and written again.
 
 export const FAKE_SIGNATURE_HEADER = 'x-fake-signature'
 export const FAKE_SIGNATURE_TOLERANCE_SECONDS = 300
+/** The one source of the minimum secret length: config.ts imports it. */
 export const MIN_FAKE_SECRET_LENGTH = 32
 
 // 32 bytes are 43 base64url characters; the last one carries 4 bits of data and 2 spare bits, which must be zero, so
@@ -19,6 +21,18 @@ const encoder = new TextEncoder()
 
 const assertSecret = (secret: string): void => {
   if (secret.trim().length < MIN_FAKE_SECRET_LENGTH) throw new Error(SECRET_TOO_SHORT)
+}
+
+type Body = string | Uint8Array
+
+// `<t>.` then the body bytes as they are: a string is encoded once here, bytes are used untouched.
+const signedBytes = (time: string, body: Body): Uint8Array<ArrayBuffer> => {
+  const prefix = encoder.encode(`${time}.`)
+  const bytes = typeof body === 'string' ? encoder.encode(body) : body
+  const out = new Uint8Array(prefix.length + bytes.length)
+  out.set(prefix, 0)
+  out.set(bytes, prefix.length)
+  return out
 }
 
 const importKey = (secret: string): Promise<CryptoKey> =>
@@ -46,12 +60,12 @@ export const signFakeEvent = async ({
   now,
 }: {
   secret: string
-  body: string
+  body: Body
   now: Date
 }): Promise<string> => {
   assertSecret(secret)
   const time = String(unixSeconds(now))
-  const mac = await crypto.subtle.sign('HMAC', await importKey(secret), encoder.encode(`${time}.${body}`))
+  const mac = await crypto.subtle.sign('HMAC', await importKey(secret), signedBytes(time, body))
   return `t=${time},v1=${toBase64Url(new Uint8Array(mac))}`
 }
 
@@ -69,7 +83,7 @@ export const verifyFakeSignature = async ({
   now,
 }: {
   secret: string
-  body: string
+  body: Body
   header: string | null
   now: Date
 }): Promise<SignatureVerdict> => {
@@ -86,7 +100,7 @@ export const verifyFakeSignature = async ({
       'HMAC',
       await importKey(secret),
       fromBase64Url(mac),
-      encoder.encode(`${time}.${body}`),
+      signedBytes(time, body),
     )
     return valid ? 'ok' : 'bad-signature'
   } catch {

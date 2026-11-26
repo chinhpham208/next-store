@@ -906,7 +906,7 @@ describe('the admin area holds only checked route files (audit PR #106 H1, re-au
     const imports = importDeclarations(file).map((statement) =>
       ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : '?',
     )
-    expect(imports.sort()).toEqual(['@/features/admin', 'next/server', 'react'])
+    expect(imports.sort()).toEqual(['@/features/admin/ui', 'next/server', 'react'])
     expect(topLevelAwaits(file)).toBe(0)
     // ADR-0020: the one await is `connection`, first, so no admin page has a prerendered shell without the CSP nonce;
     // it reads no cookie, header or data.

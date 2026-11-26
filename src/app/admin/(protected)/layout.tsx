@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import { Suspense } from "react";
-import { AdminGate, AdminShellSkeleton } from "@/features/admin";
+import { AdminGate, AdminShellSkeleton } from "@/features/admin/ui";
 
 // The signed-in shell of every protected admin page (US-12, ADR-0018). AdminGate checks the session for the shell
 // only: a layout does not keep its page from rendering, so every page here starts with `await requireAdminPage()`

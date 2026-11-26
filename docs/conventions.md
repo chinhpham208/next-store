@@ -18,6 +18,7 @@
 |---|---|
 | `index.ts` | Chỉ re-export public API |
 | `admin.ts` | Lối vào admin của feature (`products`; từ M6 thêm `orders` và `monitoring`, [ADR-0023](./adr/0023-admin-orders-and-password-strength.md)): form sửa, bảng admin, hàm `…ForAdmin`, chuỗi của form; chỉ `src/app/admin/**` import (audit PR #108 M-1) |
+| `ui.ts` | `admin` (audit PR #124 M2): component admin (`AdminGate`, `AdminShell`, `LoginForm`, `LogoutButton`…); chỉ `src/app/admin/**` import *(dependency-cruiser `admin-ui-entry-only-from-admin`, `shop-not-to-admin-components`)*. `index.ts` của `admin` chỉ còn đọc phiên (`hasAdminSession`, `requireAdminPage`) và kiểu, để mã mà trang cửa hàng chạm tới (`checkout`) import được mà không kéo client component admin |
 | `providers/` | `checkout` (M6): một file mỗi cổng thanh toán cài `PaymentProvider` (hiện chỉ `fake.ts`); chỉ `provider.ts` chọn provider theo cấu hình — [ADR-0021](./adr/0021-payment-orders-and-webhook.md) |
 | `signature.ts` | `checkout` (M6): ký / xác minh chữ ký webhook bằng Web Crypto (`crypto.subtle.verify`); nơi **duy nhất** ký hay xác minh sự kiện thanh toán; không `server-only`, không `zod` — [ADR-0021](./adr/0021-payment-orders-and-webhook.md) |
 | `report.ts` | `monitoring` (M6): hàm thuần dựng báo cáo lỗi (`toErrorReport`, `formatErrorLogLine`); **không import gì** ngoài Web Crypto, để `src/instrumentation.ts` dùng được ở nhánh proxy mà không kéo DB — [ADR-0022](./adr/0022-error-tracking-and-web-vitals.md) |

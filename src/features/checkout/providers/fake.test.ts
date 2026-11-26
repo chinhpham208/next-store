@@ -89,4 +89,27 @@ describe('createFakeProvider', () => {
     expect(await reasonOf(webhook('not json', null))).toBe('unsigned')
     expect(await reasonOf(webhook('not json', `t=1700000000,v1=${'A'.repeat(43)}`))).toBe('expired')
   })
+
+  it('keeps the signed bytes: a BOM or invalid UTF-8 is malformed after a good MAC, never silently repaired', async () => {
+    const json = new TextEncoder().encode(JSON.stringify({ type: 'cancelled', paymentRef: REF, orderCode: 7 }))
+    const bom = new Uint8Array([0xef, 0xbb, 0xbf, ...json])
+    const invalid = new Uint8Array([...json.slice(0, -1), 0xff, 0x7d])
+    for (const bytes of [bom, invalid]) {
+      const header = await signFakeEvent({ secret: SECRET, body: bytes, now: new Date() })
+      const request = new Request('http://localhost/api/webhooks/payment', {
+        method: 'POST',
+        body: bytes,
+        headers: { [FAKE_SIGNATURE_HEADER]: header },
+      })
+      expect(await reasonOf(Promise.resolve(request))).toBe('malformed')
+    }
+    // The same bytes under a MAC made for the BOM-less body are not accepted.
+    const header = await signFakeEvent({ secret: SECRET, body: json, now: new Date() })
+    const request = new Request('http://localhost/api/webhooks/payment', {
+      method: 'POST',
+      body: bom,
+      headers: { [FAKE_SIGNATURE_HEADER]: header },
+    })
+    expect(await reasonOf(Promise.resolve(request))).toBe('bad-signature')
+  })
 })

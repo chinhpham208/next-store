@@ -97,4 +97,26 @@ describe('signFakeEvent / verifyFakeSignature', () => {
       )
     }
   })
+
+  // Audit PR #124 L1: the MAC covers the bytes received, not text decoded and encoded again.
+  it('a BOM or an invalid UTF-8 byte is not the signed body', async () => {
+    const plain = new TextEncoder().encode('{}')
+    const withBom = new Uint8Array([0xef, 0xbb, 0xbf, ...plain])
+    const header = await signFakeEvent({ secret: SECRET, body: plain, now: NOW })
+    expect(await verifyFakeSignature({ secret: SECRET, body: plain, header, now: NOW })).toBe('ok')
+    expect(await verifyFakeSignature({ secret: SECRET, body: withBom, header, now: NOW })).toBe('bad-signature')
+    // And a body signed with its BOM verifies only with it.
+    const bomHeader = await signFakeEvent({ secret: SECRET, body: withBom, now: NOW })
+    expect(await verifyFakeSignature({ secret: SECRET, body: withBom, header: bomHeader, now: NOW })).toBe('ok')
+    expect(await verifyFakeSignature({ secret: SECRET, body: plain, header: bomHeader, now: NOW })).toBe('bad-signature')
+    // Two different invalid sequences decode to the same text (U+FFFD) but are two different bodies.
+    const ff = new Uint8Array([0x7b, 0xff, 0x7d])
+    const fe = new Uint8Array([0x7b, 0xfe, 0x7d])
+    const ffHeader = await signFakeEvent({ secret: SECRET, body: ff, now: NOW })
+    expect(await verifyFakeSignature({ secret: SECRET, body: ff, header: ffHeader, now: NOW })).toBe('ok')
+    expect(await verifyFakeSignature({ secret: SECRET, body: fe, header: ffHeader, now: NOW })).toBe('bad-signature')
+    expect(ffHeader).toBe(
+      `t=${String(NOW_SECONDS)},v1=${createHmac('sha256', SECRET).update(Buffer.concat([Buffer.from(`${String(NOW_SECONDS)}.`), ff])).digest('base64url')}`,
+    )
+  })
 })

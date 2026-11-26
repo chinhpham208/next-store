@@ -15,10 +15,14 @@ export const paymentEventSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('cancelled'), paymentRef, orderCode: positiveInteger }),
 ])
 
-const parseEvent = (body: string): PaymentEvent => {
+// After the MAC only. `fatal` refuses invalid UTF-8, `ignoreBOM` keeps a BOM in the text so JSON.parse refuses it:
+// the bytes that were signed are the bytes that are parsed, none dropped or replaced.
+const decoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true })
+
+const parseEvent = (bytes: Uint8Array): PaymentEvent => {
   let json: unknown
   try {
-    json = JSON.parse(body)
+    json = JSON.parse(decoder.decode(bytes))
   } catch {
     throw new WebhookRejected('malformed')
   }
