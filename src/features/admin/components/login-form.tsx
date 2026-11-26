@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { loginAction } from '@/features/admin/actions'
 import { LOGIN_NETWORK_ERROR, LOGIN_PENDING_MESSAGE, loginErrorMessage } from '@/features/admin/messages'
 import type { LoginError, LoginState } from '@/features/admin/types'
+import { useHeldTitle } from '@/lib/use-held-title'
 
 const INPUT_ID = 'admin-password'
 const ERROR_ID = 'admin-password-error'
@@ -44,6 +45,8 @@ export const LoginForm = () => {
   const [state, dispatch, isPending] = useActionState(submitLogin, IDLE)
   const [, startTransition] = useTransition()
   const inputRef = useRef<HTMLInputElement>(null)
+  // NS-107 / NS-113: the page keeps its <title> if the action's response re-renders the route.
+  const heldTitle = useHeldTitle(isPending)
   // A new submit clears the previous answer: while waiting only "Đang đăng nhập…" is shown.
   const fieldError = !isPending && state.status === 'error' && isFieldError(state.error)
   const message = isPending ? undefined : messageOf(state)
@@ -60,11 +63,13 @@ export const LoginForm = () => {
     event.preventDefault()
     if (isPending) return
     const formData = new FormData(event.currentTarget)
+    heldTitle.hold()
     startTransition(() => dispatch(formData))
   }
 
   return (
     <>
+      {heldTitle.title}
       <form noValidate action={dispatch} onSubmit={submit} className="flex max-w-sm flex-col gap-6">
         <div className="flex flex-col gap-2">
           <label htmlFor={INPUT_ID} className="text-sm font-medium">

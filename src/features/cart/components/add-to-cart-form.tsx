@@ -1,13 +1,14 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useState, useTransition, type FormEvent } from 'react'
+import { useState, useTransition, type FormEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { QuantityStepper } from '@/components/ui/quantity-stepper'
 import { addToCartAction } from '@/features/cart/actions'
 import { useCartOptimism } from '@/features/cart/components/cart-provider'
 import { MAX_LINE_QUANTITY } from '@/features/cart/limits'
 import { CART_NETWORK_ERROR, cartErrorMessage, QUANTITY_RANGE_MESSAGE } from '@/features/cart/messages'
+import { useHeldTitle } from '@/lib/use-held-title'
 
 export type AddToCartFormProps = { slug: string; stock: number }
 
@@ -24,43 +25,6 @@ const checkQuantity = (value: string): { quantity: number } | { message: string 
   if (!/^\d+$/.test(value.trim()) || quantity < MIN_QUANTITY) return { message: QUANTITY_RANGE_MESSAGE }
   if (quantity > MAX_LINE_QUANTITY) return { message: cartErrorMessage({ error: 'line-limit' }) }
   return { quantity }
-}
-
-
-// NS-107 (WCAG 2.4.2). A successful add re-renders the route in the action's response (D2). Next.js 16.4.6 keys the
-// head's metadata by request id (server/app-render/app-render.js getFlightMetadataKey), so every response remounts
-// it, and the metadata streams inside its own <Suspense> (lib/metadata/metadata.js). Its row comes last; when the rest
-// of the tree commits first, the remounted boundary shows its empty fallback and the page has no <title> until the
-// row lands. The form therefore renders a copy of the current title (React hoists it into <head>) from the click
-// until the route's own <title> is back after the action, so the document always has one. Both say the same thing.
-const HELD_TITLE_ATTRIBUTE = 'data-held-title'
-const routeTitlePresent = () =>
-  Array.from(document.head.querySelectorAll('title')).some(
-    (title) => !title.hasAttribute(HELD_TITLE_ATTRIBUTE) && title.textContent !== '',
-  )
-
-const useTitleHeldWhile = (isPending: boolean) => {
-  const [heldTitle, setHeldTitle] = useState<string | null>(null)
-  useEffect(() => {
-    // Released only after the action's render has committed (isPending goes false with it, C1) and the route's
-    // title is in the head again; until then a DOM observer waits for it.
-    if (heldTitle === null || isPending) return
-    const release = () => {
-      if (!routeTitlePresent()) return false
-      setHeldTitle(null)
-      return true
-    }
-    if (release()) return
-    const observer = new MutationObserver(() => {
-      if (release()) observer.disconnect()
-    })
-    observer.observe(document.head, { subtree: true, childList: true, characterData: true })
-    return () => observer.disconnect()
-  }, [heldTitle, isPending])
-  const hold = () => setHeldTitle(document.title)
-  // The attribute is HELD_TITLE_ATTRIBUTE, so the copy never counts as the route's own title.
-  const title = heldTitle ? <title data-held-title="">{heldTitle}</title> : null
-  return { hold, title }
 }
 
 const SoldOut = () => (
@@ -80,7 +44,8 @@ export const AddToCartForm = ({ slug, stock }: AddToCartFormProps) => {
   const [isPending, startTransition] = useTransition()
   const [value, setValue] = useState(String(MIN_QUANTITY))
   const [outcome, setOutcome] = useState<Outcome>(IDLE)
-  const heldTitle = useTitleHeldWhile(isPending)
+  // NS-107: the page keeps its <title> while the add re-renders the route (src/lib/use-held-title.ts).
+  const heldTitle = useHeldTitle(isPending)
 
   if (stock === 0) return <SoldOut />
 
