@@ -901,13 +901,21 @@ describe('the admin area holds only checked route files (audit PR #106 H1, re-au
     expect(staticRouteProblems(readFileSync('src/app/admin/layout.tsx', 'utf8'))).toEqual([])
   })
 
-  it('the (protected) layout only renders AdminGate inside <Suspense>', () => {
+  it('the (protected) layout only renders AdminGate inside <Suspense>, after connection()', () => {
     const file = parse(readFileSync(PROTECTED_LAYOUT, 'utf8'))
     const imports = importDeclarations(file).map((statement) =>
       ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : '?',
     )
-    expect(imports.sort()).toEqual(['@/features/admin', 'react'])
+    expect(imports.sort()).toEqual(['@/features/admin', 'next/server', 'react'])
     expect(topLevelAwaits(file)).toBe(0)
+    // ADR-0020: the one await is `connection`, first, so no admin page has a prerendered shell without the CSP nonce;
+    // it reads no cookie, header or data.
+    const source = readFileSync(PROTECTED_LAYOUT, 'utf8')
+    const code = source.replace(/^\s*\/\/.*$/gm, '')
+    expect(code.match(/\bawait\b/g)).toEqual(['await'])
+    expect(source).toMatch(/export default async function ProtectedAdminLayout\([^)]*\) \{\n {2}await connection\(\);\n/)
+    expect(source).toMatch(/^export const instant = false;$/m)
+    expect(code).not.toMatch(/cookies\(|headers\(|dbQuery|process\./)
     expect(readFileSync(PROTECTED_LAYOUT, 'utf8')).toMatch(/<Suspense fallback=\{<AdminShellSkeleton \/>\}>\s*<AdminGate>\{children\}<\/AdminGate>/)
   })
 

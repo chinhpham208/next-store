@@ -1,6 +1,7 @@
 import type { NextRequest } from 'next/server'
 import { resolveAdminConfig } from '@/features/admin/config-rules'
 import { type AdminCookieName, adminCookieNameFor } from '@/features/admin/cookie-name'
+import { buildAdminCsp, newNonce } from '@/features/admin/csp'
 import { verifySession } from '@/features/admin/session'
 import { getSiteUrl } from '@/lib/site-url'
 
@@ -66,3 +67,6 @@ export const hasValidAdminCookie = async (request: NextRequest): Promise<boolean
   const token = request.cookies.get(name)?.value
   return verifySession({ token, secret: config.sessionSecret, now: new Date() })
 }
+
+/** A fresh strict policy for one admin request (ADR-0020): a new nonce every call. */
+export const freshAdminCsp = (): string => buildAdminCsp(newNonce())

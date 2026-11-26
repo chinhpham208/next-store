@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
-import { hasValidAdminCookie, isAdminLoginPath, isGuardedAdminPath } from '@/features/admin/proxy-api'
+import { freshAdminCsp, hasValidAdminCookie, isAdminLoginPath, isGuardedAdminPath } from '@/features/admin/proxy-api'
 import { isPostSlug } from '@/features/blog/proxy-api'
 import { isCatalogSlug, isProductSlug } from '@/features/products/proxy-api'
 
@@ -66,10 +66,24 @@ const clearAdminCookies = (request: NextRequest, response: NextResponse): NextRe
 const redirectToLogin = (request: NextRequest): NextResponse =>
   clearAdminCookies(request, NextResponse.redirect(new URL(LOGIN_PATH, request.url), 307))
 
+// ADR-0020: every admin request let through carries a strict policy with a fresh nonce, on the request (Next.js reads
+// the nonce from the request's Content-Security-Policy and puts it on its scripts, D3) and on the response (the
+// browser enforces it). Set, never appended: a CSP request header sent by the client is replaced, so it cannot choose
+// the nonce. Shop pages never get it, so they stay prerendered; the 307 and the 401 carry no page and keep the
+// baseline of next.config.ts.
+const passAdmin = (request: NextRequest): NextResponse => {
+  const policy = freshAdminCsp()
+  const headers = new Headers(request.headers)
+  headers.set('content-security-policy', policy)
+  const response = NextResponse.next({ request: { headers } })
+  response.headers.set('content-security-policy', policy)
+  return response
+}
+
 const answerAdmin = async (request: NextRequest): Promise<NextResponse> => {
   // Canonical spelling only: `/Admin/login` or `/%61dmin/login` is guarded like any other admin page.
-  if (isAdminLoginPath(request.nextUrl.pathname)) return NextResponse.next()
-  if (await hasValidAdminCookie(request)) return NextResponse.next()
+  if (isAdminLoginPath(request.nextUrl.pathname)) return passAdmin(request)
+  if (await hasValidAdminCookie(request)) return passAdmin(request)
   if (request.method === 'GET' || request.method === 'HEAD') return redirectToLogin(request)
   // A Server Action (POST + next-action) or any other method: no redirect for a fetch to follow, an empty 401. It
   // clears a junk or stale cookie like the 307 (audit PR #106 L2): the client sends a refused tab to /admin/login

@@ -1,19 +1,27 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { connection } from "next/server";
 import { Suspense } from "react";
 import { Container } from "@/components/ui/container";
 import { AdminHeader, LoginForm, redirectSignedInAdmin } from "@/features/admin";
 
 export const metadata: Metadata = { title: "Đăng nhập" };
 
-// Reads the cookie, so it renders inside <Suspense> and the rest of the page stays static. Already signed in →
-// /admin/products. In a stream that redirect is a meta tag (plan M5 D5); nothing here is protected anyway.
+// Reads the cookie inside <Suspense>, so the form streams first. Already signed in → /admin/products. In a stream that redirect is a meta tag (plan M5 D5); nothing here is protected anyway.
 const SignedInRedirect = async () => {
   await redirectSignedInAdmin();
   return null;
 };
 
-export default function AdminLoginPage() {
+// ADR-0020: the page runs under the proxy's nonce CSP ('strict-dynamic'), and Next.js puts the nonce only on what it
+// renders for the request (D3). A prerendered shell (◐) is served with scripts that carry no nonce: the browser
+// refuses them and the form never hydrates (audit PR #105 L3, e2e/ns-csp.spec.ts). Awaiting `connection` before
+// anything, outside any <Suspense>, leaves the route no static shell (ƒ in the route table); `instant = false` is
+// what Cache Components requires for such a route (else the build stops with "blocking-prerender-dynamic").
+export const instant = false;
+
+export default async function AdminLoginPage() {
+  await connection();
   return (
     <>
       <AdminHeader layout="login">
