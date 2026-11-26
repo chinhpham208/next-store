@@ -5,8 +5,10 @@
 # Set-Cookie; /cart không cookie trả 200, giỏ trống, noindex; /blog và một bài blog trả 200 và có nội dung; slug sản phẩm, slug bài và ảnh OG của slug
 # lạ trả 404 ngay lần đầu, bài và sản phẩm có thật vẫn 200 ở mọi dạng vận chuyển; /sitemap.xml và /robots.txt trả 200, cùng một origin tuyệt đối, robots.txt chặn hay cho crawl đúng môi trường;
 # trang chủ có og:site_name; og:image của trang chủ, một sản phẩm và một bài blog tải được, là PNG; header bảo mật
-# của next.config.ts (X-Frame-Options, CSP frame-ancestors, X-Content-Type-Options, Referrer-Policy) có trên trang
-# chủ, trang sản phẩm, trang 404, 404 do proxy rewrite, ảnh OG, /sitemap.xml và /robots.txt; khu admin (US-12): mọi
+# của next.config.ts (X-Frame-Options, CSP nền đủ chỉ thị, X-Content-Type-Options, Referrer-Policy) có trên trang
+# chủ, trang sản phẩm, trang 404, 404 do proxy rewrite, ảnh OG, /sitemap.xml và /robots.txt; /admin/login có CSP nonce
+# 'strict-dynamic' (nonce mới mỗi request, mọi <script> mang nonce đó; ADR-0020); HSTS (max-age ≥ 31536000) khi URL là
+# Vercel (*.vercel.app); khu admin (US-12): mọi
 # /admin/* ngoài /admin/login không có phiên hợp lệ trả 307 tới /admin/login (cookie rác bị xoá), Server Action trả 401,
 # đường dẫn admin viết mã hoá / khác hoa thường trả 404 hoặc 307, /admin/login trả 200 và noindex. Đúng cả khi khu
 # admin chưa được cấu hình (đóng: không có phiên nào hợp lệ).
@@ -22,6 +24,9 @@
 #   SMOKE_ROBOTS                     disallow = robots.txt phải `Disallow: /` (Preview / Dev; workflow e2e-preview đặt),
 #                                    allow = phải `Allow: /` (Production). Bỏ trống: chấp nhận một trong hai, in ra
 #                                    (next start: build ngoài Vercel là disallow). Header X-Robots-Tag luôn chỉ được in
+#   SMOKE_HSTS                       require = phải có Strict-Transport-Security với max-age ≥ 31536000, skip = không
+#                                    kiểm (chỉ in). Bỏ trống: require khi BASE_URL là https://<…>.vercel.app (HSTS do
+#                                    Vercel đặt, ADR-0020), skip khi khác (local, next start)
 #   SMOKE_PRODUCT_FAIL_OPEN          đã bỏ (ADR-0017, NS-79): proxy không còn tra DB nên slug sản phẩm lạ phải 404
 #                                    ngay lần đầu ở mọi môi trường; đặt biến này (giá trị nào cũng vậy) là lỗi
 #   VERCEL_AUTOMATION_BYPASS_SECRET  có thì gửi header x-vercel-protection-bypass (vượt Deployment Protection),
@@ -118,6 +123,7 @@ validate_input() {
   [[ $SMOKE_PORT =~ ^[0-9]{1,5}$ ]] && [ "$((10#$SMOKE_PORT))" -ge 1 ] && [ "$((10#$SMOKE_PORT))" -le 65535 ] ||
     fail "SMOKE_PORT không hợp lệ: cần số nguyên 1–65535."
   case ${SMOKE_ROBOTS:-} in ''|allow|disallow) ;; *) fail "SMOKE_ROBOTS không hợp lệ: cần allow, disallow hoặc bỏ trống." ;; esac
+  case ${SMOKE_HSTS:-} in ''|require|skip) ;; *) fail "SMOKE_HSTS không hợp lệ: cần require, skip hoặc bỏ trống." ;; esac
   # Refused, not ignored: a workflow still setting it would believe a 200 for an unknown product slug is tolerated.
   [ -z "${SMOKE_PRODUCT_FAIL_OPEN:-}" ] ||
     fail "SMOKE_PRODUCT_FAIL_OPEN đã bỏ (ADR-0017): slug sản phẩm lạ phải 404 ở mọi môi trường. Bỏ biến này."
@@ -305,9 +311,12 @@ echo "smoke: GET $POST_PATH → 200, có <h1 và <article"
 # The path is kept in OG_PATH: the 404 checks below swap its slug for an unknown one.
 # NS-108: the security headers of next.config.ts. Vercel serves custom `headers()` as they are and adds none of these
 # itself, so the exact value is checked on every environment. Every checked path is collected and printed once.
+# ADR-0020: the CSP is the full baseline of a production build (no 'unsafe-eval', no nonce: a nonce on a shop page
+# would mean it is no longer prerendered). /admin/* gets the proxy's nonce policy instead, checked further down.
+BASELINE_CSP="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
 SECURITY_HEADERS=(
   "x-frame-options: DENY"
-  "content-security-policy: frame-ancestors 'none'"
+  "content-security-policy: $BASELINE_CSP"
   "x-content-type-options: nosniff"
   "referrer-policy: strict-origin-when-cross-origin"
 )
@@ -353,6 +362,23 @@ for SECURITY_PATH in /khong-ton-tai "/blog/smoke-headers-$RUN_ID" "$DETAIL_PATH"
   expect_security_headers "$SECURITY_PATH" "$TMP/security.headers"
 done
 echo "smoke: header bảo mật có trên ${SECURITY_CHECKED[*]}"
+
+# ADR-0020 10A: HSTS is Vercel's default header (`*.vercel.app`: max-age=63072000; includeSubDomains; preload), not
+# set by the app, so it is required only on a Vercel URL. The value is printed on every run (third-party text,
+# reduced to a safe set).
+HSTS=$(tr -d '\r' < "$TMP/home.headers" | awk 'tolower(substr($0, 1, 26)) == "strict-transport-security:" { v = substr($0, 27); sub(/^ +/, "", v) } END { print v }' | tr -cd 'A-Za-z0-9=;, -')
+HSTS_MODE=${SMOKE_HSTS:-}
+if [ -z "$HSTS_MODE" ]; then
+  if [ "$SCHEME" = https ] && [[ ${BASE#https://} =~ ^[A-Za-z0-9.-]+\.vercel\.app(:[0-9]{1,5})?$ ]]; then HSTS_MODE=require; else HSTS_MODE=skip; fi
+fi
+HSTS_MAX_AGE=$(printf '%s' "$HSTS" | sed -nE 's/.*[Mm][Aa][Xx]-[Aa][Gg][Ee]=([0-9]{1,12}).*/\1/p')
+if [ "$HSTS_MODE" = require ]; then
+  [ -n "$HSTS_MAX_AGE" ] && [ "$HSTS_MAX_AGE" -ge 31536000 ] ||
+    fail "GET / thiếu Strict-Transport-Security với max-age ≥ 31536000 (có: \"${HSTS:-<không có>}\"; ADR-0020)"
+  echo "smoke: GET / → strict-transport-security: $HSTS"
+else
+  echo "smoke: HSTS không kiểm (không phải URL Vercel): strict-transport-security: ${HSTS:-<không có>}"
+fi
 [[ $DETAIL_OG_PATH == "$DETAIL_PATH/opengraph-image"* ]] || fail "og:image của $DETAIL_PATH không nằm dưới $DETAIL_PATH/opengraph-image"
 [[ $POST_OG_PATH == "$POST_PATH/opengraph-image"* ]] || fail "og:image của $POST_PATH không nằm dưới $POST_PATH/opengraph-image"
 
@@ -569,6 +595,34 @@ for ADMIN_LOGIN_HEADER in '' "cookie: __Host-ns_admin=smoke-junk-$RUN_ID"; do
   if grep -qF -- "$ADMIN_CONTENT" "$TMP/admin-login.html"; then admin_fail "GET /admin/login có nội dung khu admin đã đăng nhập"; fi
   echo "smoke: GET /admin/login${label:+ ($label)} → 200, noindex, không Set-Cookie"
 done
+
+# ADR-0020 (plan M5 Task 12): the admin pages run under the proxy's nonce policy ('strict-dynamic', no 'unsafe-inline'),
+# with a fresh nonce on each request, and every <script> Next.js rendered carries it: a prerendered admin shell would
+# not (audit PR #105 L3), and its form would never hydrate. On Vercel the baseline of next.config.ts may come as a
+# second CSP header; the browser enforces both, so only the nonce policy is looked for here.
+ADMIN_NONCES=()
+expect_admin_csp() { # expect_admin_csp <html> <response-headers-file> <label>
+  local html=$1 dump=$2 label=$3 policy nonce scripts with_nonce
+  policy=$(tr -d '\r' < "$dump" | grep -i '^content-security-policy:' | grep -E "script-src 'self' 'nonce-[A-Za-z0-9+/]{22}==' 'strict-dynamic'" | tail -n 1 || true)
+  if [ -z "$policy" ]; then admin_fail "GET /admin/login${label:+ ($label)} không có CSP nonce 'strict-dynamic' (ADR-0020)"; return 0; fi
+  if [[ $policy == *"'unsafe-inline'"* ]]; then admin_fail "GET /admin/login${label:+ ($label)}: CSP nonce có 'unsafe-inline'"; return 0; fi
+  nonce=$(printf '%s' "$policy" | sed -nE "s/.*'nonce-([A-Za-z0-9+\/]{22}==)'.*/\1/p")
+  scripts=$(grep -o '<script[ >]' "$html" | wc -l | tr -d ' ')
+  with_nonce=$(grep -o "<script[^>]*nonce=\"$nonce\"" "$html" | wc -l | tr -d ' ')
+  if [ "$scripts" = 0 ] || [ "$scripts" != "$with_nonce" ]; then
+    admin_fail "GET /admin/login${label:+ ($label)}: $with_nonce / $scripts thẻ <script> mang nonce của response (trang admin phải render theo request)"
+    return 0
+  fi
+  ADMIN_NONCES+=("$nonce")
+  echo "smoke: GET /admin/login${label:+ ($label)} → CSP nonce 'strict-dynamic', $scripts / $scripts <script> mang nonce"
+}
+expect_admin_csp "$TMP/admin-login.html" "$TMP/admin-login.headers" 'lần cuối'
+status=$(fetch "$BASE/admin/login" "$TMP/admin-login-2.html" '' "$TMP/admin-login-2.headers") ||
+  fail "không kết nối được $BASE/admin/login"
+expect_admin_csp "$TMP/admin-login-2.html" "$TMP/admin-login-2.headers" 'lần nữa'
+if [ "${#ADMIN_NONCES[@]}" = 2 ] && [ "${ADMIN_NONCES[0]}" = "${ADMIN_NONCES[1]}" ]; then
+  admin_fail "GET /admin/login hai lần trả cùng một nonce: nonce phải mới mỗi request"
+fi
 [ -z "$ADMIN_FAILED" ] || fail "khu admin không được chặn đúng (xem các dòng LỖI ở trên)"
 
 echo "smoke: qua"

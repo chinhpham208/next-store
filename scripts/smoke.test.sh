@@ -31,6 +31,9 @@ UNKNOWN_307_PORT=3179
 REDIRECT_PORT=3178
 SECURITY_PORT=3177
 ADMIN_PORT=3176
+CSP_OLD_PORT=3175
+HSTS_PORT=3174
+HSTS_SHORT_PORT=3173
 
 TMP=$(mktemp -d)
 PIDS=()
@@ -72,14 +75,24 @@ chmod +x "$TMP/bin/curl"
 # /admin/* (and /%61dmin/*, /admin%2F…; not /Admin/…) GET 307 to /admin/login clearing each admin cookie sent, any
 # other method 401. <admin-mode> breaks one part: `open` (/admin/products 200 with the signed-in shell), `keep-cookie`
 # (no clearing Set-Cookie), `action-open` (a POST with next-action 200), `encoded-open` (/%61dmin/products 200 with the
-# shell), `login-guarded` (/admin/login 307 like any admin page).
+# shell), `login-guarded` (/admin/login 307 like any admin page). /admin/login carries the proxy's nonce CSP (a fresh
+# nonce per request, on every <script>, ADR-0020); `csp-missing` (baseline only), `csp-script-without-nonce`,
+# `csp-same-nonce` and `csp-unsafe-inline` break it. <hsts>, when set, is sent as Strict-Transport-Security.
 start_server() {
-  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} postStatus=${11:-} rscStatus=${12:-} securityFile=${13:-} adminMode=${14:-} ready="$TMP/ready-$1"
+  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} postStatus=${11:-} rscStatus=${12:-} securityFile=${13:-} adminMode=${14:-} hsts=${15:-} ready="$TMP/ready-$1"
   node -e '
-    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule, ogStatus, postStatus, rscStatus, securityFile, adminMode] = process.argv.slice(1)
+    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule, ogStatus, postStatus, rscStatus, securityFile, adminMode, hsts] = process.argv.slice(1)
+    const adminCsp = (nonce) => `default-src \x27self\x27; script-src \x27self\x27 \x27nonce-${nonce}\x27 \x27strict-dynamic\x27${adminMode === "csp-unsafe-inline" ? " \x27unsafe-inline\x27" : ""}; style-src \x27self\x27 \x27nonce-${nonce}\x27; object-src \x27none\x27; frame-ancestors \x27none\x27`
+    const loginPage = (res) => {
+      const nonce = adminMode === "csp-same-nonce" ? "AAAAAAAAAAAAAAAAAAAAAA==" : require("node:crypto").randomBytes(16).toString("base64")
+      if (adminMode !== "csp-missing") res.setHeader("content-security-policy", adminCsp(nonce))
+      const second = adminMode === "csp-script-without-nonce" ? "<script>self.x=1</script>" : `<script nonce="${nonce}">self.x=1</script>`
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" })
+      res.end(`<meta name="robots" content="noindex, nofollow"/><h1>Đăng nhập quản trị</h1><script src="/_next/a.js" async="" nonce="${nonce}"></script>${second}`)
+    }
     const SHELL = "<header>Quản trị next-store<nav><a href=\"/admin/products\">Sản phẩm</a></nav><button>Đăng xuất</button></header>"
     const admin = (req, res) => {
-      if (req.url === "/admin/login" && adminMode !== "login-guarded") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end("<meta name=\"robots\" content=\"noindex, nofollow\"/><h1>Đăng nhập quản trị</h1>"); return true }
+      if (req.url === "/admin/login" && adminMode !== "login-guarded") { loginPage(res); return true }
       if (!/^\/(?:admin|%61dmin)(?:$|[/.?]|%2F)/.test(req.url)) return false
       const action = req.method === "POST" && "next-action" in req.headers
       if ((adminMode === "open" && req.url === "/admin/products") || (adminMode === "encoded-open" && req.url === "/%61dmin/products") || (adminMode === "action-open" && action)) {
@@ -92,7 +105,8 @@ start_server() {
       res.end()
       return true
     }
-    const SECURITY = { "x-frame-options": "DENY", "content-security-policy": "frame-ancestors \x27none\x27", "x-content-type-options": "nosniff", "referrer-policy": "strict-origin-when-cross-origin" }
+    const BASELINE_CSP = adminMode === "csp-old" ? "frame-ancestors \x27none\x27" : "default-src \x27self\x27; script-src \x27self\x27 \x27unsafe-inline\x27; style-src \x27self\x27 \x27unsafe-inline\x27; img-src \x27self\x27 data: blob:; font-src \x27self\x27; connect-src \x27self\x27; object-src \x27none\x27; base-uri \x27self\x27; form-action \x27self\x27; frame-ancestors \x27none\x27; upgrade-insecure-requests"
+    const SECURITY = { "x-frame-options": "DENY", "content-security-policy": BASELINE_CSP, "x-content-type-options": "nosniff", "referrer-policy": "strict-origin-when-cross-origin" }
     const og = (path) => `<meta property="og:image" content="http://localhost:3000${path}"/>`
     const images = ["/opengraph-image?a1b2c3", "/products/ao-404-not-found/opengraph-image-16g1u1?d4e5f6", "/blog/chao-mung-den-next-store/opengraph-image-16g1u1?a7b8c9"]
     const fs = require("node:fs")
@@ -103,6 +117,7 @@ start_server() {
         if (!(omitUrl && new RegExp(omitUrl).test(req.url) && (!omitName || omitName === name))) res.setHeader(name, value)
       }
       if (robotsTag) res.setHeader("x-robots-tag", robotsTag)
+      if (hsts) res.setHeader("strict-transport-security", hsts)
       if (admin(req, res)) return
       if (rscStatus && req.headers.rsc === "1" && soft && new RegExp(soft).test(req.url)) { res.writeHead(Number(rscStatus), { location: `${req.url}?_rsc` }); res.end(); return }
       if (postStatus && req.method !== "GET" && (!soft || new RegExp(soft).test(req.url))) { res.writeHead(Number(postStatus), { "content-type": "text/html; charset=utf-8" }); res.end(body); return }
@@ -119,7 +134,7 @@ start_server() {
       else if (soft && new RegExp(soft).test(req.url)) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
       else { res.writeHead(404, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
     }).listen(Number(port), "127.0.0.1", () => fs.writeFileSync(ready, ""))
-  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" "$ogStatus" "$postStatus" "$rscStatus" "$securityFile" "$adminMode" &
+  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" "$ogStatus" "$postStatus" "$rscStatus" "$securityFile" "$adminMode" "$hsts" &
   PIDS+=($!)
   local i
   for i in $(seq 1 50); do [ -f "$ready" ] && return 0; sleep 0.1; done
@@ -134,7 +149,7 @@ run() {
   rm -f "$TMP/curl-calls"
   : > "$TMP/curl-calls"
   set +e
-  env -u BASE_URL -u VERCEL_AUTOMATION_BYPASS_SECRET -u SMOKE_PORT -u SMOKE_ROBOTS -u SMOKE_PRODUCT_FAIL_OPEN PATH="$TMP/bin:$PATH" "${envs[@]}" "$@" > "$TMP/out" 2>&1
+  env -u BASE_URL -u VERCEL_AUTOMATION_BYPASS_SECRET -u SMOKE_PORT -u SMOKE_ROBOTS -u SMOKE_HSTS -u SMOKE_PRODUCT_FAIL_OPEN PATH="$TMP/bin:$PATH" "${envs[@]}" "$@" > "$TMP/out" 2>&1
   CODE=$?
   set -e
 }
@@ -441,6 +456,34 @@ done
 rm -f "$TMP/security-omit"
 echo "ok security-headers"
 
+# csp-baseline (ADR-0020): the CSP of next.config.ts is the full baseline; the old frame-ancestors-only policy of
+# ADR-0016 fails smoke.
+start_server "$CSP_OLD_PORT" "$TMP/csp-old-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 "" "" "" csp-old
+run BASE_URL="http://127.0.0.1:$CSP_OLD_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail csp-baseline "CSP chỉ frame-ancestors: thoát $CODE, cần 1"
+grep -qF 'LỖI: GET / thiếu header content-security-policy' "$TMP/out" || fail csp-baseline "thông báo không nêu CSP"
+echo "ok csp-baseline"
+
+# hsts (ADR-0020 10A): HSTS is required on a Vercel URL (SMOKE_HSTS=require stands for it here: the fake server is
+# plain http), skipped elsewhere; a max-age under a year fails; an unknown SMOKE_HSTS value is refused before any
+# request.
+run BASE_URL="http://127.0.0.1:$PORT" -- bash scripts/smoke.sh
+grep -qF 'smoke: HSTS không kiểm (không phải URL Vercel)' "$TMP/out" || fail hsts "http: thiếu dòng bỏ qua HSTS"
+run SMOKE_HSTS=require BASE_URL="http://127.0.0.1:$PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail hsts "require, không có header: thoát $CODE, cần 1"
+grep -qF 'LỖI: GET / thiếu Strict-Transport-Security' "$TMP/out" || fail hsts "require: thông báo không nêu HSTS"
+start_server "$HSTS_PORT" "$TMP/hsts-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 "" "" "" "" "max-age=63072000; includeSubDomains; preload"
+run SMOKE_HSTS=require BASE_URL="http://127.0.0.1:$HSTS_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail hsts "require, header của Vercel: thoát $CODE, cần 0"
+grep -qF 'smoke: GET / → strict-transport-security: max-age=63072000; includeSubDomains; preload' "$TMP/out" || fail hsts "thiếu dòng HSTS"
+start_server "$HSTS_SHORT_PORT" "$TMP/hsts-short-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 "" "" "" "" "max-age=86400"
+run SMOKE_HSTS=require BASE_URL="http://127.0.0.1:$HSTS_SHORT_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail hsts "max-age một ngày: thoát $CODE, cần 1"
+run SMOKE_HSTS=yes BASE_URL="http://127.0.0.1:$PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] && grep -qF 'SMOKE_HSTS không hợp lệ' "$TMP/out" || fail hsts "SMOKE_HSTS=yes: không bị từ chối"
+[ ! -s "$TMP/curl-calls" ] || fail hsts "SMOKE_HSTS=yes: vẫn gửi request"
+echo "ok hsts"
+
 # admin-guard (US-12, M5 Task 8): smoke checks every admin path a visitor without a session can reach. The default
 # server answers like the proxy; each mode breaks one part and must fail smoke, naming it.
 : > "$TMP/headers"
@@ -452,12 +495,13 @@ for line in 'smoke: GET /admin/products (không cookie) → 307 /admin/login' \
   'smoke: POST /admin/products (Server Action, không phiên) → 401' \
   'smoke: GET /%61dmin/products (đường dẫn admin viết khác) → 307' \
   'smoke: GET /Admin/products (đường dẫn admin viết khác) → 404' \
-  'smoke: GET /admin/login → 200, noindex, không Set-Cookie'; do
+  'smoke: GET /admin/login → 200, noindex, không Set-Cookie' \
+  "smoke: GET /admin/login (lần nữa) → CSP nonce 'strict-dynamic', 2 / 2 <script> mang nonce"; do
   grep -qF -- "$line" "$TMP/out" || fail admin-guard "thiếu dòng \"$line\""
 done
 # The next-action header reaches only /admin/* (the fake server logs every request's headers).
 grep -c '"next-action"' "$TMP/headers" | grep -qx 2 || fail admin-guard "next-action được gửi ngoài hai request admin"
-for mode in open keep-cookie action-open encoded-open login-guarded; do
+for mode in open keep-cookie action-open encoded-open login-guarded csp-missing csp-script-without-nonce csp-same-nonce csp-unsafe-inline; do
   start_server "$ADMIN_PORT" "$TMP/admin-headers-$mode" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 "" "" "" "$mode"
   run BASE_URL="http://127.0.0.1:$ADMIN_PORT" -- bash scripts/smoke.sh
   [ "$CODE" = 1 ] || fail admin-guard "$mode: thoát $CODE, cần 1"
@@ -468,6 +512,10 @@ for mode in open keep-cookie action-open encoded-open login-guarded; do
     action-open) expected='LỖI: POST /admin/products (Server Action, không phiên) trả 200, cần 401' ;;
     encoded-open) expected='LỖI: GET /%61dmin/products (đường dẫn admin viết khác) trả 200 kèm nội dung khu admin' ;;
     login-guarded) expected='LỖI: GET /admin/login trả 307, cần 200' ;;
+    csp-missing) expected="LỖI: GET /admin/login (lần cuối) không có CSP nonce 'strict-dynamic'" ;;
+    csp-script-without-nonce) expected='LỖI: GET /admin/login (lần cuối): 1 / 2 thẻ <script> mang nonce của response' ;;
+    csp-same-nonce) expected='LỖI: GET /admin/login hai lần trả cùng một nonce' ;;
+    csp-unsafe-inline) expected="LỖI: GET /admin/login (lần cuối): CSP nonce có 'unsafe-inline'" ;;
   esac
   grep -qF -- "$expected" "$TMP/out" || fail admin-guard "$mode: thiếu \"$expected\""
   # One port for every mode: stop this server and forget its ready file before the next one starts.

@@ -74,3 +74,12 @@ Quyết định 9A và 10A áp như sau. Chuỗi chính xác nằm ở plan M5 T
   - `scripts/smoke.sh`: CSP đủ chỉ thị; HSTS khi URL là Vercel.
   - Bảng route của `next build` vẫn có vỏ prerender cho `/products/[slug]`.
   - Audit Task 13 Step 6 đọc response thật trên Dev.
+
+## Bổ sung khi làm plan M5 Task 12 (NS-127)
+
+Điều đo được khi làm (Next.js 16.4.6, `next build` + `next start`, Chrome), không đổi quyết định 9A / 10A:
+
+- **"Trang admin vốn động" không đúng dưới Cache Components** (audit PR #105 L3): trước Task 12 `/admin/login`, `/admin/products`, `/admin/products/[slug]` là ◐ (vỏ prerender). Vỏ prerender được phục vụ với `<script>` không có nonce, nên dưới CSP nonce `'strict-dynamic'` trình duyệt chặn chúng và form không hydrate (đã tái hiện: E2E `ns-csp.spec.ts` đỏ). Sửa: `src/app/admin/login/page.tsx` và `src/app/admin/(protected)/layout.tsx` gọi `await connection()` trước mọi `<Suspense>` và đặt `export const instant = false` (Next.js đòi chính khoá này cho route không có vỏ tĩnh: lỗi build "blocking-prerender-dynamic", gợi ý "[block] Set `export const instant = false`"). Không đặt ở layout gốc `src/app/admin/layout.tsx`: `/admin` (chỉ `redirect`) sẽ thành động và trả 200 kèm thẻ meta thay cho 307 (D5); nó vẫn ○ và không có script nào. HTML của trang admin có mọi `<script>` mang nonce của response (15 / 15 trên `/admin/login`). Bảng route: chỉ `/admin/login`, `/admin/products` đổi (◐ → ƒ); `/admin/products/[slug]` vẫn ghi ◐ nhưng vỏ rỗng (`.meta`: `hasHtml: false`), toàn bộ HTML do lần resume theo request sinh ra, có nonce. Trang cửa hàng không đổi.
+- **Hai header CSP:** dưới `next start` header CSP của proxy thay header của `headers()` cùng tên trên `/admin/*` (`server/lib/router-utils/resolve-routes.js`: cùng một object `resHeaders`, `res.setHeader` không phân biệt hoa thường, proxy ghi sau). Trên Vercel có thể có cả hai; trình duyệt áp cả hai, trang admin chạy được dưới giao đó (CSP nền cho `'self'` và `'unsafe-inline'`). Smoke chỉ đòi CSP nonce trên `/admin/login`.
+- **Dev server:** CSP nền bỏ `upgrade-insecure-requests` khi `NODE_ENV=development` (dev chạy `http://localhost`, Safari nâng mọi request tài nguyên lên https và trang hỏng); CSP admin thêm `'unsafe-eval'` khi dev như CSP nền. Build (Preview, Production, `next start`) giữ đúng chuỗi ở trên.
+- Proxy **đặt** (không nối) header CSP của request, nên header CSP do client gửi không chọn được nonce Next.js dùng.

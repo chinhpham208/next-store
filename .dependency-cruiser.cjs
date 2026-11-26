@@ -100,11 +100,11 @@ module.exports = {
       comment:
         'The admin entry of the proxy (ADR-0018) checks the session cookie with Web Crypto only: it must not reach zod, ' +
         'a `server-only` file (config.ts, cookie.ts, password.ts, index.ts, next/headers) or the database, not even ' +
-        'transitively. session.ts, config-rules.ts, cookie-name.ts and types.ts are the only admin files it may use.',
+        'transitively. session.ts, config-rules.ts, cookie-name.ts, csp.ts and types.ts are the only admin files it may use.',
       from: { path: '^src/features/admin/proxy-api\\.ts$' },
       to: {
         path:
-          '^(src/(db|components|app)/|src/features/admin/(?!(session|config-rules|cookie-name|types)\\.ts$)|' +
+          '^(src/(db|components|app)/|src/features/admin/(?!(session|config-rules|cookie-name|csp|types)\\.ts$)|' +
           'src/features/(?!admin/)|' +
           'node_modules/(zod|server-only|postgres|pg|@neondatabase/serverless|@electric-sql/pglite|drizzle-orm|react|react-dom)/|' +
           'node_modules/next/(headers|navigation)\\.js$)',

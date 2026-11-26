@@ -580,6 +580,96 @@ describe('proxy: admin', () => {
   })
 })
 
+describe('proxy: admin CSP (ADR-0020)', () => {
+  // Fake values, test only.
+  const SECRET = 'test-session-secret-0123456789abcdef'
+  const NONCE_SOURCE = /'nonce-([A-Za-z0-9+/]{22}==)'/
+
+  beforeEach(() => {
+    vi.stubEnv('SITE_URL', 'https://shop.test')
+    vi.stubEnv('ADMIN_PASSWORD', 'test-admin-password-0123')
+    vi.stubEnv('SESSION_SECRET', SECRET)
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  const admin = async (path: string, init: { method?: string; headers?: Record<string, string> } = {}) =>
+    proxy(new NextRequest(`https://shop.test${path}`, init))
+  // NextResponse.next({ request: { headers } }) hands the new request headers to Next.js this way (Next.js 16.4.6,
+  // server/web/spec-extension/response.js; read back in server/lib/router-utils/resolve-routes.js).
+  const requestCsp = (response: Response) =>
+    (response.headers.get('x-middleware-override-headers') ?? '').split(',').includes('content-security-policy')
+      ? response.headers.get('x-middleware-request-content-security-policy')
+      : null
+  const responseCsp = (response: Response) => response.headers.get('content-security-policy')
+  const nonceOf = (policy: string | null) => NONCE_SOURCE.exec(policy ?? '')?.[1]
+
+  it('sets a fresh nonce CSP on admin requests and responses', async () => {
+    const cookie = `__Host-ns_admin=${await signSession({ secret: SECRET, now: new Date() })}`
+    const answers = [
+      await admin('/admin/login'),
+      await admin('/admin/login'),
+      await admin('/admin/login', { method: 'POST', headers: { 'next-action': '7f3a9c' } }),
+      await admin('/admin/products', { headers: { cookie } }),
+      await admin('/admin/products/ao-git-push-force', { headers: { cookie } }),
+    ]
+    const nonces = answers.map((response) => {
+      expect(isPassThrough(response)).toBe(true)
+      // The same policy on both sides: Next.js puts the request's nonce on its scripts, the browser enforces the
+      // response's.
+      expect(requestCsp(response)).toBe(responseCsp(response))
+      expect(responseCsp(response)).toMatch(/script-src 'self' 'nonce-[^']+' 'strict-dynamic'/)
+      expect(responseCsp(response)).not.toContain("'unsafe-inline'")
+      return nonceOf(responseCsp(response))
+    })
+    for (const nonce of nonces) expect(nonce).toBeDefined()
+    expect(new Set(nonces).size).toBe(nonces.length)
+  })
+
+  it('keeps the other request headers when it sets the CSP', async () => {
+    const response = await admin('/admin/login', { headers: { cookie: 'ns_cart=keep', 'x-forwarded-for': '203.0.113.9' } })
+    const overridden = (response.headers.get('x-middleware-override-headers') ?? '').split(',')
+    expect(overridden).toEqual(expect.arrayContaining(['cookie', 'x-forwarded-for', 'content-security-policy']))
+    expect(response.headers.get('x-middleware-request-cookie')).toBe('ns_cart=keep')
+    expect(response.headers.get('x-middleware-request-x-forwarded-for')).toBe('203.0.113.9')
+  })
+
+  // A client-sent CSP request header must never decide the nonce Next.js uses.
+  it('replaces a CSP request header sent by the client', async () => {
+    const response = await admin('/admin/login', {
+      headers: { 'content-security-policy': "script-src 'nonce-AAAAAAAAAAAAAAAAAAAAAA=='" },
+    })
+    expect(nonceOf(requestCsp(response))).not.toBe('AAAAAAAAAAAAAAAAAAAAAA==')
+    expect(requestCsp(response)).toBe(responseCsp(response))
+  })
+
+  it('sets no nonce CSP on the 307 and the 401', async () => {
+    for (const response of [
+      await admin('/admin/products'),
+      await admin('/admin/products', { method: 'POST', headers: { 'next-action': '7f3a9c' } }),
+    ]) {
+      expect(isPassThrough(response)).toBe(false)
+      expect(responseCsp(response)).toBeNull()
+    }
+  })
+
+  it.each([
+    KNOWN_PRODUCT,
+    KNOWN_POST,
+    `${KNOWN_PRODUCT}.rsc`,
+    '/products/khong-ton-tai',
+    `${KNOWN_PRODUCT}/opengraph-image-16g1u1`,
+  ])('never sets a nonce CSP for shop pages: %s', (path) => {
+    for (const init of [{}, { method: 'POST', headers: { 'next-action': '7f3a9c' } }]) {
+      const response = syncAnswer(proxy(new NextRequest(`https://shop.test${path}`, init)))
+      expect(responseCsp(response)).toBeNull()
+      expect(requestCsp(response)).toBeNull()
+      expect(response.headers.get('x-middleware-override-headers')).toBeNull()
+    }
+  })
+})
+
 describe('config.matcher', () => {
   it('is a constant list, so Next.js can analyse it statically', () => {
     expect(config).toEqual({

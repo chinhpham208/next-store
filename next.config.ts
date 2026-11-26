@@ -1,13 +1,36 @@
 import createMDX from "@next/mdx";
 import type { NextConfig } from "next";
 
-// Site-wide security headers (NS-108, ADR-0016). Set here and not in src/proxy.ts: the proxy only runs for product and
-// blog slugs, while `headers()` applies to every path, including the proxy's rewrite to the not-found page, image
-// routes, the sitemap and robots.txt. The CSP is frame-ancestors only (clickjacking); a script-src policy needs nonces
-// for the inline RSC payload and is not part of this decision. X-Frame-Options stays for browsers without CSP level 2.
+// Site-wide security headers (NS-108, ADR-0016; CSP from ADR-0020, plan M5 Task 12). Set here and not in
+// src/proxy.ts: the proxy only runs for product, blog and admin paths, while `headers()` applies to every path,
+// including the proxy's rewrite to the not-found page, image routes, the sitemap and robots.txt.
+//
+// The baseline CSP follows "Without Nonces" of the Next.js 16.4.6 guide (02-guides/content-security-policy.md): shop
+// pages are prerendered (Cache Components), so their inline RSC scripts cannot carry a per-request nonce and
+// 'unsafe-inline' stays in script-src. It still refuses scripts from other origins, <object>, a changed <base>, forms
+// posted to another site and framing. /admin/* gets a strict nonce policy from the proxy on top of this one
+// (src/features/admin/csp.ts). Every new outside source (analytics, a font CDN, the payment gateway of M6, which
+// `form-action 'self'` would block) is added here in the same PR. X-Frame-Options stays for browsers without CSP 2.
+const isDev = process.env.NODE_ENV === "development";
+const BASELINE_CSP = [
+  "default-src 'self'",
+  // The dev server of Next.js needs eval (React rebuilds server error stacks in the browser).
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self'",
+  "connect-src 'self'",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'none'",
+  // Not on the dev server: it serves http://localhost, and Safari would upgrade every asset request to https.
+  ...(isDev ? [] : ["upgrade-insecure-requests"]),
+].join("; ");
+
 const SECURITY_HEADERS = [
   { key: "X-Frame-Options", value: "DENY" },
-  { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+  { key: "Content-Security-Policy", value: BASELINE_CSP },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
 ];
