@@ -37,6 +37,9 @@ test('NS-105: only the reviewed Server Functions are exposed', () => {
     'src/features/cart/actions.ts addToCartAction',
     'src/features/cart/actions.ts removeFromCartAction',
     'src/features/cart/actions.ts setCartQuantityAction',
+    // M5 Task 9 (ADR-0019, ADR-0018): checks the admin session first, then parses with Zod, then one conditional
+    // UPDATE; src/admin-session-checks.test.ts holds the order.
+    'src/features/products/actions.ts updateProductAction',
     ...Array<string>(7).fill("src/features/products/queries.ts 'use cache'"),
   ])
 })
