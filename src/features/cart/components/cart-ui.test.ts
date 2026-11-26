@@ -19,21 +19,6 @@ afterEach(() => {
   vi.clearAllMocks()
 })
 
-// The files allowed to say "use client" (plan M4 Global Constraints, conventions.md §2).
-const CART_CLIENT_FILES = [
-  'src/features/cart/components/cart-provider.tsx',
-  'src/features/cart/components/cart-link.tsx',
-  'src/features/cart/components/add-to-cart-form.tsx',
-  'src/features/cart/components/cart-line-controls.tsx',
-]
-// M5 (ADR-0018, plan M5 Task 7): the login form and the logout button. Task 10 adds product-edit-form.tsx and moves
-// this list to src/client-files.test.ts.
-const ADMIN_CLIENT_FILES = [
-  'src/features/admin/components/login-form.tsx',
-  'src/features/admin/components/logout-button.tsx',
-]
-const ALLOWED_CLIENT_FILES = ['src/app/(shop)/error.tsx', ...CART_CLIENT_FILES, ...ADMIN_CLIENT_FILES]
-
 const listTsx = (dir: string): string[] =>
   readdirSync(dir).flatMap((name) => {
     const path = join(dir, name)
@@ -41,53 +26,7 @@ const listTsx = (dir: string): string[] =>
     return path.endsWith('.tsx') ? [path] : []
   })
 
-const USE_CLIENT = /^\s*(?:\/\/[^\n]*\n|\/\*[\s\S]*?\*\/\s*)*\s*['"]use client['"]/
-
-const importsOf = (source: string): string[] =>
-  [...source.matchAll(/^\s*import\s[\s\S]*?\sfrom\s+['"]([^'"]+)['"]/gm)].map((match) => match[1] ?? '')
-
-// What a client file may import (Global Constraints): react, next/link, UI primitives, cn, formatPrice, and in the
-// cart feature only the action reference and the import-free modules. The four client files may use one another:
-// they all ship to the browser anyway.
-const isAllowedClientImport = (specifier: string): boolean =>
-  specifier === 'react' ||
-  specifier === 'next/link' ||
-  /^@\/components\/ui\/[a-z-]+$/.test(specifier) ||
-  specifier === '@/lib/cn' ||
-  specifier === '@/lib/format-price' ||
-  /^@\/features\/cart\/(actions|messages|types|limits)$/.test(specifier) ||
-  /^@\/features\/cart\/components\/(cart-provider|cart-link|add-to-cart-form|cart-line-controls)$/.test(specifier)
-
-// The admin client files: the same base, the admin action reference and import-free modules, and next/navigation
-// for unstable_rethrow (a redirect from loginAction must reach the router, Gate 2 decision 6).
-const isAllowedAdminClientImport = (specifier: string): boolean =>
-  specifier === 'react' ||
-  specifier === 'next/link' ||
-  specifier === 'next/navigation' ||
-  /^@\/components\/ui\/[a-z-]+$/.test(specifier) ||
-  specifier === '@/lib/cn' ||
-  /^@\/features\/admin\/(actions|messages|types|limits)$/.test(specifier)
-
-// conventions.md §2: from next/navigation, only unstable_rethrow. Returns every other binding (default, namespace,
-// named, renamed) or '(side effect)' for a bare import; type-only imports are not used and count as bindings too.
-const ALLOWED_NAVIGATION_NAMES = new Set(['unstable_rethrow'])
-const disallowedNavigationImports = (source: string): string[] =>
-  [...source.matchAll(/^\s*import\s+(?:([\s\S]*?)\s+from\s+)?['"]next\/navigation['"]/gm)].flatMap((match) => {
-    const clause = match[1]?.trim()
-    if (clause === undefined) return ['(side effect)']
-    const named = /\{([\s\S]*)\}/.exec(clause)?.[1] ?? ''
-    const outside = clause
-      .replace(/\{[\s\S]*\}/, '')
-      .split(',')
-      .map((part) => part.trim())
-      .filter((part) => part !== '')
-    const names = named
-      .split(',')
-      .map((part) => part.trim())
-      .filter((part) => part !== '' && !ALLOWED_NAVIGATION_NAMES.has(part))
-    return [...outside, ...names]
-  })
-
+// The "use client" list and its import rules moved to src/client-files.test.ts (M5 Task 10).
 const render = (element: ReactElement): string => renderToStaticMarkup(element)
 // Required `children` must sit in props for TypeScript, which react/no-children-prop rejects on a literal
 // createElement call; a typed helper satisfies both (as in ui.test.ts).
@@ -95,50 +34,6 @@ const renderWith = <P extends object>(component: FunctionComponent<P>, props: P)
   createElement(component, props)
 const withProvider = (child: ReactNode): ReactElement => renderWith(CartProvider, { children: child })
 const labelOf = (html: string): string | undefined => /<a [^>]*aria-label="([^"]*)"/.exec(html)?.[1]
-
-describe('client boundary', () => {
-  it('only the listed files use "use client"', () => {
-    const found = listTsx('src')
-      .filter((path) => USE_CLIENT.test(readFileSync(path, 'utf8')))
-      .sort()
-    expect(found).toEqual([...ALLOWED_CLIENT_FILES].sort())
-  })
-
-  it('client files import nothing server-only', () => {
-    for (const path of CART_CLIENT_FILES) {
-      const source = readFileSync(path, 'utf8')
-      expect(source, path).not.toContain('server-only')
-      expect(importsOf(source).filter((specifier) => !isAllowedClientImport(specifier)), path).toEqual([])
-    }
-    for (const path of ADMIN_CLIENT_FILES) {
-      const source = readFileSync(path, 'utf8')
-      expect(source, path).not.toContain('server-only')
-      expect(importsOf(source).filter((specifier) => !isAllowedAdminClientImport(specifier)), path).toEqual([])
-      expect(disallowedNavigationImports(source), path).toEqual([])
-    }
-  })
-
-  it('admin client files take only unstable_rethrow from next/navigation (audit PR #105 N2)', () => {
-    expect(disallowedNavigationImports("import { unstable_rethrow } from 'next/navigation'")).toEqual([])
-    expect(disallowedNavigationImports("import { redirect, unstable_rethrow } from 'next/navigation'")).toEqual([
-      'redirect',
-    ])
-    expect(disallowedNavigationImports("import { useRouter as r } from 'next/navigation'")).toEqual(['useRouter as r'])
-    expect(disallowedNavigationImports("import * as navigation from 'next/navigation'")).toEqual([
-      '* as navigation',
-    ])
-    expect(disallowedNavigationImports("import navigation from 'next/navigation'")).toEqual(['navigation'])
-    expect(disallowedNavigationImports("import 'next/navigation'")).toEqual(['(side effect)'])
-  })
-
-  it('UI primitives used by client files stay free of hooks and "use client"', () => {
-    for (const path of ['src/components/ui/cart-icon.tsx', 'src/components/ui/quantity-stepper.tsx']) {
-      const source = readFileSync(path, 'utf8')
-      expect(source, path).not.toMatch(USE_CLIENT)
-      expect(source, path).not.toMatch(/\buse[A-Z]\w*\(/)
-    }
-  })
-})
 
 describe('reads cookies only inside Suspense', () => {
   it('(shop)/layout.tsx puts CartBadge inside <Suspense> with the count-less link as fallback', () => {

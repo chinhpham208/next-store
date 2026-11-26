@@ -295,7 +295,73 @@ Khu admin (`src/app/admin/`) nằm ngoài `(shop)`: không header giỏ, không 
 - **Code (Task 7):** dải Ink dùng chung là `AdminHeader` (`src/features/admin/components/admin-header.tsx`, server) với `layout: 'login'` (một hàng, tiêu đề `w-auto`) hoặc `'shell'` (tiêu đề `w-full sm:w-auto`, hai hàng dưới `sm`); `AdminShell` của Task 8 đặt nav "Sản phẩm" và `LogoutButton` vào slot của nó.
 - **Form bắt reject của action** **[Cổng 2 #6]**: `LoginForm` gọi `loginAction` qua một hàm bọc `try/catch`; lỗi chung (mất mạng, 500, id action cũ sau deploy) hiện trong alert dưới ô bằng `LOGIN_NETWORK_ERROR` = "Không kết nối được. Vui lòng tải lại trang và thử lại." (đúng chuỗi `CART_NETWORK_ERROR` M4), không rơi vào error boundary nên ô giữ chữ đã gõ. Redirect của Next.js (đăng nhập đúng) cũng là một reject: `unstable_rethrow` cho nó đi tiếp tới router.
 - Chuỗi của trang đăng nhập (bảng "Văn bản chính xác" của mock, `src/features/admin/messages.ts`): `invalid` "Vui lòng nhập mật khẩu."; `wrong-password` "Mật khẩu không đúng." (US-12, không đổi được); `locked` "Đăng nhập sai quá nhiều lần. Vui lòng thử lại sau 15 phút."; `not-configured` "Khu quản trị chưa được cấu hình."; `unavailable` "Không đăng nhập được lúc này. Vui lòng thử lại."; chờ "Đang đăng nhập…"; title "Đăng nhập · Quản trị".
-- Phần còn lại của đặc tả M5 (`/admin/products`, trang sửa sản phẩm, lỗi / 404 khu admin) chép vào đây ở Task 10.
+- **Trang `/admin/products`** (`(protected)/products/page.tsx`, `admin-product-table.tsx`):
+  - Container `flex flex-col gap-6 pt-10 pb-16 md:gap-8 md:pt-16 md:pb-24`. `<h1 id="admin-products-heading" className="text-4xl font-bold tracking-tight md:text-5xl">Sản phẩm</h1>` ngoài Suspense; trong Suspense: `<p className="max-w-xl text-muted-foreground md:text-lg">{`${rows.length} sản phẩm. Sửa được tên, giá, mô tả, tồn kho; ảnh, danh mục và slug đổi qua mã nguồn.`}</p>`, rồi bảng và danh sách thẻ.
+  - **Bảng** (từ `md`) **[Cổng 2 #7]**: `<table aria-labelledby="admin-products-heading" className="hidden w-full border-collapse text-left md:table">`.
+    - `thead`: `th scope="col"` "Sản phẩm" (`w-full`), "Giá", "Tồn kho", `<span className="sr-only">Thao tác</span>`; lớp `border-b border-border-strong pb-3 text-sm font-medium text-muted-foreground`, cột 2–4 thêm `pl-8 text-right`.
+    - `td`: `border-b border-border py-3 align-middle`, cột 2–4 `pl-8 text-right`.
+    - Ô sản phẩm: `<p className="font-semibold text-pretty break-words">{renderProductName(name)}</p><p className="font-mono text-sm text-muted-foreground break-all">{slug}</p>`.
+    - Giá: `<span className="font-mono font-medium whitespace-nowrap">{formatPrice(price)}</span>`. Tồn kho: `stock > 0` → `<span className="font-mono font-medium">{stock}</span>`, `0` → `<Badge variant="sold-out">Hết hàng</Badge>`. Không màu cho tồn kho thấp.
+    - Cột cuối: `<Link href={`/admin/products/${slug}`} aria-label={`Sửa ${name}`} className={buttonVariants({ variant: 'secondary', className: 'px-4' })}>Sửa</Link>`. Tên sản phẩm **không** là link (một link mỗi hàng).
+  - **Thẻ** (dưới `md`): `<ul aria-labelledby="admin-products-heading" className="flex flex-col border-b border-border md:hidden">`; `li` `flex items-start justify-between gap-4 border-t border-border py-4` gồm `<div className="flex min-w-0 flex-col gap-1">` (tên, slug như bảng, rồi `<p className="mt-1 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">` giá `font-mono font-medium` + `` `Tồn kho ${stock}` `` với số `font-mono font-medium`, hoặc Badge) và cùng link "Sửa".
+  - Bảng và thẻ là hai khối DOM; khối bị ẩn có `display:none` nên không có trong cây truy cập, E2E thấy đúng một link "Sửa {tên}" mỗi sản phẩm.
+  - Skeleton (fallback): `<div aria-busy="true" className="flex flex-col gap-6 md:gap-8"><p className="sr-only">Đang tải…</p>` + `Skeleton h-6 w-80 md:h-7 md:w-140` (dòng dẫn), rồi 5 hàng bảng (`md`, cùng `thead`, `aria-hidden`; mỗi hàng `h-6 w-3/5` + `h-5 w-1/3`, `h-6 w-24`, `h-6 w-8`, `h-11 w-16 rounded-md`) / 4 thẻ (dưới `md`, `h-6 w-4/5`, `h-5 w-1/2`, `h-5 w-3/5`, nút `h-11 w-16 rounded-md`).
+
+- **Trang `/admin/products/<slug>`** (`(protected)/products/[slug]/page.tsx`, `product-edit-form.tsx`):
+  - Container `flex flex-col gap-6 pt-4 pb-16 md:gap-8 md:pt-6 md:pb-24` (như trang chi tiết).
+  - Breadcrumb dùng chung `@/components/layout/breadcrumb`, một mục: "Sản phẩm" → `/admin/products`.
+  - Đầu trang `<div className="flex flex-col gap-2">`: `<p className="text-xs font-medium uppercase tracking-label text-muted-foreground">Sửa sản phẩm</p>`; `<h1 className="text-3xl font-bold tracking-tight text-balance break-words md:text-4xl">{renderProductName(name)}</h1>` (tên đã lưu; render lại sau khi lưu); `<p className="text-sm text-muted-foreground">Slug (không đổi được): <code className="font-mono text-foreground">{slug}</code></p>`. Slug là chữ, không phải ô vô hiệu.
+  - `<form noValidate className="flex max-w-xl flex-col gap-6">`, thứ tự DOM: input ẩn `slug`, `expectedUpdatedAt`; Field Tên; `<div className="grid gap-6 md:grid-cols-2">` Field Giá + Field Tồn kho; Field Mô tả; `<Button type="submit" aria-disabled={pending || undefined} className="w-full md:w-auto md:self-start">Lưu</Button>`; `<div className="-mt-2 flex flex-col"><div role="status">…</div><div role="alert">…</div></div>`.
+  - **Field** (nội bộ của form, không phải component UI chung): `<div className="flex flex-col gap-2">` = nhãn → gợi ý → ô → lỗi **[Cổng 2 #3]**:
+    - `<label htmlFor={id} className="text-sm font-medium">`; `<p id={`${id}-hint`} className="text-sm text-muted-foreground">`; ô; nếu có lỗi `<p id={`${id}-error`} className="flex items-center gap-2 text-sm font-medium text-danger before:size-2 before:shrink-0 before:bg-danger">{productEditErrorMessage(field, error)}</p>`.
+    - Ô: `Input` + `aria-invalid:border-danger`; `aria-invalid="true"` khi có lỗi; `aria-describedby` = `` `${id}-hint ${id}-error` `` khi có lỗi, `` `${id}-hint` `` khi không.
+
+    | Ô | id / name | Nhãn | Gợi ý | Ô nhập |
+    |---|---|---|---|---|
+    | Tên | `product-name` / `name` | Tên | Tối đa 120 ký tự. | `Input` |
+    | Giá | `product-price` / `price` | Giá (₫) | Chỉ gõ chữ số, đơn vị đồng. Ví dụ: 199000. | `Input type="text" inputMode="numeric" autoComplete="off" className="font-mono …"` |
+    | Tồn kho | `product-stock` / `stock` | Tồn kho | 0 là hết hàng: cửa hàng hiện "Hết hàng" và khoá nút "Thêm vào giỏ". | như Giá |
+    | Mô tả | `product-description` / `description` | Mô tả | Tối đa 2.000 ký tự. | `<textarea rows={4}>` cùng lớp `Input` + `min-h-32 py-3 resize-y` |
+
+    Không `type="number"` (nuốt "-" và "e", không nhận dấu chấm hàng nghìn), không `maxLength` (cắt chữ âm thầm): server trả lỗi có chữ.
+  - Lỗi ô: focus về ô lỗi đầu tiên theo thứ tự DOM (Tên, Giá, Tồn kho, Mô tả). Không thêm câu tóm tắt vào `role="alert"` (focus + mô tả của ô đã đọc lỗi). Ô giữ chữ đã gõ.
+  - Thông báo (mẫu M4, không toast, không tự biến mất; gửi lần mới thì xoá nội dung cũ):
+    - Chờ: status `<p className="flex min-h-11 items-center text-muted-foreground">Đang lưu…</p>`.
+    - `saved`: status `<div className="flex flex-wrap items-center gap-x-4"><p className="flex min-h-11 items-center gap-2 font-medium before:size-2 before:shrink-0 before:bg-foreground">Đã lưu.</p><Link href={`/products/${slug}`} className="inline-flex min-h-11 items-center text-link underline underline-offset-4 hover:decoration-2">Xem trên cửa hàng</Link></div>`. Sau đó `expectedUpdatedAt` = `updatedAt` mới.
+    - Lỗi chung: alert `<p className="flex min-h-11 items-center gap-2 font-medium text-danger before:size-2 before:shrink-0 before:bg-danger"><span>…</span></p>`; link trong câu `underline underline-offset-4 hover:decoration-2` (màu kế thừa `danger`; được miễn kích thước tối thiểu theo ngoại lệ "inline" của WCAG 2.5.8). Text của `p` đúng bằng chuỗi trong bảng dưới **[Cổng 2 #4]**:
+
+    | State | Chuỗi (phần in đậm là link) | Link tới |
+    |---|---|---|
+    | `error: 'conflict'` | Sản phẩm vừa được sửa ở nơi khác. **Tải lại trang** để xem bản mới nhất. | chính trang (`/admin/products/<slug>`) |
+    | `error: 'unauthorized'` | Phiên đăng nhập đã hết. **Đăng nhập lại**. | `/admin/login` (chỉ khi action tự từ chối, ví dụ gọi qua `/admin/login`) |
+    | `error: 'unavailable'` | Không chắc thay đổi đã được lưu. **Tải lại trang** để xem dữ liệu hiện tại rồi thử lại. | chính trang |
+    | `error: 'not-found'` | Sản phẩm này không còn trong cửa hàng. **Về danh sách sản phẩm**. | `/admin/products` |
+    | `formError: 'invalid'` | Biểu mẫu đã cũ. **Tải lại trang** rồi sửa lại. | chính trang |
+    | action reject còn phiên (mất mạng, 500, id action cũ) **[Cổng 2 #6]** | Không kết nối được. Vui lòng tải lại trang và thử lại. (`PRODUCT_EDIT_NETWORK_ERROR` = `CART_NETWORK_ERROR`) | — |
+    | action reject khi hết phiên (proxy 401) **[Cổng 2 #6]** | không hiện gì: cả tab tải `/admin/login` (`HEAD /admin/_session-probe` nhận 307) | `/admin/login` |
+
+- **Lỗi và 404 trong khu admin** **[Cổng 2 #5]**: `StatusMessage` M2 bên trong khung admin (thanh trên vẫn còn).
+  - `src/app/admin/(protected)/error.tsx` (`"use client"`): "Đã có lỗi xảy ra" / "Không tải được dữ liệu lúc này. Thử lại sau vài giây." / `Button` primary "Thử lại". Không "Về trang chủ".
+  - `src/app/admin/(protected)/products/[slug]/not-found.tsx`: "Không tìm thấy sản phẩm" / "Không có sản phẩm nào với đường dẫn này." / link primary "Về danh sách sản phẩm" → `/admin/products`.
+
+#### Chuỗi mới của M5 (Designer, duyệt ở Cổng 2)
+
+| Chỗ | Chuỗi | File đề xuất |
+|---|---|---|
+| Đăng nhập, dòng dẫn | Khu quản lý sản phẩm của next-store. Chỉ chủ cửa hàng có mật khẩu. | `login/page.tsx` |
+| Đăng nhập, chờ | Đang đăng nhập… | `admin/messages.ts` |
+| Danh sách, dòng dẫn | `${n} sản phẩm. Sửa được tên, giá, mô tả, tồn kho; ảnh, danh mục và slug đổi qua mã nguồn.` | `products/page.tsx` |
+| Thẻ 390 | `Tồn kho ${stock}` | `admin-product-table.tsx` |
+| Bảng, cột cuối (sr-only) | Thao tác | `admin-product-table.tsx` |
+| Form, nhãn trên h1 | Sửa sản phẩm | `[slug]/page.tsx` |
+| Form, slug | Slug (không đổi được): | `[slug]/page.tsx` |
+| Gợi ý 4 ô | xem bảng Field | `edit-messages.ts` (`PRODUCT_EDIT_HINTS`) |
+| Lưu, chờ | Đang lưu… | `edit-messages.ts` |
+| Lỗi chung `unavailable`, `not-found`, `formError` | xem bảng thông báo | `edit-messages.ts` (`productEditStateMessage`) |
+| Lỗi / 404 khu admin | xem trên | `error.tsx`, `not-found.tsx` |
+
+Chuỗi không đổi được: "Mật khẩu không đúng." (US-12), "Giá không được âm", "Tên không được để trống" (US-13).
+- **Code (Task 10, NS-125):** bảng / thẻ / skeleton là `AdminProductTable`, `AdminProductTableView`, `AdminProductTableSkeleton` (`src/features/products/components/admin-product-table.tsx`, server). Form là `ProductEditForm` (`src/features/products/components/product-edit-form.tsx`, `"use client"`), nằm ở `features/products` cạnh action (audit PR #107 M-2), `ProductEditFormView` là phần không hook để test. Gợi ý và chuỗi mất mạng: `PRODUCT_EDIT_HINTS`, `PRODUCT_EDIT_NETWORK_ERROR` (`edit-messages.ts`). Mô tả dùng `INPUT_CLASS` của `@/components/ui/input` trên `<textarea>`. `error.tsx` admin có `<title>` "Đã có lỗi xảy ra · Quản trị"; trang sửa slug lạ có title "Không tìm thấy sản phẩm · Quản trị" (status vẫn 200 vì trang đã stream, `noindex`).
 
 ### Ảnh Open Graph (1200 × 630, `src/lib/og-image.tsx`)
 

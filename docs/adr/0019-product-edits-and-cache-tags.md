@@ -115,6 +115,7 @@ Quyết định 3A, 4A, 11A, 12A, 13A áp như sau.
 - **Ghi bị hết giờ làm mới cache dù có thể chưa ghi.** Giá là một lần render lại thừa; ngược lại (không làm mới khi đã ghi) cửa hàng giữ giá cũ tới hết `hours`.
 - **Xung đột hai tab** là một trạng thái lỗi mới trên form; form mang `updatedAt` mới sau mỗi lần lưu thành công nên lưu liên tiếp trong cùng tab không báo xung đột.
 - **Khách không được báo khi giá đổi** (12A). Tổng giỏ luôn khớp giá sẽ thanh toán; M6 chụp giá vào `orders.items`. Muốn báo thì thêm cột giá chụp nullable trong `cart_items` (expand), ADR mới.
+- **M6: mọi câu trừ kho PHẢI đặt `updated_at = now()`** (audit PR #107 L-4). Form admin ghi tồn kho **tuyệt đối** (`stock = <giá trị của form>`) và chỉ biết có người ghi chen vào nhờ `updated_at` (13A). Nếu checkout trừ kho mà không đổi `updated_at`, một form admin mở từ trước lần mua sẽ lưu đè tồn kho cũ mà không bị `conflict`, và cửa hàng bán quá số còn. Đổi `updated_at` không đảo thứ tự "Mới nhất" (11A: theo `created_at`). Admin vừa mở form khi có đơn thì nhận `conflict` và tải lại, đúng ý. Ghi trên ticket M6 (NS-6) và trong plan M5, mục "Chuyển sang M6".
 - **Ẩn sản phẩm (khi làm) không bao giờ xoá khỏi DB;** sản phẩm ẩn vẫn chiếm slug. Đổi FK sang `RESTRICT` là contract, phải đi sau release cuối cùng còn code dựa vào cascade.
 - **Một migration expand + một backfill ở M5** (Task 5): `products.created_at` và bảng `admin_login_failures` (ADR-0018). Code cũ chạy được trên schema mới (không đọc `created_at`, không chạm bảng mới).
 - **Cách kiểm:**

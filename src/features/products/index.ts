@@ -8,7 +8,14 @@ export {
   type ProductSitemapEntry,
 } from '@/features/products/queries'
 export { getProductForAdmin, listProductsForAdmin } from '@/features/products/admin-queries'
-export { updateProductAction } from '@/features/products/actions'
+// The edit action is not re-exported: only the edit form references it, so its id sits in the manifest of the edit
+// page alone (audit PR #107 nit). It still checks the session itself, first.
+export { ProductEditForm, type ProductEditFormProps } from '@/features/products/components/product-edit-form'
+export {
+  AdminProductTable,
+  AdminProductTableSkeleton,
+  AdminProductTableView,
+} from '@/features/products/components/admin-product-table'
 export {
   PRODUCT_EDIT_SAVING,
   productEditErrorMessage,

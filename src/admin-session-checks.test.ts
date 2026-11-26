@@ -77,11 +77,31 @@ type ExportedFunction = { name: string; isDefault: boolean; node: ts.FunctionLik
 const isFunctionValue = (node: ts.Expression | undefined): node is ts.ArrowFunction | ts.FunctionExpression =>
   node !== undefined && (ts.isArrowFunction(node) || ts.isFunctionExpression(node))
 
-// `{ … }`, `{ … } satisfies T` or `{ … } as const`: a plain value, nothing runs.
+// Text, a number, true / false / null, or an array or object of those, all the way down: nothing runs when the
+// module loads and nothing is read (audit PR #107 M-1: `{ title: secretRows() }` ran the call inside).
+const isLiteralValue = (node: ts.Expression): boolean => {
+  const inner = unwrap(node)
+  if (ts.isSatisfiesExpression(inner) || ts.isAsExpression(inner)) return isLiteralValue(inner.expression)
+  if (ts.isStringLiteral(inner) || ts.isNoSubstitutionTemplateLiteral(inner) || ts.isNumericLiteral(inner)) return true
+  if ([ts.SyntaxKind.TrueKeyword, ts.SyntaxKind.FalseKeyword, ts.SyntaxKind.NullKeyword].includes(inner.kind)) return true
+  if (ts.isPrefixUnaryExpression(inner)) return inner.operator === ts.SyntaxKind.MinusToken && ts.isNumericLiteral(inner.operand)
+  if (ts.isArrayLiteralExpression(inner)) return inner.elements.every((element) => !ts.isSpreadElement(element) && isLiteralValue(element))
+  if (ts.isObjectLiteralExpression(inner)) {
+    return inner.properties.every(
+      (property) =>
+        ts.isPropertyAssignment(property) &&
+        (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) &&
+        isLiteralValue(property.initializer),
+    )
+  }
+  return false
+}
+
+// `{ … }`, `{ … } satisfies T` or `{ … } as const` holding literals only: a plain value, nothing runs.
 const isObjectValue = (node: ts.Expression | undefined): boolean => {
   if (node === undefined) return false
   if (ts.isSatisfiesExpression(node) || ts.isAsExpression(node)) return isObjectValue(node.expression)
-  return ts.isObjectLiteralExpression(unwrap(node))
+  return ts.isObjectLiteralExpression(unwrap(node)) && isLiteralValue(node)
 }
 
 const snippet = (node: ts.Node, file: ts.SourceFile): string => node.getText(file).replace(/\s+/g, ' ').slice(0, 60)
@@ -209,6 +229,77 @@ const protectedPageProblems = (source: string): string[] => {
  * imports only React, links and shared UI. Such a file renders without a page check (loading is prerendered into
  * `.segments/*.rsc`, re-audit M-A t5), so it must have nothing to hide.
  */
+const specifierText = (node: ts.Node | undefined): string => (node !== undefined && ts.isStringLiteralLike(node) ? node.text : '?')
+
+// Every module the file pulls in at run time, whatever the spelling: `import … from`, `import x = require(…)`,
+// `import(…)`, `require(…)`. `export … from` is listed apart (re-exports). Type-only imports are erased.
+const runtimeImports = (file: ts.SourceFile): string[] => {
+  const found: string[] = []
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) && node.importClause?.isTypeOnly !== true) found.push(specifierText(node.moduleSpecifier))
+    else if (ts.isImportEqualsDeclaration(node) && !node.isTypeOnly) {
+      const reference = node.moduleReference
+      found.push(ts.isExternalModuleReference(reference) ? specifierText(reference.expression) : reference.getText(file))
+    } else if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword || (ts.isIdentifier(node.expression) && node.expression.text === 'require'))
+    ) {
+      found.push(specifierText(node.arguments[0]))
+    }
+    ts.forEachChild(node, visit)
+  }
+  ts.forEachChild(file, visit)
+  return found
+}
+
+// A static file exports exactly `export default function …`, plus literal `metadata` / `viewport` (the admin root
+// layout), and types. A re-export (`export { default } from …`, `export * from …`) would serve another module's
+// code with no check of its import list (audit PR #107 M-1); anything else is reported as an unsupported form.
+const staticExportProblems = (file: ts.SourceFile): string[] => {
+  const problems: string[] = []
+  for (const statement of file.statements) {
+    if (ts.isExportDeclaration(statement)) {
+      if (statement.isTypeOnly) continue
+      problems.push(
+        statement.moduleSpecifier === undefined
+          ? `unsupported export form: ${snippet(statement, file)}`
+          : `re-exports ${specifierText(statement.moduleSpecifier)}`,
+      )
+      continue
+    }
+    if (ts.isExportAssignment(statement)) {
+      problems.push(`unsupported export form: ${snippet(statement, file)}`)
+      continue
+    }
+    if (!hasModifier(statement, ts.SyntaxKind.ExportKeyword)) continue
+    if (ts.isTypeAliasDeclaration(statement) || ts.isInterfaceDeclaration(statement)) continue
+    if (ts.isFunctionDeclaration(statement) && hasModifier(statement, ts.SyntaxKind.DefaultKeyword)) continue
+    if (ts.isVariableStatement(statement)) {
+      for (const declaration of statement.declarationList.declarations) {
+        const name = ts.isIdentifier(declaration.name) ? declaration.name.text : undefined
+        if (name === undefined || !PAGE_VALUE_EXPORTS.includes(name) || !isObjectValue(declaration.initializer)) {
+          problems.push(`unsupported export form: ${snippet(declaration, file)}`)
+        }
+      }
+      continue
+    }
+    problems.push(`unsupported export form: ${snippet(statement, file)}`)
+  }
+  return problems
+}
+
+// `process` (the env, above all) is a global: no import list catches it (audit PR #107 M-1).
+const readsProcess = (file: ts.SourceFile): boolean => {
+  let found = false
+  const visit = (node: ts.Node): void => {
+    if (found) return
+    if (ts.isIdentifier(node) && node.text === 'process') found = true
+    else ts.forEachChild(node, visit)
+  }
+  ts.forEachChild(file, visit)
+  return found
+}
+
 const staticRouteProblems = (source: string): string[] => {
   const file = parse(source)
   const problems: string[] = []
@@ -222,14 +313,22 @@ const staticRouteProblems = (source: string): string[] => {
   ts.forEachChild(file, visit)
   if (awaits > 0) problems.push('awaits')
   if (asyncFunctions > 0) problems.push('has an async function')
-  for (const statement of importDeclarations(file)) {
-    if (statement.importClause?.isTypeOnly === true) continue
-    const specifier = ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : '?'
+  for (const specifier of runtimeImports(file)) {
     if (!STATIC_IMPORTS.test(specifier)) problems.push(`imports ${specifier}`)
   }
+  problems.push(...staticExportProblems(file))
+  if (readsProcess(file)) problems.push('reads process')
+  // A second net only: the import list above is what keeps data out.
   if (/\b(dbQuery|cookies|headers|connection)\s*\(/.test(source)) problems.push('reads data or the request')
   return problems
 }
+
+// The repo uses the App Router only. A file under pages/ or src/pages/ is a route with none of the checks of this
+// file: measured, src/pages/admin/zz.tsx built as `○ /admin/zz` and served its content with a session cookie, kept
+// out only by the proxy (audit PR #107 M-1). Paths relative to the repo root.
+const PAGES_ROUTER_FILE = /^(src\/)?pages\//
+const routerRootProblems = (paths: readonly string[]): string[] =>
+  paths.filter((path) => PAGES_ROUTER_FILE.test(path)).map((path) => `${path}: the Pages Router is not used (conventions.md §2)`)
 
 // `if (!(await hasAdminSession())) …` whose branch leaves the function (return or throw).
 const leaves = (node: ts.Statement): boolean => {
@@ -459,6 +558,17 @@ export default async function Page() {
       GOOD_PAGE.replace("export const metadata = { title: 'Sản phẩm' }", 'export const metadata = buildMetadata()'),
       'unsupported export form: metadata = buildMetadata()',
     ],
+    // Audit PR #107 M-1: the outer object was a literal, the call inside ran at module load.
+    [
+      'exports metadata with a call inside',
+      GOOD_PAGE.replace("export const metadata = { title: 'Sản phẩm' }", 'export const metadata = { title: secretRows() }'),
+      'unsupported export form: metadata = { title: secretRows() }',
+    ],
+    [
+      'exports metadata reading the env',
+      GOOD_PAGE.replace("export const metadata = { title: 'Sản phẩm' }", 'export const metadata = { title: process.env.X }'),
+      'unsupported export form: metadata = { title: process.env.X }',
+    ],
     [
       'exports another value',
       `${GOOD_PAGE}\nexport const dynamicParams = true`,
@@ -479,9 +589,54 @@ describe('staticRouteProblems (re-audit M-A)', () => {
     ['awaits', `export default function Loading() { const x = await y; return <p>{x}</p> }`, 'awaits'],
     ['is async', `export default async function Loading() { return <p>…</p> }`, 'has an async function'],
     ['reads the request', `import { cookies } from 'next/headers'\nexport default function L() { cookies(); return null }`, 'imports next/headers'],
+    // Audit PR #107 M-1: each one measured green before.
+    [
+      're-exports a component',
+      `export { default } from '@/features/products/components/zz-leak'`,
+      're-exports @/features/products/components/zz-leak',
+    ],
+    ['re-exports a whole feature', `export * from '@/features/products'`, 're-exports @/features/products'],
+    ['re-exports under another name', `export { Leak as default } from './leak'`, 're-exports ./leak'],
+    ['reads the env', `export default function NotFound() { return <p>{process.env.SESSION_SECRET}</p> }`, 'reads process'],
+    ['imports the database at run time', `export default function L() { void import('@/db'); return null }`, 'imports @/db'],
+    ['requires the database', `export default function L() { require('@/db'); return null }`, 'imports @/db'],
+    ['imports with import = require', `import db = require('@/db')\nexport default function L() { return null }`, 'imports @/db'],
+    [
+      'exports metadata built by a call',
+      `export const metadata = { title: secretRows() }\nexport default function L() { return null }`,
+      'unsupported export form: metadata = { title: secretRows() }',
+    ],
+    [
+      'exports metadata holding a variable',
+      `const title = rows[0]\nexport const metadata = { title }\nexport default function L() { return null }`,
+      'unsupported export form: metadata = { title }',
+    ],
+    ['exports another function', `export function helper() { return 1 }\nexport default function L() { return null }`, 'unsupported export form: export function helper() { return 1 }'],
+    ['exports a value by name', `const L = () => null\nexport default L`, 'unsupported export form: export default L'],
+    ['exports a local binding', `function L() { return null }\nexport { L as default }`, 'unsupported export form: export { L as default }'],
   ])('refuses a static route file that %s', (_, source, problem) => {
     expect(staticRouteProblems(source)).toContain(problem)
   })
+
+  it('accepts literal metadata and a default function', () => {
+    const source = `import type { Metadata } from 'next'
+export const metadata: Metadata = { title: { template: '%s · Quản trị', default: 'Quản trị' }, robots: { index: false, follow: false } }
+export default function AdminLayout({ children }: LayoutProps<'/admin'>) { return children }`
+    expect(staticRouteProblems(source)).toEqual([])
+  })
+})
+
+describe('routerRootProblems (audit PR #107 M-1)', () => {
+  it('accepts a repo with the App Router only', () => {
+    expect(routerRootProblems(['src/app/page.tsx', 'src/features/pages.ts', 'docs/pages.md'])).toEqual([])
+  })
+
+  it.each([['src/pages/admin/zz.tsx'], ['pages/admin/zz.tsx'], ['src/pages/index.tsx'], ['pages/api/x.ts']])(
+    'reports a Pages Router file: %s',
+    (path) => {
+      expect(routerRootProblems([path])).toEqual([`${path}: the Pages Router is not used (conventions.md §2)`])
+    },
+  )
 })
 
 describe('sessionFirstProblems (audit PR #106 L1)', () => {
@@ -648,6 +803,13 @@ describe('the admin area holds only checked route files (audit PR #106 H1, re-au
 
   it('the deliberate files still exist', () => {
     expect([...UNPROTECTED_ADMIN_FILES, PROTECTED_LAYOUT].filter((file) => !existsSync(file))).toEqual([])
+  })
+
+  // Audit PR #107 M-1: a Pages Router file under pages/admin served /admin/zz with none of the checks above.
+  it('there is no Pages Router', () => {
+    const roots = ['pages', 'src/pages'].filter((root) => existsSync(root))
+    expect(routerRootProblems(roots.flatMap((root) => filesUnder(root, /./)))).toEqual([])
+    expect(roots).toEqual([])
   })
 
   it('the admin root layout is static', () => {
