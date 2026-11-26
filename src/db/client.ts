@@ -10,6 +10,8 @@ import { MAX_QUERY_WAIT_MS } from '@/db/limits'
 import * as schema from '@/db/schema'
 
 export type Db = PgDatabase<PgQueryResultHKT, typeof schema>
+// The transaction handle of Db.transaction: what a store function receives to run inside the caller's transaction.
+export type DbTx = Parameters<Parameters<Db['transaction']>[0]>[0]
 
 type DatabaseEnv = {
   DATABASE_URL?: string
