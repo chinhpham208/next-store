@@ -34,6 +34,8 @@ ADMIN_PORT=3176
 CSP_OLD_PORT=3175
 HSTS_PORT=3174
 HSTS_SHORT_PORT=3173
+CSP_PREVIEW_PORT=3172
+CSP_PREVIEW_ALLOW_PORT=3171
 
 TMP=$(mktemp -d)
 PIDS=()
@@ -105,7 +107,8 @@ start_server() {
       res.end()
       return true
     }
-    const BASELINE_CSP = adminMode === "csp-old" ? "frame-ancestors \x27none\x27" : "default-src \x27self\x27; script-src \x27self\x27 \x27unsafe-inline\x27; style-src \x27self\x27 \x27unsafe-inline\x27; img-src \x27self\x27 data: blob:; font-src \x27self\x27; connect-src \x27self\x27; object-src \x27none\x27; base-uri \x27self\x27; form-action \x27self\x27; frame-ancestors \x27none\x27; upgrade-insecure-requests"
+    const PREVIEW_CSP = "default-src \x27self\x27; script-src \x27self\x27 \x27unsafe-inline\x27 https://vercel.live; style-src \x27self\x27 \x27unsafe-inline\x27 https://vercel.live; img-src \x27self\x27 data: blob: https://vercel.live https://vercel.com; font-src \x27self\x27 https://vercel.live https://assets.vercel.com; connect-src \x27self\x27 https://vercel.live wss://ws-us3.pusher.com; frame-src https://vercel.live; object-src \x27none\x27; base-uri \x27self\x27; form-action \x27self\x27; frame-ancestors \x27none\x27; upgrade-insecure-requests"
+    const BASELINE_CSP = adminMode === "csp-preview" ? PREVIEW_CSP : adminMode === "csp-old" ? "frame-ancestors \x27none\x27" : "default-src \x27self\x27; script-src \x27self\x27 \x27unsafe-inline\x27; style-src \x27self\x27 \x27unsafe-inline\x27; img-src \x27self\x27 data: blob:; font-src \x27self\x27; connect-src \x27self\x27; object-src \x27none\x27; base-uri \x27self\x27; form-action \x27self\x27; frame-ancestors \x27none\x27; upgrade-insecure-requests"
     const SECURITY = { "x-frame-options": "DENY", "content-security-policy": BASELINE_CSP, "x-content-type-options": "nosniff", "referrer-policy": "strict-origin-when-cross-origin" }
     const og = (path) => `<meta property="og:image" content="http://localhost:3000${path}"/>`
     const images = ["/opengraph-image?a1b2c3", "/products/ao-404-not-found/opengraph-image-16g1u1?d4e5f6", "/blog/chao-mung-den-next-store/opengraph-image-16g1u1?a7b8c9"]
@@ -462,6 +465,15 @@ start_server "$CSP_OLD_PORT" "$TMP/csp-old-headers" 200 "<h1>Không tìm thấy 
 run BASE_URL="http://127.0.0.1:$CSP_OLD_PORT" -- bash scripts/smoke.sh
 [ "$CODE" = 1 ] || fail csp-baseline "CSP chỉ frame-ancestors: thoát $CODE, cần 1"
 grep -qF 'LỖI: GET / thiếu header content-security-policy' "$TMP/out" || fail csp-baseline "thông báo không nêu CSP"
+# The Vercel Toolbar's sources (Preview build): accepted with robots.txt Disallow: /, refused with Allow: / (Production).
+start_server "$CSP_PREVIEW_PORT" "$TMP/csp-preview-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Disallow: /" 200 "" "" "" csp-preview
+run BASE_URL="http://127.0.0.1:$CSP_PREVIEW_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail csp-baseline "CSP Preview, robots Disallow: thoát $CODE, cần 0"
+grep -qF 'smoke: CSP nền có nguồn thanh công cụ Vercel' "$TMP/out" || fail csp-baseline "thiếu dòng CSP Preview"
+start_server "$CSP_PREVIEW_ALLOW_PORT" "$TMP/csp-preview-allow-headers" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 "" "" "" csp-preview
+run BASE_URL="http://127.0.0.1:$CSP_PREVIEW_ALLOW_PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 1 ] || fail csp-baseline "CSP Preview, robots Allow (Production): thoát $CODE, cần 1"
+grep -qF 'LỖI: GET / thiếu header content-security-policy' "$TMP/out" || fail csp-baseline "CSP Preview trên Production: thông báo không nêu CSP"
 echo "ok csp-baseline"
 
 # hsts (ADR-0020 10A): HSTS is required on a Vercel URL (SMOKE_HSTS=require stands for it here: the fake server is

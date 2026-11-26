@@ -18,6 +18,14 @@ const PASSWORD = process.env.E2E_ADMIN_PASSWORD
 const BASE_URL = process.env.BASE_URL
 const NONCE_POLICY = /script-src 'self' 'nonce-[A-Za-z0-9+/]{22}==' 'strict-dynamic'/
 
+// On a preview the Vercel Toolbar is injected into every page. The baseline lets it load (its sources are added to a
+// Preview build, C4), so shop pages are checked with it. The admin nonce policy does not (ADR-0020: with a nonce,
+// 'unsafe-inline' no longer applies to its inline styles), so admin pages on a deployment are checked without it,
+// through Vercel's header for automated tests ("Disable toolbar for automation"). It only turns the toolbar off.
+const withoutToolbar = async (page: Page): Promise<void> => {
+  if (BASE_URL) await page.setExtraHTTPHeaders({ 'x-vercel-skip-toolbar': '1' })
+}
+
 const watchCsp = async (page: Page): Promise<string[]> => {
   const violations: string[] = []
   await page.exposeFunction('__nsCspViolation', (line: string) => violations.push(line))
@@ -59,6 +67,7 @@ test.describe('NS-127: CSP nền không chặn trang cửa hàng', () => {
 
 test.describe('NS-127: CSP nonce cho /admin', () => {
   test('trang đăng nhập có CSP nonce, hydrate được, không có vi phạm', async ({ page }) => {
+    await withoutToolbar(page)
     const violations = await watchCsp(page)
     const response = await page.goto('/admin/login')
     expect(response?.status()).toBe(200)
@@ -87,6 +96,7 @@ test.describe('NS-127: CSP nonce cho /admin', () => {
 
   test('đăng nhập rồi gửi form sửa sản phẩm, không có vi phạm', { tag: WRITE_TAG }, async ({ page }) => {
     test.skip(!PASSWORD, 'Không có E2E_ADMIN_PASSWORD: không đăng nhập được')
+    await withoutToolbar(page)
     const violations = await watchCsp(page)
     await page.goto('/admin/login')
     const submit = page.getByRole('button', { name: 'Đăng nhập' })

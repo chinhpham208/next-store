@@ -313,10 +313,19 @@ echo "smoke: GET $POST_PATH → 200, có <h1 và <article"
 # itself, so the exact value is checked on every environment. Every checked path is collected and printed once.
 # ADR-0020: the CSP is the full baseline of a production build (no 'unsafe-eval', no nonce: a nonce on a shop page
 # would mean it is no longer prerendered). /admin/* gets the proxy's nonce policy instead, checked further down.
+# A Vercel Preview build (Preview, Dev) adds the Vercel Toolbar's sources (C4, next.config.ts); that variant is
+# accepted only where robots.txt says Disallow: / (checked above, from the same build-time VERCEL_ENV), never on
+# Production.
 BASELINE_CSP="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+PREVIEW_CSP="default-src 'self'; script-src 'self' 'unsafe-inline' https://vercel.live; style-src 'self' 'unsafe-inline' https://vercel.live; img-src 'self' data: blob: https://vercel.live https://vercel.com; font-src 'self' https://vercel.live https://assets.vercel.com; connect-src 'self' https://vercel.live wss://ws-us3.pusher.com; frame-src https://vercel.live; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; upgrade-insecure-requests"
+EXPECTED_CSP=$BASELINE_CSP
+if [ "$ROBOTS_POLICY" = disallow ] && tr -d '\r' < "$TMP/home.headers" | grep -qiF "content-security-policy: $PREVIEW_CSP"; then
+  EXPECTED_CSP=$PREVIEW_CSP
+  echo "smoke: CSP nền có nguồn thanh công cụ Vercel (bản build Preview, robots Disallow: /)"
+fi
 SECURITY_HEADERS=(
   "x-frame-options: DENY"
-  "content-security-policy: $BASELINE_CSP"
+  "content-security-policy: $EXPECTED_CSP"
   "x-content-type-options: nosniff"
   "referrer-policy: strict-origin-when-cross-origin"
 )

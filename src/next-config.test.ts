@@ -79,6 +79,43 @@ describe('next.config security headers (NS-108, ADR-0020)', () => {
     expect(policy).not.toMatch(/nonce-|unsafe-eval|strict-dynamic/)
   })
 
+  // C4 (ADR-0020): the Vercel Toolbar's sources, as Vercel's docs list them, only in a Vercel Preview build.
+  const configFor = async (env: Record<string, string>) => {
+    vi.resetModules()
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
+    try {
+      return (await import('../next.config')).default
+    } finally {
+      vi.unstubAllEnvs()
+      vi.resetModules()
+    }
+  }
+  const baselineFor = async (env: Record<string, string>) =>
+    directives(
+      (await unstable_getResponseFromNextConfig({ url: 'https://shop.test/', nextConfig: await configFor(env) })).headers.get(
+        'content-security-policy',
+      ),
+    )
+
+  it('adds the Vercel Toolbar sources on a Vercel Preview build only', async () => {
+    expect(await baselineFor({ VERCEL: '1', VERCEL_ENV: 'preview', NODE_ENV: 'production' })).toEqual({
+      ...BASELINE_CSP,
+      'script-src': "'self' 'unsafe-inline' https://vercel.live",
+      'style-src': "'self' 'unsafe-inline' https://vercel.live",
+      'img-src': "'self' data: blob: https://vercel.live https://vercel.com",
+      'font-src': "'self' https://vercel.live https://assets.vercel.com",
+      'connect-src': "'self' https://vercel.live wss://ws-us3.pusher.com",
+      'frame-src': 'https://vercel.live',
+    })
+    for (const env of [
+      { VERCEL: '1', VERCEL_ENV: 'production', NODE_ENV: 'production' },
+      // Off Vercel, VERCEL_ENV is not trusted (src/lib/site-url.ts).
+      { VERCEL: '', VERCEL_ENV: 'preview', NODE_ENV: 'production' },
+    ]) {
+      expect(await baselineFor(env), JSON.stringify(env)).toEqual(BASELINE_CSP)
+    }
+  })
+
   // The dev server of Next.js needs eval; it serves http://localhost, where Safari would upgrade every asset request
   // to https and break the page, so upgrade-insecure-requests is left out there too.
   it("adds 'unsafe-eval' and drops upgrade-insecure-requests in development only", async () => {
@@ -87,7 +124,8 @@ describe('next.config security headers (NS-108, ADR-0020)', () => {
     try {
       const devConfig = (await import('../next.config')).default
       const response = await unstable_getResponseFromNextConfig({ url: 'https://shop.test/', nextConfig: devConfig })
-      const { 'upgrade-insecure-requests': _upgrade, ...rest } = BASELINE_CSP
+      const rest: Record<string, string> = { ...BASELINE_CSP }
+      delete rest['upgrade-insecure-requests']
       expect(directives(response.headers.get('content-security-policy'))).toEqual({
         ...rest,
         'script-src': "'self' 'unsafe-inline' 'unsafe-eval'",

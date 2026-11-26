@@ -12,14 +12,24 @@ import type { NextConfig } from "next";
 // (src/features/admin/csp.ts). Every new outside source (analytics, a font CDN, the payment gateway of M6, which
 // `form-action 'self'` would block) is added here in the same PR. X-Frame-Options stays for browsers without CSP 2.
 const isDev = process.env.NODE_ENV === "development";
+// The Vercel Toolbar (comments, feedback) that Vercel injects on Preview and Dev loads a script from vercel.live,
+// which then adds an iframe, inline styles, images, fonts and a websocket. Measured on the preview of this PR (C4):
+// all of it is refused by the baseline. These are the sources Vercel's docs list for it ("Managing the visibility of
+// the Vercel Toolbar", section "Using a Content Security Policy", read 2026-11-26), added only to a Vercel Preview
+// build (ADR-0020), never to Production. VERCEL_ENV is trusted only with VERCEL set, as in src/lib/site-url.ts.
+// The admin nonce policy gets none of them: with a nonce, 'unsafe-inline' no longer applies to styles, so the toolbar
+// does not work on /admin/* of a preview (accepted: the admin policy stays the one Production enforces).
+const isVercelPreview = Boolean(process.env.VERCEL?.trim()) && process.env.VERCEL_ENV === "preview";
+const toolbar = (sources: string) => (isVercelPreview ? ` ${sources}` : "");
 const BASELINE_CSP = [
   "default-src 'self'",
   // The dev server of Next.js needs eval (React rebuilds server error stacks in the browser).
-  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}`,
-  "style-src 'self' 'unsafe-inline'",
-  "img-src 'self' data: blob:",
-  "font-src 'self'",
-  "connect-src 'self'",
+  `script-src 'self' 'unsafe-inline'${isDev ? " 'unsafe-eval'" : ""}${toolbar("https://vercel.live")}`,
+  `style-src 'self' 'unsafe-inline'${toolbar("https://vercel.live")}`,
+  `img-src 'self' data: blob:${toolbar("https://vercel.live https://vercel.com")}`,
+  `font-src 'self'${toolbar("https://vercel.live https://assets.vercel.com")}`,
+  `connect-src 'self'${toolbar("https://vercel.live wss://ws-us3.pusher.com")}`,
+  ...(isVercelPreview ? ["frame-src https://vercel.live"] : []),
   "object-src 'none'",
   "base-uri 'self'",
   "form-action 'self'",
