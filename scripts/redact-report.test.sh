@@ -43,6 +43,9 @@ export default {
   testDir: '.',
   outputDir: 'test-results',
   reporter: [['html', { open: 'never', outputFolder: 'playwright-report' }]],
+  // In CI on a pull request Playwright puts the PR's git diff into report.json; this file's own fake secrets (the
+  // tests of NS-129 build fake session tokens) are in that diff, and a report that was never masked would "leak" them.
+  captureGitInfo: { commit: false, diff: false },
   use: { channel: process.env.PW_CHANNEL || undefined },
 }
 JS
@@ -293,5 +296,126 @@ check 'unreadable-zip-fails' 'exit 1' "$(REDACT_SECRET=$SECRET run node $REDACT 
 check 'no-secret' 'exit 2' "$(env -u REDACT_SECRET node $REDACT check "$FORMS" > /dev/null 2>&1 && echo 'exit 0' || echo "exit $?")"
 check 'short-secret' 'exit 2' "$(REDACT_SECRET=abc run node $REDACT check "$FORMS")"
 check 'missing-folder-is-empty' 'exit 0' "$(REDACT_SECRET=$SECRET run node $REDACT check "$TMP/khong-co")"
+
+# NS-129 (plan M5 Task 14, audit PR #105 N1, audit PR #106 L3): the Preview admin password and the admin session
+# token are secrets too. The password is a known value (REDACT_SECRETS carries several secrets, one per line); the
+# session token is made at login, so it is found by its shape: the value after `__Host-ns_admin=` / `ns_admin=` and
+# any `v1.<exp>.<43 characters>`.
+PASSWORD=gia-NS129-mat_khau-0123456789xyz
+TOKEN=v1.1999999999.AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-AbCdE
+SECRETS=$(printf '%s\n%s' "$SECRET" "$PASSWORD")
+
+# A fill step records the typed value in the report and in the trace (the reason specs type it another way).
+mkdir -p "$TMP/ad"
+cat > "$TMP/ad/ad.spec.ts" <<'TS'
+import { expect, test } from '../../../e2e/test'
+
+test.use({ trace: 'on' })
+test('fill ghi mật khẩu', async ({ page }) => {
+  await page.setContent('<input id="p" type="password">')
+  await page.locator('#p').fill(process.env.FAKE_PASSWORD ?? '')
+  expect(1).toBe(2)
+})
+TS
+AD_OUT=$(cd "$TMP/ad" && FAKE_PASSWORD=$PASSWORD PLAYWRIGHT_HTML_OUTPUT_DIR="$PWD/playwright-report" \
+  npx playwright test --config ../pw.config.mjs --output "$PWD/test-results" --reporter list,html ad.spec.ts 2>&1 || true)
+AD_REPORT=$TMP/ad/playwright-report
+check 'ad-browser-launched' 'có' "$(grep -qF 'browserType.launch' <<< "$AD_OUT" && echo không || echo có)"
+check 'ad-check-finds-password' 'exit 1' "$(REDACT_SECRETS=$SECRETS run node $REDACT check "$AD_REPORT" "$TMP/ad/test-results")"
+check 'ad-redact' 'exit 0' "$(REDACT_SECRETS=$SECRETS run node $REDACT redact "$AD_REPORT" "$TMP/ad/test-results")"
+check 'ad-check-clean' 'exit 0' "$(REDACT_SECRETS=$SECRETS run node $REDACT check "$AD_REPORT" "$TMP/ad/test-results")"
+check 'ad-no-password-left' 'không' "$(has_secret "$TMP/ad" "$PASSWORD")"
+check 'ad-embedded-zip-no-password' 'không' "$(embedded "$AD_REPORT/index.html" "$PASSWORD")"
+
+# A request that fails on the network: Playwright puts every request header into the error, the session cookie
+# included (audit PR #106 L3), here in the report's embedded zip.
+mkdir -p "$TMP/ak"
+cat > "$TMP/ak/ak.spec.ts" <<'TS'
+import { createServer, type Server } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { test } from '../../../e2e/test'
+
+let server: Server
+let base = ''
+test.beforeAll(async () => {
+  server = createServer(() => {})
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`
+})
+test.afterAll(() => {
+  server.closeAllConnections()
+  server.close()
+})
+test('cookie phiên trong lỗi mạng', async ({ request }) => {
+  await request.get(`${base}/treo`, { headers: { cookie: `__Host-ns_admin=${process.env.FAKE_TOKEN}` }, timeout: 1000 })
+})
+TS
+AK_OUT=$(cd "$TMP/ak" && FAKE_TOKEN=$TOKEN PLAYWRIGHT_HTML_OUTPUT_DIR="$PWD/playwright-report" \
+  npx playwright test --config ../pw.config.mjs --output "$PWD/test-results" --reporter list,html ak.spec.ts 2>&1 || true)
+AK_REPORT=$TMP/ak/playwright-report
+check 'ak-token-in-embedded-zip' 'có' "$(embedded "$AK_REPORT/index.html" "$TOKEN")"
+check 'ak-check-finds-token' 'exit 1' "$(REDACT_SECRETS=$SECRETS run node $REDACT check "$AK_REPORT")"
+check 'ak-redact' 'exit 0' "$(REDACT_SECRETS=$SECRETS run node $REDACT redact "$AK_REPORT")"
+check 'ak-check-clean' 'exit 0' "$(REDACT_SECRETS=$SECRETS run node $REDACT check "$AK_REPORT")"
+check 'ak-embedded-zip-no-token' 'không' "$(embedded "$AK_REPORT/index.html" "$TOKEN")"
+check 'ak-embedded-zip-keeps-cookie-name' 'có' "$(embedded "$AK_REPORT/index.html" '__Host-ns_admin=***')"
+
+# The token in every place it can turn up, on files made here: a Cookie header, a Set-Cookie header, URL encoded, JSON,
+# gzip, cut by ANSI codes, and bare. Found, masked, the name kept.
+TOKEN_DIR=$TMP/token
+mkdir -p "$TOKEN_DIR"
+node -e '
+const fs = require("fs"), zlib = require("zlib"), t = process.argv[1], d = process.argv[2]
+const dir = (name, data) => { fs.mkdirSync(d + "/" + name); fs.writeFileSync(d + "/" + name + "/f", data) }
+dir("cookie", "cookie: __Host-ns_admin=" + t + "; ns_cart=x")
+dir("plain-name", "cookie: ns_admin=" + t)
+dir("set-cookie", "set-cookie: ns_admin=" + t + "; Path=/; HttpOnly; SameSite=Strict")
+dir("url", "?c=ns_admin%3D" + t)
+dir("json", JSON.stringify({ message: "cookie: ns_admin=" + t }))
+dir("bare", "Authorization failed for " + t + " today")
+dir("gz", zlib.gzipSync("cookie: __Host-ns_admin=" + t))
+dir("ansi", "h: ns_admin=" + t.slice(0, 20) + "\x1b[7m" + t.slice(20, 30) + "\x1b[27m" + t.slice(30) + " t")
+dir("ansi-json", JSON.stringify({ message: "h: " + t.slice(0, 25) + "\x1b[7m" + t.slice(25, 33) + "\x1b[27m" + t.slice(33) + " t" }))
+' "$TOKEN" "$TOKEN_DIR"
+for one in "$TOKEN_DIR"/*; do
+  name=$(basename "$one")
+  check "token-$name-found" 'exit 1' "$(REDACT_SECRET=$SECRET run node $REDACT check "$one")"
+  check "token-$name-redact" 'exit 0' "$(REDACT_SECRET=$SECRET run node $REDACT redact "$one")"
+  check "token-$name-clean" 'exit 0' "$(REDACT_SECRET=$SECRET run node $REDACT check "$one")"
+done
+check 'token-cookie-masked' 'cookie: __Host-ns_admin=***; ns_cart=x' "$(cat "$TOKEN_DIR/cookie/f")"
+check 'token-set-cookie-masked' 'set-cookie: ns_admin=***; Path=/; HttpOnly; SameSite=Strict' "$(cat "$TOKEN_DIR/set-cookie/f")"
+check 'token-url-masked' '?c=ns_admin%3D***' "$(cat "$TOKEN_DIR/url/f")"
+check 'token-bare-masked' 'Authorization failed for *** today' "$(cat "$TOKEN_DIR/bare/f")"
+check 'token-gz-masked' 'cookie: __Host-ns_admin=***' "$(gzip -dc "$TOKEN_DIR/gz/f")"
+check 'token-ansi-masked' 'h: ns_admin=*** t' "$(cat "$TOKEN_DIR/ansi/f")"
+check 'token-ansi-json-masked' '{"message":"h: *** t"}' "$(cat "$TOKEN_DIR/ansi-json/f")"
+# What is not a session stays as it is, byte for byte: the cleared cookie, a short signature, a version with no token.
+NOT_TOKEN_DIR=$TMP/not-token
+mkdir -p "$NOT_TOKEN_DIR"
+printf 'set-cookie: ns_admin=; Path=/; Max-Age=0\nset-cookie: __Host-ns_admin=; Path=/; Max-Age=0\nv1.1999999999.tooShort v1.2.3 ns_adminx=1 my_ns_admin=1\n' > "$NOT_TOKEN_DIR/a.txt"
+EXPECTED=$(cat "$NOT_TOKEN_DIR/a.txt")
+check 'not-token-check-clean' 'exit 0' "$(REDACT_SECRET=$SECRET run node $REDACT check "$NOT_TOKEN_DIR")"
+REDACT_SECRET=$SECRET node $REDACT redact "$NOT_TOKEN_DIR" > /dev/null
+check 'not-token-left-alone' "$EXPECTED" "$(cat "$NOT_TOKEN_DIR/a.txt")"
+
+# Several secrets: REDACT_SECRETS (one per line, empty lines ignored) and the older REDACT_SECRET together.
+MULTI=$TMP/multi
+mkdir -p "$MULTI"
+printf 'a %s b %s c %s d\n' "$SECRET" "$PASSWORD" 'gia-NS129-thu-ba-0123456789' > "$MULTI/a.txt"
+check 'multi-found' 'exit 1' "$(REDACT_SECRET=gia-NS129-thu-ba-0123456789 REDACT_SECRETS=$(printf '\n%s\n\n%s\n' "$SECRET" "$PASSWORD") run node $REDACT check "$MULTI")"
+check 'multi-one-missing-still-found' 'exit 1' "$(REDACT_SECRETS=$SECRETS run node $REDACT check "$MULTI")"
+REDACT_SECRET=gia-NS129-thu-ba-0123456789 REDACT_SECRETS=$SECRETS node $REDACT redact "$MULTI" > /dev/null
+check 'multi-masked' 'a *** b *** c *** d' "$(cat "$MULTI/a.txt")"
+check 'multi-clean' 'exit 0' "$(REDACT_SECRET=gia-NS129-thu-ba-0123456789 REDACT_SECRETS=$SECRETS run node $REDACT check "$MULTI")"
+check 'multi-short-secret-refused' 'exit 2' "$(REDACT_SECRETS=$(printf '%s\nabc' "$SECRET") run node $REDACT check "$MULTI")"
+check 'multi-only-empty-lines-refused' 'exit 2' "$(REDACT_SECRETS=$(printf '\n\n') run node $REDACT check "$MULTI")"
+
+# The workflows: Preview masks both secrets before it uploads; Production never gets the password (ADR-0018 16A).
+REDACT_STEP=$(sed -n '/- name: redact Playwright report$/,/^      - name: upload/p' .github/workflows/preview-e2e.yml)
+check 'ad-workflow-redacts-bypass' 'có' "$(grep -qF 'secrets.VERCEL_AUTOMATION_BYPASS_SECRET' <<< "$REDACT_STEP" && echo có || echo không)"
+check 'ad-workflow-redacts-password' 'có' "$(grep -qF 'secrets.E2E_ADMIN_PASSWORD' <<< "$REDACT_STEP" && echo có || echo không)"
+check 'ad-workflow-uses-redact-secrets' 'có' "$(grep -qE '^ +REDACT_SECRETS: \|' <<< "$REDACT_STEP" && echo có || echo không)"
+check 'ad-production-has-no-password' 'không' "$(grep -qE '^ +E2E_ADMIN_PASSWORD:' .github/workflows/production-e2e.yml && echo có || echo không)"
 
 [ "$FAILED" -eq 0 ] && echo "redact-report.test: QUA" || { echo "redact-report.test: LỖI"; exit 1; }
