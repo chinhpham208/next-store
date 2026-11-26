@@ -30,7 +30,7 @@ module.exports = {
         'use the narrow entry @/features/<name>/proxy-api, see proxy-narrow-entry; src/app/admin/** uses the admin ' +
         'entry @/features/products/admin, see products-admin-entry-only-from-admin.',
       from: { pathNot: '^src/(features/|proxy(\\.test)?\\.ts$)' },
-      to: { path: '^src/features/[^/]+/(?!index\\.ts$)', pathNot: '^src/features/products/admin\\.ts$' },
+      to: { path: '^src/features/[^/]+/(?!index\\.ts$)', pathNot: '^src/features/(products/admin|admin/ui)\\.ts$' },
     },
     {
       name: 'products-admin-entry-only-from-admin',
@@ -41,6 +41,32 @@ module.exports = {
         'src/app/admin/** (and files of products itself) may import it; scripts/check-admin-bundle.mjs checks the build.',
       from: { pathNot: '^src/(app/admin/|features/products/)' },
       to: { path: '^src/features/products/admin\\.ts$' },
+    },
+    {
+      name: 'admin-ui-entry-only-from-admin',
+      severity: 'error',
+      comment:
+        'ui.ts is the admin UI entry of admin (audit PR #124 M2): LoginForm and LogoutButton are client references, and ' +
+        'shop-reachable code (checkout reads the session through index.ts) that imports them ships their chunk and the ' +
+        'ids of loginAction / logoutAction. Only src/app/admin/** (and files of admin itself) may import it.',
+      from: { pathNot: '^src/(app/admin/|features/admin/)' },
+      to: { path: '^src/features/admin/ui\\.ts$' },
+    },
+    {
+      name: 'shop-not-to-admin-components',
+      severity: 'error',
+      comment:
+        'Nothing the shop reaches may reach the admin components (audit PR #124 M2); scripts/check-admin-bundle.mjs ' +
+        'checks the build, this one checks the import graph, so a barrel that grows a component again is red at once.',
+      from: { path: '^src/(app/\\(shop\\)/|features/(checkout|cart|orders)/)' },
+      to: { path: '^src/features/admin/(components/|ui\\.ts$)', reachable: true },
+    },
+    {
+      name: 'orders-not-to-checkout',
+      severity: 'error',
+      comment: 'orders is below checkout (plan M6): the event types live in orders so that orders never imports checkout.',
+      from: { path: '^src/features/orders/' },
+      to: { path: '^src/features/checkout/' },
     },
     {
       name: 'components-and-lib-not-to-db',

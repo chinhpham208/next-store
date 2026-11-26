@@ -3,7 +3,8 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { Suspense } from "react";
 import { Container } from "@/components/ui/container";
-import { AdminHeader, LoginForm, redirectSignedInAdmin } from "@/features/admin";
+import { redirectSignedInAdmin } from "@/features/admin";
+import { AdminHeader, LoginForm } from "@/features/admin/ui";
 
 export const metadata: Metadata = { title: "Đăng nhập" };
 

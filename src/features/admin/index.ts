@@ -1,7 +1,4 @@
+// The narrow entry: the session reads and the types, no component. Shop-reachable code (`checkout`, `products`)
+// imports this one; the admin UI is in ui.ts, which only src/app/admin/** imports (audit PR #124 M2).
 export { hasAdminSession, redirectSignedInAdmin, requireAdminPage } from '@/features/admin/cookie'
-export { AdminGate } from '@/features/admin/components/admin-gate'
-export { AdminHeader } from '@/features/admin/components/admin-header'
-export { AdminShell, AdminShellSkeleton } from '@/features/admin/components/admin-shell'
-export { LoginForm } from '@/features/admin/components/login-form'
-export { LogoutButton } from '@/features/admin/components/logout-button'
 export type { AdminConfig, AdminConfigDisabledReason, LoginError, LoginState } from '@/features/admin/types'
