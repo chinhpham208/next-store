@@ -38,6 +38,12 @@ check 'smoke-too-long' 'exit 2' "$(ports SMOKE_PORT=310000)"
 check 'admin-env-shape' '32 44 true true true' "$(bash scripts/verify.sh __admin-env)"
 check 'admin-env-fresh' 'different' "$(a=$(bash -c 'source <(sed -n "/^admin_env()/,/^}/p" scripts/verify.sh); admin_env; echo "$ADMIN_PASSWORD"'); b=$(bash -c 'source <(sed -n "/^admin_env()/,/^}/p" scripts/verify.sh); admin_env; echo "$ADMIN_PASSWORD"'); [ "$a" != "$b" ] && echo different || echo same)"
 
+# Payment side of the same servers (plan M6 Task 6): a secret of at least 32 characters (44 as base64 of 32 bytes), the
+# e2e copy equal, different from the session secret and the password, access public; two runs never share it; the
+# value is never printed (only lengths, equalities and the access word are).
+check 'payment-env-shape' '44 true true true public' "$(bash scripts/verify.sh __payment-env)"
+check 'payment-env-fresh' 'different' "$(a=$(bash -c 'source <(sed -n "/^admin_env()/,/^}/p" scripts/verify.sh); admin_env; echo "$FAKE_PAYMENT_SECRET"'); b=$(bash -c 'source <(sed -n "/^admin_env()/,/^}/p" scripts/verify.sh); admin_env; echo "$FAKE_PAYMENT_SECRET"'); [ "$a" != "$b" ] && echo different || echo same)"
+
 # A port held by someone else is refused and left running.
 BUSY=3189
 node -e "require('net').createServer(() => {}).listen($BUSY, '127.0.0.1')" &
