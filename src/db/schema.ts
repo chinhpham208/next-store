@@ -135,9 +135,19 @@ export const orders = pgTable(
     check('orders_refund_reason_known', sql`${table.refundReason} IS NULL OR ${table.refundReason} IN (${inList(REFUND_REASONS)})`),
     // A refund reason exists exactly when the order needs a refund.
     check('orders_refund_reason_matches_status', sql`(${table.status} = 'needs_refund') = (${table.refundReason} IS NOT NULL)`),
-    // /admin/orders: newest first, optionally one status (ADR-0023).
-    index('orders_created_at_idx').on(table.createdAt.desc(), table.id.desc()),
-    index('orders_status_created_at_idx').on(table.status, table.createdAt.desc()),
+    // The orders column is a JSON array of lines (the Zod schema of the order store is the first line of defence).
+    check('orders_items_is_array', sql`jsonb_typeof(${table.items}) = 'array'`),
+    // /admin/orders: ORDER BY created_at DESC, id DESC (ADR-0023). Postgres reads a bare DESC as DESC NULLS FIRST and
+    // drizzle-kit writes NULLS LAST unless told otherwise, which no such query can use: say nullsFirst() (audit PR #122 M1).
+    index('orders_created_at_idx').on(table.createdAt.desc().nullsFirst(), table.id.desc().nullsFirst()),
+    index('orders_status_created_at_idx').on(
+      table.status,
+      table.createdAt.desc().nullsFirst(),
+      table.id.desc().nullsFirst(),
+    ),
+    // ON DELETE SET NULL runs one UPDATE orders WHERE cart_id = … per deleted cart (cart purge, ADR-0014); without an
+    // index each of them scans the whole table (audit PR #122 M2). Also serves later lookups of orders by cart.
+    index('orders_cart_id_idx').on(table.cartId),
   ],
 )
 
@@ -158,8 +168,15 @@ export const errorEvents = pgTable(
     firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
     lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
   },
-  // /admin/errors and the retention purge scan by age.
-  (table) => [index('error_events_last_seen_at_idx').on(table.lastSeenAt)],
+  (table) => [
+    // Last line of defence behind toErrorReport (ADR-0022): the caps of the fields that are written.
+    check('error_events_route_path_length', sql`char_length(${table.routePath}) <= 200`),
+    check('error_events_error_name_shape', sql`${table.errorName} ~ '^[A-Za-z]{1,40}$'`),
+    check('error_events_digest_shape', sql`${table.digest} IS NULL OR ${table.digest} ~ '^[A-Za-z0-9_-]{1,64}$'`),
+    check('error_events_count_positive', sql`${table.count} >= 1`),
+    // /admin/errors and the retention purge scan by age.
+    index('error_events_last_seen_at_idx').on(table.lastSeenAt),
+  ],
 )
 
 export type Category = typeof categories.$inferSelect

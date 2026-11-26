@@ -107,6 +107,58 @@ describe('orders and error_events (NS-138)', () => {
     )
   })
 
+  it('indexes orders.cart_id, which every cart deletion looks up through ON DELETE SET NULL', async () => {
+    const { rows } = await client.query<{ indexdef: string }>(
+      "SELECT indexdef FROM pg_indexes WHERE indexname = 'orders_cart_id_idx'",
+    )
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.indexdef).toMatch(/\(cart_id\)/)
+  })
+
+  // Audit PR #122 M1: Postgres reads a bare DESC as DESC NULLS FIRST, so an index written NULLS LAST cannot serve
+  // ORDER BY created_at DESC, id DESC.
+  it('the list indexes are DESC (NULLS FIRST), never NULLS LAST', async () => {
+    const { rows } = await client.query<{ indexname: string; indexdef: string }>(
+      "SELECT indexname, indexdef FROM pg_indexes WHERE indexname IN ('orders_created_at_idx', 'orders_status_created_at_idx') ORDER BY indexname",
+    )
+    expect(rows).toHaveLength(2)
+    for (const { indexdef } of rows) expect(indexdef).not.toMatch(/NULLS LAST/)
+    // pg_get_indexdef leaves out NULLS FIRST because it is what DESC means.
+    expect(rows[0]?.indexdef).toMatch(/\(created_at DESC, id DESC\)/)
+    expect(rows[1]?.indexdef).toMatch(/\(status, created_at DESC, id DESC\)/)
+  })
+
+  it('ORDER BY created_at DESC, id DESC LIMIT 50 needs no Sort node, with or without a status', async () => {
+    await client.exec(
+      `INSERT INTO orders (items, total, provider, status, created_at)
+       SELECT '[]'::jsonb, 1000, 'fake', (ARRAY['pending', 'paid', 'cancelled'])[1 + g % 3], now() - g * interval '1 minute'
+       FROM generate_series(1, 3000) g`,
+    )
+    await client.exec('ANALYZE orders')
+    await client.exec('SET enable_seqscan = off; SET enable_bitmapscan = off')
+    try {
+      for (const where of ['', "WHERE status = 'paid'"]) {
+        const { rows } = await client.query<{ 'QUERY PLAN': string }>(
+          `EXPLAIN SELECT id FROM orders ${where} ORDER BY created_at DESC, id DESC LIMIT 50`,
+        )
+        const plan = rows.map((row) => row['QUERY PLAN']).join('\n')
+        expect(plan, where).toMatch(/Index/)
+        expect(plan, where).not.toMatch(/Sort/)
+      }
+    } finally {
+      await client.exec('RESET enable_seqscan; RESET enable_bitmapscan')
+    }
+  })
+
+  it('items must be a JSON array', async () => {
+    for (const items of ['{}', '"x"', '1', 'null']) {
+      expect(
+        await sqlState(() => client.query("INSERT INTO orders (items, total, provider) VALUES ($1::jsonb, 1, 'fake')", [items])),
+        items,
+      ).toBe('23514')
+    }
+  })
+
   it('error_events has no sequence', async () => {
     const { rows } = await client.query<{ n: number }>(
       "SELECT count(*)::int AS n FROM pg_sequences WHERE sequencename LIKE 'error_events%'",
@@ -126,5 +178,25 @@ describe('orders and error_events (NS-138)', () => {
     expect(await sqlState(() => client.query(
       "INSERT INTO error_events (fingerprint, route_type, route_path, method, error_name) VALUES ('f1', 'render', '/app/x', 'GET', 'Error')",
     ))).toBe('23505')
+  })
+
+  it('error_events caps the fields it stores (ADR-0022)', async () => {
+    const insert = (fields: { routePath?: string; errorName?: string; digest?: string | null; count?: number }) =>
+      client.query(
+        `INSERT INTO error_events (fingerprint, route_type, route_path, method, digest, error_name, count)
+         VALUES ($1, 'render', $2, 'GET', $3, $4, $5)`,
+        [randomUUID(), fields.routePath ?? '/app/x', fields.digest ?? null, fields.errorName ?? 'Error', fields.count ?? 1],
+      )
+    expect(await sqlState(() => insert({ routePath: '/'.repeat(200) }))).toBeUndefined()
+    expect(await sqlState(() => insert({ routePath: '/'.repeat(201) }))).toBe('23514')
+    expect(await sqlState(() => insert({ errorName: 'A'.repeat(40) }))).toBeUndefined()
+    expect(await sqlState(() => insert({ errorName: 'A'.repeat(41) }))).toBe('23514')
+    expect(await sqlState(() => insert({ errorName: 'Type Error' }))).toBe('23514')
+    expect(await sqlState(() => insert({ errorName: '' }))).toBe('23514')
+    expect(await sqlState(() => insert({ digest: 'a_B-9'.repeat(12) }))).toBeUndefined()
+    expect(await sqlState(() => insert({ digest: 'a'.repeat(65) }))).toBe('23514')
+    expect(await sqlState(() => insert({ digest: 'ab cd' }))).toBe('23514')
+    expect(await sqlState(() => insert({ digest: '' }))).toBe('23514')
+    expect(await sqlState(() => insert({ count: 0 }))).toBe('23514')
   })
 })

@@ -1,5 +1,5 @@
 {
-  "id": "f01168cd-e639-4862-9caa-732d126b2854",
+  "id": "21906528-8c29-4f83-8802-4bfa37b848ae",
   "prevId": "02b666dd-c128-4e5f-a884-bb4ee6e80a00",
   "version": "7",
   "dialect": "postgresql",
@@ -344,7 +344,24 @@
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
-      "checkConstraints": {},
+      "checkConstraints": {
+        "error_events_route_path_length": {
+          "name": "error_events_route_path_length",
+          "value": "char_length(\"error_events\".\"route_path\") <= 200"
+        },
+        "error_events_error_name_shape": {
+          "name": "error_events_error_name_shape",
+          "value": "\"error_events\".\"error_name\" ~ '^[A-Za-z]{1,40}$'"
+        },
+        "error_events_digest_shape": {
+          "name": "error_events_digest_shape",
+          "value": "\"error_events\".\"digest\" IS NULL OR \"error_events\".\"digest\" ~ '^[A-Za-z0-9_-]{1,64}$'"
+        },
+        "error_events_count_positive": {
+          "name": "error_events_count_positive",
+          "value": "\"error_events\".\"count\" >= 1"
+        }
+      },
       "isRLSEnabled": false
     },
     "public.orders": {
@@ -423,13 +440,13 @@
               "expression": "created_at",
               "isExpression": false,
               "asc": false,
-              "nulls": "last"
+              "nulls": "first"
             },
             {
               "expression": "id",
               "isExpression": false,
               "asc": false,
-              "nulls": "last"
+              "nulls": "first"
             }
           ],
           "isUnique": false,
@@ -450,6 +467,27 @@
               "expression": "created_at",
               "isExpression": false,
               "asc": false,
+              "nulls": "first"
+            },
+            {
+              "expression": "id",
+              "isExpression": false,
+              "asc": false,
+              "nulls": "first"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "orders_cart_id_idx": {
+          "name": "orders_cart_id_idx",
+          "columns": [
+            {
+              "expression": "cart_id",
+              "isExpression": false,
+              "asc": true,
               "nulls": "last"
             }
           ],
@@ -501,6 +539,10 @@
         "orders_refund_reason_matches_status": {
           "name": "orders_refund_reason_matches_status",
           "value": "(\"orders\".\"status\" = 'needs_refund') = (\"orders\".\"refund_reason\" IS NOT NULL)"
+        },
+        "orders_items_is_array": {
+          "name": "orders_items_is_array",
+          "value": "jsonb_typeof(\"orders\".\"items\") = 'array'"
         }
       },
       "isRLSEnabled": false

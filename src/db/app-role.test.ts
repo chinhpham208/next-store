@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { PGlite } from '@electric-sql/pglite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { closeConnection, createConnection, type Connection } from '@/db/client'
@@ -491,5 +493,43 @@ describe('the SQL scripts carry no secrets', () => {
   })
   it('the check script only reads', () => {
     expect(CHECK_SQL.replace(/--[^\n]*/g, '')).not.toMatch(/\b(?:GRANT|REVOKE|ALTER|CREATE|DROP|INSERT|UPDATE|DELETE)\b\s/)
+  })
+})
+
+// Audit PR #122 L2: on Neon the order is the reverse of the describe above. app-role.sql already ran when a migration
+// creates a table and its sequence, so their rights come from ALTER DEFAULT PRIVILEGES alone. orders_id_seq is the
+// first sequence to travel that way.
+describe('a table with a serial created after app-role.sql ran (NS-138)', () => {
+  const copyMigrations = (upTo: number) => {
+    const folder = mkdtempSync(join(tmpdir(), 'ns138-migrations-'))
+    cpSync('drizzle', folder, { recursive: true })
+    const journalPath = join(folder, 'meta', '_journal.json')
+    const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { entries: { idx: number }[] }
+    journal.entries = journal.entries.filter((entry) => entry.idx <= upTo)
+    writeFileSync(journalPath, JSON.stringify(journal))
+    return folder
+  }
+
+  it('lets the app role insert into orders through the default privileges on its sequence', async () => {
+    const { connection, client } = await openDatabase()
+    const before = copyMigrations(3)
+    try {
+      await runMigrations(connection, before)
+      await applyAppRole(client)
+      expect((await client.query("SELECT to_regclass('orders') AS t")).rows).toEqual([{ t: null }])
+      await runMigrations(connection)
+      await asApp(client, async () => {
+        const first = await client.query<{ id: number }>(
+          "INSERT INTO orders (items, total, provider) VALUES ('[]'::jsonb, 1000, 'fake') RETURNING id",
+        )
+        expect(first.rows[0]?.id).toBeTypeOf('number')
+        await client.query("INSERT INTO error_events (fingerprint, route_type, route_path, method, error_name) VALUES ('a', 'render', '/x', 'GET', 'Error')")
+      })
+      expect((await explicitGrants(client, 'orders_id_seq')).sort()).toEqual(['SELECT', 'USAGE'])
+      expect(await check(client)).toEqual(DML_ONLY)
+    } finally {
+      rmSync(before, { recursive: true, force: true })
+      await closeConnection(connection)
+    }
   })
 })

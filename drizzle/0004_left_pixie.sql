@@ -8,7 +8,11 @@ CREATE TABLE "error_events" (
 	"message" text,
 	"count" integer DEFAULT 1 NOT NULL,
 	"first_seen_at" timestamp with time zone DEFAULT now() NOT NULL,
-	"last_seen_at" timestamp with time zone DEFAULT now() NOT NULL
+	"last_seen_at" timestamp with time zone DEFAULT now() NOT NULL,
+	CONSTRAINT "error_events_route_path_length" CHECK (char_length("error_events"."route_path") <= 200),
+	CONSTRAINT "error_events_error_name_shape" CHECK ("error_events"."error_name" ~ '^[A-Za-z]{1,40}$'),
+	CONSTRAINT "error_events_digest_shape" CHECK ("error_events"."digest" IS NULL OR "error_events"."digest" ~ '^[A-Za-z0-9_-]{1,64}$'),
+	CONSTRAINT "error_events_count_positive" CHECK ("error_events"."count" >= 1)
 );
 --> statement-breakpoint
 CREATE TABLE "orders" (
@@ -26,10 +30,12 @@ CREATE TABLE "orders" (
 	CONSTRAINT "orders_total_positive" CHECK ("orders"."total" > 0),
 	CONSTRAINT "orders_status_known" CHECK ("orders"."status" IN ('pending', 'paid', 'needs_refund', 'cancelled')),
 	CONSTRAINT "orders_refund_reason_known" CHECK ("orders"."refund_reason" IS NULL OR "orders"."refund_reason" IN ('out-of-stock', 'amount-mismatch')),
-	CONSTRAINT "orders_refund_reason_matches_status" CHECK (("orders"."status" = 'needs_refund') = ("orders"."refund_reason" IS NOT NULL))
+	CONSTRAINT "orders_refund_reason_matches_status" CHECK (("orders"."status" = 'needs_refund') = ("orders"."refund_reason" IS NOT NULL)),
+	CONSTRAINT "orders_items_is_array" CHECK (jsonb_typeof("orders"."items") = 'array')
 );
 --> statement-breakpoint
 ALTER TABLE "orders" ADD CONSTRAINT "orders_cart_id_carts_id_fk" FOREIGN KEY ("cart_id") REFERENCES "public"."carts"("id") ON DELETE set null ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "error_events_last_seen_at_idx" ON "error_events" USING btree ("last_seen_at");--> statement-breakpoint
-CREATE INDEX "orders_created_at_idx" ON "orders" USING btree ("created_at" DESC NULLS LAST,"id" DESC NULLS LAST);--> statement-breakpoint
-CREATE INDEX "orders_status_created_at_idx" ON "orders" USING btree ("status","created_at" DESC NULLS LAST);
+CREATE INDEX "orders_created_at_idx" ON "orders" USING btree ("created_at" DESC NULLS FIRST,"id" DESC NULLS FIRST);--> statement-breakpoint
+CREATE INDEX "orders_status_created_at_idx" ON "orders" USING btree ("status","created_at" DESC NULLS FIRST,"id" DESC NULLS FIRST);--> statement-breakpoint
+CREATE INDEX "orders_cart_id_idx" ON "orders" USING btree ("cart_id");
