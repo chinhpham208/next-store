@@ -16,9 +16,10 @@ flowchart TB
     subgraph app["src/app — chỉ routing"]
       pages["Pages<br/>Server Components"]
       actions["Server Actions<br/>giỏ hàng, sửa sản phẩm"]
-      route["Route Handler<br/>/api/webhooks/payment"]
+      route["Route Handler<br/>/api/webhooks/payment<br/>(duy nhất, ADR-0021)"]
     end
-    features["src/features — logic nghiệp vụ<br/>products · cart · checkout · orders · blog · admin<br/>(nơi đặt &quot;use cache&quot;)"]
+    instr["instrumentation.ts<br/>onRequestError ghi lỗi server (M6)"]
+    features["src/features — logic nghiệp vụ<br/>products · cart · checkout · orders · monitoring · blog · admin<br/>(nơi đặt &quot;use cache&quot;)"]
     db["src/db — Drizzle ORM"]
   end
 
@@ -28,6 +29,7 @@ flowchart TB
   browser --> proxy --> pages & actions
   payment --> route
   pages & actions & route --> features --> db
+  instr -->|chỉ nodejs, không proxy| features
   proxy -->|registry slug, kiểm phiên admin<br/>qua proxy-api, không DB| features
   db --> pglite
   db -.->|có DATABASE_URL| postgres
@@ -35,7 +37,7 @@ flowchart TB
 
 ## 2. Các miền nghiệp vụ (`src/features`)
 
-Mỗi miền chỉ lộ ra ngoài qua `index.ts`; riêng phần admin của `products` lộ qua `admin.ts`, chỉ `src/app/admin/**` import (audit PR #108 M-1). Mũi tên là "được phép import".
+Mỗi miền chỉ lộ ra ngoài qua `index.ts`; riêng phần admin của `products`, `orders` và `monitoring` lộ qua `admin.ts`, chỉ `src/app/admin/**` import (audit PR #108 M-1; M6: [ADR-0023](./adr/0023-admin-orders-and-password-strength.md)). Mũi tên là "được phép import".
 
 ```mermaid
 flowchart LR
@@ -43,9 +45,13 @@ flowchart LR
   cart --> products
   checkout --> cart
   checkout --> orders
+  checkout --> products
+  checkout --> admin
   orders --> products
+  orders --> admin
   products --> admin
   blog
+  monitoring --> admin
 ```
 
 | Miền | Trách nhiệm | Mốc |
@@ -54,36 +60,40 @@ flowchart LR
 | `blog` | Registry bài viết (`posts.ts`, không import gì), nội dung MDX (`content.ts`), metadata bài viết | M3 |
 | `cart` | Cookie giỏ hàng, thêm / sửa / xoá, kiểm tra tồn kho | M4 |
 | `admin` | Cấu hình và mật khẩu admin, phiên đăng nhập (ký / xác minh cookie HMAC), giới hạn đăng nhập sai, thanh admin; không import miền nào khác. CSP nonce cho `/admin` ([ADR-0018](./adr/0018-admin-auth.md), [ADR-0020](./adr/0020-content-security-policy-and-hsts.md)) | M5 |
-| `checkout` | `PaymentProvider`, tạo phiên thanh toán | M6 |
-| `orders` | Tạo đơn, xử lý webhook, trừ kho, danh sách đơn | M6 |
+| `checkout` | `PaymentProvider`, `FakeProvider`, chữ ký webhook (`signature.ts`), xử lý webhook (`webhook.ts`, gọi `tagsForProductWrite` nên có chiều `checkout → products`), cấu hình fail-closed, cửa thanh toán thử `checkoutAccess` (gọi `hasAdminSession`, nên có chiều `checkout → admin`), Server Action bắt đầu thanh toán, cổng thử nghiệm ([ADR-0021](./adr/0021-payment-orders-and-webhook.md)) | M6 |
+| `orders` | Tạo đơn, áp sự kiện thanh toán, trừ kho, đọc đơn của khách; danh sách đơn cho admin qua `admin.ts`, kiểm phiên bằng `hasAdminSession` (chiều `orders → admin`) ([ADR-0021](./adr/0021-payment-orders-and-webhook.md), [ADR-0023](./adr/0023-admin-orders-and-password-strength.md)) | M6 |
+| `monitoring` | Ghi lỗi server (`onRequestError`) vào `error_events`, không dữ liệu người dùng; danh sách lỗi cho admin qua `admin.ts`; chỉ import `admin` (kiểm phiên ở `admin-queries.ts`), không miền nào khác ([ADR-0022](./adr/0022-error-tracking-and-web-vitals.md)) | M6 |
 
 ## 3. Luồng thanh toán
 
+Chi tiết và lý do: [ADR-0021](./adr/0021-payment-orders-and-webhook.md). Ở Production, `TEST_PAYMENTS_ACCESS` không đặt nên chỉ phiên admin đi hết luồng này; khách thấy "Thanh toán chưa mở.".
+
 ```mermaid
 sequenceDiagram
-  actor K as Khách hàng
+  actor K as Khách hàng (trình duyệt)
   participant A as Server Action<br/>(checkout)
   participant DB as Database
-  participant P as PaymentProvider<br/>(Fake / cổng VN)
+  participant P as FakeProvider<br/>(/checkout/test)
   participant W as Route Handler<br/>/api/webhooks/payment
 
   K->>A: Bấm "Thanh toán"
-  A->>DB: Kiểm tra tồn kho, tạo order (pending)
+  A->>DB: Kiểm tra tồn kho, tạo order (pending, giá chụp vào items)
   A->>P: createCheckout(order)
-  P-->>K: Chuyển tới trang thanh toán
-  K->>P: Trả tiền
-  P->>W: Gửi webhook (có chữ ký)
-  W->>W: verifyWebhook — sai chữ ký thì 400
-  W->>DB: Transaction: order → paid,<br/>trừ kho (stock >= qty), xoá giỏ
+  A-->>K: Chuyển tới /checkout/test?ref=…
+  K->>A: Bấm "Thanh toán thành công" (fakeGatewayAction)
+  A-->>K: Sự kiện đã ký (thân + chữ ký), không ghi DB
+  K->>W: fetch POST sự kiện đã ký
+  W->>W: Thân ≤ 8 KB, verifyWebhook — sai chữ ký thì 400, trước mọi đọc DB
+  W->>DB: Transaction: khoá order theo paymentRef;<br/>không còn pending thì "đã xử lý";<br/>đủ kho: trừ kho (stock >= qty), order → paid, xoá giỏ
   alt kho không đủ
-    W->>DB: order → needs_refund
+    W->>DB: không trừ dòng nào, order → needs_refund, giỏ giữ
   end
-  W->>W: revalidateTag('product:<slug>', 'max')
-  W-->>P: 200 OK
-  P-->>K: Chuyển về /checkout/success
+  W->>W: revalidateTag('product:<slug>' và 'products', 'max')<br/>(cả khi gửi lại đơn đã paid)
+  W-->>K: 200 OK
+  K->>K: Chuyển sang /checkout/success
 ```
 
-`paymentRef` là unique: webhook gửi lặp lại chỉ được xử lý một lần.
+Cổng thật (khi mở bán) tự gọi `/api/webhooks/payment` từ server của nó thay cho bước trình duyệt chuyển tiếp; phần từ `W` trở xuống không đổi. Webhook gửi lặp lại chỉ được xử lý một lần nhờ khoá hàng `orders` và kiểm `status` trong cùng transaction; `paymentRef` unique chỉ giữ một hàng cho một ref. Ở chế độ `public`, `fakeGatewayAction` và `/checkout/test` còn đòi cookie giỏ khớp `orders.cart_id`.
 
 ## 4. Luồng cache
 
@@ -115,6 +125,7 @@ erDiagram
   categories ||--o{ products : "chứa"
   carts ||--o{ cart_items : "gồm"
   products ||--o{ cart_items : "nằm trong"
+  carts ||--o{ orders : "cart_id, SET NULL"
 
   categories {
     serial id PK
@@ -152,16 +163,31 @@ erDiagram
   }
   orders {
     serial id PK
-    json items "snapshot lúc đặt"
-    integer total
+    jsonb items "snapshot lúc đặt"
+    integer total "CHECK > 0"
     text status "pending | paid | needs_refund | cancelled"
+    text refund_reason "out-of-stock | amount-mismatch, chỉ khi needs_refund"
     text provider "fake | payos | ..."
     text payment_ref UK
+    uuid cart_id FK "ON DELETE SET NULL"
     timestamp created_at
+    timestamp updated_at
+  }
+  error_events {
+    text fingerprint PK "SHA-256, không dữ liệu người dùng"
+    text route_type
+    text route_path
+    text method
+    text digest
+    text error_name
+    text message "chỉ thông điệp cố định của dbQuery"
+    integer count
+    timestamp first_seen_at
+    timestamp last_seen_at
   }
 ```
 
-`orders` lưu bản chụp sản phẩm (`items`) thay vì tham chiếu, để đơn cũ không đổi khi giá sản phẩm thay đổi. Bảng `carts`, `cart_items` thêm ở M4; `products.created_at` và `admin_login_failures` (không quan hệ với bảng khác) ở M5 ([ADR-0018](./adr/0018-admin-auth.md), [ADR-0019](./adr/0019-product-edits-and-cache-tags.md)); `orders` ở M6. Khi có tính năng xoá sản phẩm: ẩn bằng `products.archived_at`, không xoá cứng (ADR-0019). Giỏ không lưu giá: luôn dùng giá hiện tại, M6 chụp giá vào `orders.items` lúc tạo đơn ([ADR-0014](./adr/0014-cart-storage-and-cookie.md)).
+`orders` lưu bản chụp sản phẩm (`items`) thay vì tham chiếu, để đơn cũ không đổi khi giá sản phẩm thay đổi. Bảng `carts`, `cart_items` thêm ở M4; `products.created_at` và `admin_login_failures` (không quan hệ với bảng khác) ở M5 ([ADR-0018](./adr/0018-admin-auth.md), [ADR-0019](./adr/0019-product-edits-and-cache-tags.md)); `orders` và `error_events` ở M6 ([ADR-0021](./adr/0021-payment-orders-and-webhook.md), [ADR-0022](./adr/0022-error-tracking-and-web-vitals.md); `error_events` không quan hệ với bảng khác). Khi có tính năng xoá sản phẩm: ẩn bằng `products.archived_at`, không xoá cứng (ADR-0019). Giỏ không lưu giá: luôn dùng giá hiện tại, M6 chụp giá vào `orders.items` lúc tạo đơn ([ADR-0014](./adr/0014-cart-storage-and-cookie.md)).
 
 ## 6. Môi trường và luồng deploy
 

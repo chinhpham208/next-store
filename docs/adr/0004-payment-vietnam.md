@@ -1,6 +1,6 @@
 # ADR-0004: Thanh toán hướng tới cổng Việt Nam, bỏ Stripe
 
-- Trạng thái: Đã chấp nhận
+- Trạng thái: Đã chấp nhận; bổ sung bởi [ADR-0021](./0021-payment-orders-and-webhook.md) (M6: `FakeProvider`, webhook ký chữ ký, bảng `orders` thêm `refund_reason`, `cart_id`, `updated_at`; `needs_refund` không trừ dòng nào)
 - Ngày: 2026-11-19
 - Thay thế một phần: [ADR-0002](./0002-payment-provider.md) (giữ interface `PaymentProvider` và `FakeProvider`; bỏ `StripeProvider`)
 
