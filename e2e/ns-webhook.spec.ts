@@ -73,6 +73,11 @@ test.describe('webhook', { tag: WRITE_TAG }, () => {
     expect(response.status()).toBe(405)
   })
 
+  test('webhook: PUT và DELETE thì 405', async ({ request }) => {
+    expect((await request.put(WEBHOOK, { data: '{}' })).status()).toBe(405)
+    expect((await request.delete(WEBHOOK)).status()).toBe(405)
+  })
+
   test('webhook: đơn không tồn tại thì 200 và không ghi gì', async ({ request }) => {
     test.skip(SECRET === undefined || SECRET === '', NEEDS_SECRET)
     const body = paidEvent()

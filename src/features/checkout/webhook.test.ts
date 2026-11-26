@@ -181,13 +181,26 @@ describe('handlePaymentWebhook', () => {
     expect(revalidateTag).not.toHaveBeenCalled()
   })
 
-  it('revalidates again for a duplicate of a paid order', async () => {
+  it('revalidates again for a duplicate of a paid order within 300 seconds', async () => {
     const order = await orderOf([SHIRT])
     await send(paidBody(order.orderId, order.total))
     vi.mocked(revalidateTag).mockClear()
     const again = await send(paidBody(order.orderId, order.total))
     expect(await json(again)).toEqual({ received: true, outcome: 'duplicate' })
     expect(revalidated()).toEqual(['product:ao-git-push-force', 'products'])
+  })
+
+  it('does not revalidate a duplicate of an order paid more than 300 seconds ago, and the handler now rules the expiry', async () => {
+    const order = await orderOf([SHIRT])
+    await send(paidBody(order.orderId, order.total))
+    vi.mocked(revalidateTag).mockClear()
+    const later = new Date(Date.now() + 301_000)
+    const body = paidBody(order.orderId, order.total)
+    const request = await signedRequest(body, later)
+    // Signed 301 s from now: valid only because the handler's own clock is the one that is read.
+    const again = await handlePaymentWebhook(request, later)
+    expect(await json(again)).toEqual({ received: true, outcome: 'duplicate' })
+    expect(revalidateTag).not.toHaveBeenCalled()
   })
 
   it('answers 503 when applying the event fails, and logs a fixed line only', async () => {

@@ -19,8 +19,8 @@ const reply = (status: number, body: Record<string, string | boolean>): Response
 // recorded so it shows in /admin/errors. An error without a SQLSTATE (dbQuery's message has none) is a broken
 // invariant of ours (stored items invalid, an order that is gone) that will answer 503 for ever: that is the case
 // somebody has to see (audit PR #126 N3). Only the fixed route path goes to the record, never request.url.
-const unavailable = async (error: unknown): Promise<Response> => {
-  console.error('checkout: applying a payment event failed')
+const unavailable = async (error: unknown, line: string): Promise<Response> => {
+  console.error(line)
   await recordHandledError({ routePath: '/api/webhooks/payment', method: 'POST', error })
   return reply(503, { error: 'unavailable' })
 }
@@ -38,12 +38,12 @@ export const handlePaymentWebhook = async (request: Request, now: Date = new Dat
 
   let event
   try {
-    event = await provider.verifyWebhook(request)
+    event = await provider.verifyWebhook(request, now)
   } catch (error) {
     if (error instanceof WebhookRejected) {
       return reply(error.reason === 'too-large' ? 413 : 400, { error: error.reason })
     }
-    return unavailable(error)
+    return unavailable(error, 'checkout: verifying a payment event failed')
   }
 
   try {
@@ -51,6 +51,6 @@ export const handlePaymentWebhook = async (request: Request, now: Date = new Dat
     revalidateProducts(slugs)
     return reply(200, { received: true, outcome })
   } catch (error) {
-    return unavailable(error)
+    return unavailable(error, 'checkout: applying a payment event failed')
   }
 }

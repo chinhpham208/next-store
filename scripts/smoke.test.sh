@@ -572,7 +572,6 @@ echo "ok admin-guard"
 run BASE_URL="http://127.0.0.1:$PORT" -- bash scripts/smoke.sh
 [ "$CODE" = 0 ] || fail webhook-unsigned "webhook đúng: thoát $CODE, cần 0"
 grep -qF 'smoke: POST /api/webhooks/payment (không chữ ký) → 400 unsigned' "$TMP/out" || fail webhook-unsigned "thiếu dòng kết quả"
-! grep -F '"/api/webhooks/payment"' "$TMP/headers" >/dev/null || true
 for mode in not-configured open other-400; do
   start_server "$WEBHOOK_PORT" "$TMP/webhook-headers-$mode" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 "" "" "" "" "" "$mode"
   run BASE_URL="http://127.0.0.1:$WEBHOOK_PORT" -- bash scripts/smoke.sh

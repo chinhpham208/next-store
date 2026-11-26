@@ -472,6 +472,16 @@ describe('applyPaymentEvent', () => {
     expect(await stockOf(SHIRT)).toBe(9)
   })
 
+  it('does not name the products of a duplicate of an order paid more than 300 seconds ago', async () => {
+    await makeCart(CART_A, [{ slug: SHIRT, quantity: 1 }])
+    const { orderId, total } = await orderFor(CART_A, 'fake_reval002')
+    const event = paid(orderId, 'fake_reval002', total)
+    await apply(event)
+    const late = await apply(event, new Date(NOW.getTime() + 300_001))
+    expect(late).toEqual({ outcome: 'duplicate', slugs: [] })
+    expect(await stockOf(SHIRT)).toBe(9)
+  })
+
   it('returns the product slugs for a paid event and for a duplicate of a paid order, and none otherwise', async () => {
     await makeCart(CART_A, [
       { slug: SHIRT, quantity: 1 },
@@ -492,7 +502,7 @@ describe('applyPaymentEvent', () => {
     expect(await slugs(paid(1, 'fake_unknown1', 1))).toEqual([])
   })
 
-  it('revalidates again for a duplicate of a paid order', async () => {
+  it('names the products of a duplicate of a paid order within 300 seconds', async () => {
     await makeCart(CART_A, [{ slug: SHIRT, quantity: 1 }])
     const { orderId, total } = await orderFor(CART_A, 'fake_reval001')
     const event = paid(orderId, 'fake_reval001', total)
@@ -503,6 +513,8 @@ describe('applyPaymentEvent', () => {
     // The caller refreshes the tags of these slugs after every `paid` and every `duplicate` that carries them.
     expect(duplicate).toEqual({ outcome: 'duplicate', slugs: [SHIRT] })
     expect(await stockOf(SHIRT)).toBe(9)
+    const edge = await apply(event, new Date(NOW.getTime() + 300_000))
+    expect(edge).toEqual({ outcome: 'duplicate', slugs: [SHIRT] })
   })
 
   it('throws a database error out instead of swallowing or retrying it (40P01 deadlock)', async () => {
