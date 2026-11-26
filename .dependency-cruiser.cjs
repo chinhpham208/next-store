@@ -33,6 +33,17 @@ module.exports = {
       to: { path: '^src/features/[^/]+/(?!index\\.ts$)', pathNot: '^src/features/(products/admin|admin/ui)\\.ts$' },
     },
     {
+      name: 'stock-only-from-orders',
+      severity: 'error',
+      comment:
+        'products/stock.ts (decrementStockForOrder) is the only stock decrement for orders (audit PR #125 N1, ' +
+        'PR #126 L1): it runs inside the order transaction and never touches the cache, so only ' +
+        'features/orders/store.ts and the tests of products itself may import it. No blanket exemption for products/: a ' +
+        're-export from products/index.ts would hand the function to every feature.',
+      from: { pathNot: ['^src/features/orders/store\\.ts$', '^src/features/products/[^/]+\\.test\\.ts$'] },
+      to: { path: '^src/features/products/stock\\.ts$' },
+    },
+    {
       name: 'products-admin-entry-only-from-admin',
       severity: 'error',
       comment:
@@ -164,11 +175,13 @@ module.exports = {
     {
       name: 'feature-public-api-only-cross',
       severity: 'error',
-      comment: 'One feature may use another only through its index.ts.',
+      comment:
+        'One feature may use another only through its index.ts. The one exception is products/stock.ts, which only ' +
+        'orders/store.ts may import (stock-only-from-orders).',
       from: { path: '^src/features/([^/]+)/' },
       to: {
         path: '^src/features/[^/]+/(?!index\\.ts$)',
-        pathNot: '^src/features/$1/',
+        pathNot: ['^src/features/$1/', '^src/features/products/stock\\.ts$'],
       },
     },
   ],

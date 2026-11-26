@@ -123,3 +123,7 @@ Quyết định 3A, 4A, 11A, 12A, 13A áp như sau.
   - Vitest `listing.test.ts` (`editing a product does not move it in newest`, `US-02: newest stays stable on the seed`) (Task 5).
   - Vitest `actions.test.ts` (`invalidates product:<slug> and products, never product-slugs`, `still invalidates after a timed-out write`, `reports a conflict when the product changed since the form loaded`, `refuses without a session before parsing or touching the database`, `stock edit leaves cart lines untouched`) (Task 9).
   - E2E `US-13: các trang sản phẩm khác không bị render lại` (Task 15); audit Task 13 Step 5.
+
+## Bổ sung (NS-141, audit PR #125 L1 / PR #126 N4): `NEXT_UPDATED_AT` thay `now()`
+
+Mọi chỗ trên ghi `updated_at = now()` cho câu trừ kho (và lưu của admin) nay là `NEXT_UPDATED_AT` trong `src/features/products/updated-at-text.ts`: `greatest(clock_timestamp(), updated_at + interval '1 microsecond')`. `now()` là lúc bắt đầu transaction, nên hai ghi cùng transaction (hoặc cùng một micro giây) lưu cùng giá trị và form admin mở giữa hai lần ghi vẫn lưu được. Giá trị mới luôn lớn hơn giá trị cũ nghiêm ngặt, vẫn so khớp bằng văn bản đến micro giây như 13A.
