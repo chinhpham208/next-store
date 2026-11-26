@@ -1,6 +1,6 @@
 # ADR-0022: Theo dõi lỗi production bằng `onRequestError` và Web Vitals tổng hợp (M6)
 
-- Trạng thái: Đề xuất (chờ chủ dự án duyệt PR)
+- Trạng thái: Đã chấp nhận (PR #120, chủ dự án duyệt 2026-11-26)
 - Ngày: 2026-11-26
 - Quyết định của chủ dự án: 2026-11-26 (plan M6, Cổng 1, quyết định 8, 9, phương án A)
 - Liên quan: [ADR-0005](./0005-hosting.md) (Vercel Hobby, chỉ lên Pro trước khi mở bán), [ADR-0009](./0009-product-404-in-proxy.md) và [ADR-0017](./0017-product-slug-registry-in-proxy.md) (proxy không chạm DB), [ADR-0010](./0010-app-role-and-preview-data.md) (role app chỉ DML), [ADR-0011](./0011-db-query-wrapper.md) (`dbQuery`, thông điệp lỗi cố định), [ADR-0018](./0018-admin-auth.md) (khu admin), [ADR-0023](./0023-admin-orders-and-password-strength.md) (`/admin/errors`), `docs/plans/M6.md` Task 12, 13
