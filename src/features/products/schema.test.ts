@@ -5,7 +5,9 @@ import {
   isProductSlug,
   MAX_QUERY_LENGTH,
   PAGE_SIZE,
+  parseProductEdit,
   parseProductQuery,
+  PRODUCT_EDIT_LIMITS,
   PRODUCT_SORTS,
   type ProductQuery,
 } from './schema'
@@ -359,4 +361,108 @@ describe('buildProductsHref', () => {
       expect(parseProductQuery(fromSearch(new URL(buildProductsHref(query), 'http://x').search))).toEqual(query)
     },
   )
+})
+
+describe('parseProductEdit (M5 Task 9, US-13)', () => {
+  const UPDATED_AT = '2026-11-25T08:00:00.123456Z'
+  const form = (fields: Record<string, string | undefined> = {}) => {
+    const data = new FormData()
+    const values: Record<string, string | undefined> = {
+      slug: 'ao-git-push-force',
+      expectedUpdatedAt: UPDATED_AT,
+      name: 'Áo git push --force',
+      price: '199000',
+      description: 'Áo thun cotton.',
+      stock: '12',
+      ...fields,
+    }
+    for (const [key, value] of Object.entries(values)) if (value !== undefined) data.set(key, value)
+    return data
+  }
+
+  it('reads a valid edit', () => {
+    expect(parseProductEdit(form())).toEqual({
+      ok: true,
+      value: {
+        slug: 'ao-git-push-force',
+        expectedUpdatedAt: UPDATED_AT,
+        name: 'Áo git push --force',
+        price: 199000,
+        description: 'Áo thun cotton.',
+        stock: 12,
+      },
+    })
+  })
+
+  it('has the limits of the plan', () => {
+    expect(PRODUCT_EDIT_LIMITS).toEqual({ nameMax: 120, descriptionMax: 2000, priceMax: 100_000_000, stockMax: 10_000 })
+  })
+
+  it('US-13: a negative price is a field error on price', () => {
+    expect(parseProductEdit(form({ price: '-1' }))).toEqual({ ok: false, fieldErrors: { price: 'negative' } })
+  })
+
+  it.each(['', '   ', '\n\t'])('US-13: an empty or blank name is a field error on name (%j)', (name) => {
+    expect(parseProductEdit(form({ name }))).toEqual({ ok: false, fieldErrors: { name: 'empty' } })
+  })
+
+  it.each(['1.5', '1e3', '', 'abc', '1.000', '0x10', '+5', '١٢'])('refuses %j as a price', (price) => {
+    expect(parseProductEdit(form({ price }))).toEqual({ ok: false, fieldErrors: { price: 'not-integer' } })
+  })
+
+  it('accepts 0 and the maximum price, refuses one more', () => {
+    expect(parseProductEdit(form({ price: '0' })).ok).toBe(true)
+    expect(parseProductEdit(form({ price: '100000000' })).ok).toBe(true)
+    expect(parseProductEdit(form({ price: '100000001' }))).toEqual({ ok: false, fieldErrors: { price: 'too-large' } })
+    expect(parseProductEdit(form({ price: '9'.repeat(400) }))).toEqual({ ok: false, fieldErrors: { price: 'too-large' } })
+  })
+
+  it('refuses a stock of 10001, a negative or a fractional stock', () => {
+    expect(parseProductEdit(form({ stock: '10000' })).ok).toBe(true)
+    expect(parseProductEdit(form({ stock: '10001' }))).toEqual({ ok: false, fieldErrors: { stock: 'too-large' } })
+    expect(parseProductEdit(form({ stock: '-3' }))).toEqual({ ok: false, fieldErrors: { stock: 'negative' } })
+    expect(parseProductEdit(form({ stock: '2.5' }))).toEqual({ ok: false, fieldErrors: { stock: 'not-integer' } })
+  })
+
+  it('trims name and description', () => {
+    const parsed = parseProductEdit(form({ name: '  Áo  ', description: '\n Mô tả \n' }))
+    expect(parsed.ok && parsed.value).toMatchObject({ name: 'Áo', description: 'Mô tả' })
+  })
+
+  it('counts characters, not UTF-16 units, against the limits', () => {
+    expect(parseProductEdit(form({ name: '😀'.repeat(120) })).ok).toBe(true)
+    expect(parseProductEdit(form({ name: 'a'.repeat(121) }))).toEqual({ ok: false, fieldErrors: { name: 'too-long' } })
+    expect(parseProductEdit(form({ description: 'a'.repeat(2001) }))).toEqual({
+      ok: false,
+      fieldErrors: { description: 'too-long' },
+    })
+    expect(parseProductEdit(form({ description: ' ' }))).toEqual({ ok: false, fieldErrors: { description: 'empty' } })
+  })
+
+  it('reports every field error at once', () => {
+    expect(parseProductEdit(form({ name: '', price: '-5', description: '', stock: 'x' }))).toEqual({
+      ok: false,
+      fieldErrors: { name: 'empty', price: 'negative', description: 'empty', stock: 'not-integer' },
+    })
+  })
+
+  it.each([
+    ['a malformed slug', { slug: 'Ao Git' }],
+    ['a missing slug', { slug: undefined }],
+    ['a date without zone', { expectedUpdatedAt: '2026-11-25T08:00:00' }],
+    ['a date that is not a date', { expectedUpdatedAt: '2026-13-45T08:00:00Z' }],
+    ['a missing expectedUpdatedAt', { expectedUpdatedAt: undefined }],
+    ['a missing field', { stock: undefined }],
+    ['a NUL in the name', { name: 'Áo\u0000' }],
+  ])('refuses %s as a form error', (_, fields) => {
+    expect(parseProductEdit(form(fields))).toEqual({ ok: false, fieldErrors: {}, formError: 'invalid' })
+  })
+
+  it('refuses a file or anything but FormData as a form error', () => {
+    const data = form()
+    data.set('name', new Blob(['x']))
+    expect(parseProductEdit(data)).toEqual({ ok: false, fieldErrors: {}, formError: 'invalid' })
+    expect(parseProductEdit({ slug: 'ao-git-push-force' })).toEqual({ ok: false, fieldErrors: {}, formError: 'invalid' })
+    expect(parseProductEdit(null)).toEqual({ ok: false, fieldErrors: {}, formError: 'invalid' })
+  })
 })

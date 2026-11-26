@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { SLUG_PATTERN } from '@/features/products/slug'
+import { isProductSlug, SLUG_PATTERN } from '@/features/products/slug'
 
 export { isProductSlug } from '@/features/products/slug'
 
@@ -102,4 +102,110 @@ export const buildProductsHref = (query: Partial<ProductQuery>) => {
   if (isNonDefaultPage(query.page)) params.set('page', String(query.page))
   const search = params.toString()
   return search ? `/products?${search}` : '/products'
+}
+
+// Admin edit (M5 Task 9, ADR-0019 3A): name, price, description and stock only. Prices are whole đồng.
+export const PRODUCT_EDIT_LIMITS = Object.freeze({
+  nameMax: 120,
+  descriptionMax: 2000,
+  priceMax: 100_000_000,
+  stockMax: 10_000,
+})
+
+export type ProductEditField = 'name' | 'price' | 'description' | 'stock'
+
+// What each field can get wrong; the message for each pair is in edit-messages.ts.
+export type ProductEditErrors = {
+  name: 'empty' | 'too-long'
+  price: 'negative' | 'not-integer' | 'too-large'
+  description: 'empty' | 'too-long'
+  stock: 'negative' | 'not-integer' | 'too-large'
+}
+
+export type ProductEditFieldErrors = { [Field in ProductEditField]?: ProductEditErrors[Field] }
+
+export type ProductEdit = {
+  slug: string
+  // updated_at when the form loaded, UTC to the microsecond (getProductForAdmin): the save is refused when it moved.
+  expectedUpdatedAt: string
+  name: string
+  price: number
+  description: string
+  stock: number
+}
+
+export type ProductEditParse =
+  | { ok: true; value: ProductEdit }
+  | { ok: false; fieldErrors: ProductEditFieldErrors; formError?: 'invalid' }
+
+const FORM_INVALID: ProductEditParse = Object.freeze({ ok: false, fieldErrors: {}, formError: 'invalid' })
+const EDIT_KEYS = ['slug', 'expectedUpdatedAt', 'name', 'price', 'description', 'stock'] as const
+// More digits than this can only be too large: Number() stays exact and cheap below it.
+const MAX_AMOUNT_DIGITS = 15
+
+// Every key a string without NUL (Postgres refuses it in text; FormData values are already well-formed USV
+// strings). A file, a missing key or a NUL is not something the form sends: a form error, not a field error.
+const editText = z.string().refine((value) => !value.includes('\u0000'))
+const editFormSchema = z.object({
+  slug: editText,
+  expectedUpdatedAt: editText,
+  name: editText,
+  price: editText,
+  description: editText,
+  stock: editText,
+})
+const formFieldsSchema = z.object({
+  slug: z.string().refine(isProductSlug),
+  // updated_at as getProductForAdmin writes it (UTC, up to microseconds); Postgres compares it exactly.
+  expectedUpdatedAt: z.iso.datetime(),
+})
+
+const characters = (value: string): number => Array.from(value).length
+
+const textError = (value: string, max: number): 'empty' | 'too-long' | undefined => {
+  if (value.length === 0) return 'empty'
+  return characters(value) > max ? 'too-long' : undefined
+}
+
+// ASCII digits only: "1.5", "1e3", "1.000", "0x10", "+5" and non-ASCII digits are not a whole number of đồng.
+const amount = (raw: string, max: number): { value: number } | { error: 'negative' | 'not-integer' | 'too-large' } => {
+  const value = raw.trim()
+  if (/^-\d+$/.test(value)) return { error: 'negative' }
+  if (!/^\d+$/.test(value)) return { error: 'not-integer' }
+  if (value.length > MAX_AMOUNT_DIGITS || Number(value) > max) return { error: 'too-large' }
+  return { value: Number(value) }
+}
+
+/** The edit form, or what is wrong with it: field errors for what the admin typed, a form error for the rest. */
+export const parseProductEdit = (formData: unknown): ProductEditParse => {
+  if (!(formData instanceof FormData)) return FORM_INVALID
+  const raw = editFormSchema.safeParse(Object.fromEntries(EDIT_KEYS.map((key) => [key, formData.get(key)])))
+  if (!raw.success) return FORM_INVALID
+  const form = formFieldsSchema.safeParse(raw.data)
+  if (!form.success) return FORM_INVALID
+
+  const name = raw.data.name.trim()
+  const description = raw.data.description.trim()
+  const price = amount(raw.data.price, PRODUCT_EDIT_LIMITS.priceMax)
+  const stock = amount(raw.data.stock, PRODUCT_EDIT_LIMITS.stockMax)
+  const fieldErrors: ProductEditFieldErrors = {}
+  const nameError = textError(name, PRODUCT_EDIT_LIMITS.nameMax)
+  if (nameError !== undefined) fieldErrors.name = nameError
+  if ('error' in price) fieldErrors.price = price.error
+  const descriptionError = textError(description, PRODUCT_EDIT_LIMITS.descriptionMax)
+  if (descriptionError !== undefined) fieldErrors.description = descriptionError
+  if ('error' in stock) fieldErrors.stock = stock.error
+  if ('error' in price || 'error' in stock || Object.keys(fieldErrors).length > 0) return { ok: false, fieldErrors }
+
+  return {
+    ok: true,
+    value: {
+      slug: form.data.slug,
+      expectedUpdatedAt: form.data.expectedUpdatedAt,
+      name,
+      price: price.value,
+      description,
+      stock: stock.value,
+    },
+  }
 }
