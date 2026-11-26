@@ -6,6 +6,7 @@ import { useActionState, useEffect, useTransition, type FormEvent, type ReactNod
 import { Button } from '@/components/ui/button'
 import { Input, INPUT_CLASS } from '@/components/ui/input'
 import { cn } from '@/lib/cn'
+import { useHeldTitle } from '@/lib/use-held-title'
 import { updateProductAction } from '@/features/products/actions'
 import {
   PRODUCT_EDIT_HINTS,
@@ -237,6 +238,9 @@ export type ProductEditFormProps = { product: AdminProductForm }
 export const ProductEditForm = ({ product }: ProductEditFormProps) => {
   const [state, dispatch, isPending] = useActionState(submitProductEdit, { result: IDLE, updatedAt: product.updatedAt })
   const [, startTransition] = useTransition()
+  // NS-107 / NS-113: a save re-renders the route in its response (updateTag), so the page keeps its <title> with a
+  // copy until the route's own is back (src/lib/use-held-title.ts).
+  const heldTitle = useHeldTitle(isPending)
 
   // Field errors: focus moves to the first field in error (Gate 2 spec); its description reads the error. No summary
   // is added to the alert.
@@ -253,8 +257,14 @@ export const ProductEditForm = ({ product }: ProductEditFormProps) => {
     event.preventDefault()
     if (isPending) return
     const formData = new FormData(event.currentTarget)
+    heldTitle.hold()
     startTransition(() => dispatch(formData))
   }
 
-  return <ProductEditFormView product={product} state={state} isPending={isPending} action={dispatch} onSubmit={submit} />
+  return (
+    <>
+      {heldTitle.title}
+      <ProductEditFormView product={product} state={state} isPending={isPending} action={dispatch} onSubmit={submit} />
+    </>
+  )
 }

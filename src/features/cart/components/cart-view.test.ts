@@ -1,10 +1,11 @@
 import { readFileSync } from 'node:fs'
-import { createElement } from 'react'
+import { createElement, type FunctionComponent, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { PRODUCT_SEEDS } from '@/db/seed-data'
 import { formatPrice } from '@/lib/format-price'
 import { getCart } from '@/features/cart/queries'
+import { CartProvider } from '@/features/cart/components/cart-provider'
 import { CartSection, CartSkeleton, CartView } from '@/features/cart/components/cart-view'
 import type { CartLine, CartView as CartViewData } from '@/features/cart/types'
 
@@ -44,7 +45,12 @@ const cartOf = (lines: CartLine[]): CartViewData => ({
   total: lines.reduce((sum, item) => sum + item.lineTotal, 0),
 })
 
-const render = (cart: CartViewData): string => renderToStaticMarkup(createElement(CartView, { cart }))
+// The line controls read CartProvider (NS-113), which the (shop) layout puts around every page. Required `children`
+// go through a typed helper, as in cart-ui.test.ts (react/no-children-prop).
+const renderWith = <P extends object>(component: FunctionComponent<P>, props: P): ReactElement =>
+  createElement(component, props)
+const render = (cart: CartViewData): string =>
+  renderToStaticMarkup(renderWith(CartProvider, { children: createElement(CartView, { cart }) }))
 const textOf = (html: string): string => html.replace(/<[^>]*>/g, '')
 const lineHtml = (html: string, slug: string): string =>
   new RegExp(`<li data-cart-line="${slug}"[\\s\\S]*?</li>`).exec(html)?.[0] ?? ''
@@ -206,6 +212,15 @@ describe('CartLineControls', () => {
     expect(source).toMatch(/run\(\(\) => setCartQuantityAction\(/)
     expect(source).toMatch(/run\(\(\) => removeFromCartAction\(/)
     expect(source.match(/await \w+Action\(/g)).toBeNull()
+  })
+
+  // NS-113: the copy of the title is held by CartProvider, not the line (a removed line unmounts with it), from
+  // before the transition, and released once the line action counted inside it has committed.
+  it('holds the page title through CartProvider for every line action', () => {
+    expect(source).toMatch(/holdLineTitle\(\)\s*startTransition\(async \(\) => \{\s*lineActionPending\(\)/)
+    expect(source).not.toContain('useHeldTitle')
+    const provider = readFileSync('src/features/cart/components/cart-provider.tsx', 'utf8')
+    expect(provider).toMatch(/useHeldTitle\(pendingLineActions > 0\)/)
   })
 
   it('moves focus to the next line, or the heading, after a removal', () => {
