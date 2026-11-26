@@ -44,3 +44,4 @@ export {
   type ProductQuery,
   type ProductSort,
 } from '@/features/products/schema'
+export { decrementStockForOrder, type StockDecrement, type StockLine } from '@/features/products/stock'

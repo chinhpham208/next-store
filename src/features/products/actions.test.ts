@@ -7,6 +7,7 @@ import { seed } from '@/db/seed'
 import { PRODUCT_SEEDS } from '@/db/seed-data'
 import { updateProductAction } from '@/features/products/actions'
 import { PRODUCT_SLUGS_TAG, tagsForProductWrite } from '@/features/products/cache-tags'
+import { decrementStockForOrder } from '@/features/products/stock'
 import type { ProductEditState } from '@/features/products/types'
 
 const updateTag = vi.hoisted(() => vi.fn())
@@ -112,6 +113,25 @@ describe('updateProductAction (US-13, ADR-0019)', () => {
     await updateProductAction(IDLE, await edit())
     expect((await rowOf(SLUG)).updatedAt.getTime()).toBeGreaterThanOrEqual(before.updatedAt.getTime())
     expect(await updatedAtOf(SLUG)).not.toBe(before.updatedAt.toISOString())
+  })
+
+  it('an admin form opened before a checkout gets conflict', async () => {
+    // The form is open: it carries the updated_at of this moment.
+    const form = await edit({ stock: '50' })
+    const opened = await rowOf(SLUG)
+    // A checkout decrements the stock while the form is open.
+    const result = await realDbQuery({
+      name: 'products.stock-decrement-test',
+      transaction: (tx) => decrementStockForOrder(tx, [{ productId: opened.id, quantity: 2 }]),
+    })
+    expect(result).toEqual({ ok: true, slugs: [SLUG] })
+    const afterCheckout = await rowOf(SLUG)
+    expect(afterCheckout.stock).toBe(opened.stock - 2)
+
+    expect(await updateProductAction(IDLE, form)).toEqual({ status: 'error', error: 'conflict' })
+    // The stock after the checkout stands: the stale form did not write its 50 over it.
+    expect((await rowOf(SLUG)).stock).toBe(opened.stock - 2)
+    expect(updateTag).not.toHaveBeenCalled()
   })
 
   it('US-13: refuses a negative price with a field error and writes nothing', async () => {
