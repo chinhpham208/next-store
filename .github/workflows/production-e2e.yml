@@ -94,6 +94,8 @@ jobs:
         id: e2e
         env:
           BASE_URL: ${{ env.PRODUCTION_URL }}
+          # Never E2E_ADMIN_PASSWORD (ADR-0018 16A): on Production only the read-only admin specs run, and the secret
+          # in GitHub is the Preview password anyway.
         run: npm run e2e
 
       - name: upload Playwright report

@@ -26,7 +26,13 @@ const CART_CLIENT_FILES = [
   'src/features/cart/components/add-to-cart-form.tsx',
   'src/features/cart/components/cart-line-controls.tsx',
 ]
-const ALLOWED_CLIENT_FILES = ['src/app/(shop)/error.tsx', ...CART_CLIENT_FILES]
+// M5 (ADR-0018, plan M5 Task 7): the login form and the logout button. Task 10 adds product-edit-form.tsx and moves
+// this list to src/client-files.test.ts.
+const ADMIN_CLIENT_FILES = [
+  'src/features/admin/components/login-form.tsx',
+  'src/features/admin/components/logout-button.tsx',
+]
+const ALLOWED_CLIENT_FILES = ['src/app/(shop)/error.tsx', ...CART_CLIENT_FILES, ...ADMIN_CLIENT_FILES]
 
 const listTsx = (dir: string): string[] =>
   readdirSync(dir).flatMap((name) => {
@@ -52,6 +58,16 @@ const isAllowedClientImport = (specifier: string): boolean =>
   /^@\/features\/cart\/(actions|messages|types|limits)$/.test(specifier) ||
   /^@\/features\/cart\/components\/(cart-provider|cart-link|add-to-cart-form|cart-line-controls)$/.test(specifier)
 
+// The admin client files: the same base, the admin action reference and import-free modules, and next/navigation
+// for unstable_rethrow (a redirect from loginAction must reach the router, Gate 2 decision 6).
+const isAllowedAdminClientImport = (specifier: string): boolean =>
+  specifier === 'react' ||
+  specifier === 'next/link' ||
+  specifier === 'next/navigation' ||
+  /^@\/components\/ui\/[a-z-]+$/.test(specifier) ||
+  specifier === '@/lib/cn' ||
+  /^@\/features\/admin\/(actions|messages|types|limits)$/.test(specifier)
+
 const render = (element: ReactElement): string => renderToStaticMarkup(element)
 // Required `children` must sit in props for TypeScript, which react/no-children-prop rejects on a literal
 // createElement call; a typed helper satisfies both (as in ui.test.ts).
@@ -73,6 +89,11 @@ describe('client boundary', () => {
       const source = readFileSync(path, 'utf8')
       expect(source, path).not.toContain('server-only')
       expect(importsOf(source).filter((specifier) => !isAllowedClientImport(specifier)), path).toEqual([])
+    }
+    for (const path of ADMIN_CLIENT_FILES) {
+      const source = readFileSync(path, 'utf8')
+      expect(source, path).not.toContain('server-only')
+      expect(importsOf(source).filter((specifier) => !isAllowedAdminClientImport(specifier)), path).toEqual([])
     }
   })
 

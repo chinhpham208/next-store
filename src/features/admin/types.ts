@@ -7,3 +7,8 @@ export type AdminConfigDisabledReason = 'missing' | 'weak'
 
 /** The two variables the admin area reads; process.env fits it. */
 export type AdminEnv = { ADMIN_PASSWORD?: string; SESSION_SECRET?: string }
+
+/** Why loginAction refused (ADR-0018 8A). A right password never comes back: it redirects. */
+export type LoginError = 'invalid' | 'wrong-password' | 'locked' | 'not-configured' | 'unavailable'
+
+export type LoginState = { status: 'idle' } | { status: 'error'; error: LoginError }

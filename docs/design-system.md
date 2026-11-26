@@ -6,6 +6,7 @@ Nguồn: Designer, ticket NS-24 — **chủ dự án duyệt 2026-11-19**. Bản
 - Màn hình M2 (danh sách, chi tiết, 404, lỗi; 390 / 1280 px, sáng / tối) và đặc tả component M2: https://claude.ai/artifact/MzW3An6ebYKxUjEMT7tuEU — **chủ dự án duyệt 2026-11-20** (Cổng 2, NS-46)
 - Màn hình M3 (blog, bài viết, "Bài viết mới" trên trang chủ, header có "Blog"; 390 / 1280 px, sáng / tối), ảnh Open Graph và nội dung 4 bài: https://claude.ai/artifact/N5Gkua8mA1whwo5PxeHfcX — **chủ dự án duyệt 2026-11-22** (Cổng 2, Task 6 M3)
 - Màn hình M4 (biểu tượng giỏ trên header, nút "Thêm vào giỏ", trang `/cart`; 390 / 1280 px, sáng / tối) và đặc tả component M4: https://claude.ai/artifact/XUBrrWUoY6vpLG1mSaVXMk — **chủ dự án duyệt 2026-11-23** (Cổng 2, Task 2 M4)
+- Màn hình M5 (đăng nhập quản trị, khung admin, /admin/products, /admin/products/<slug>; 390 / 1280 px, sáng / tối) và đặc tả component M5: https://claude.ai/artifact/HtAXc5E24aKcr1DkHM7J8K — **chủ dự án duyệt 2026-11-25** (Cổng 2, Task 2 M5, NS-117)
 
 Brand gốc: bộ nhận diện **Gin Pham — Smile G** (Ink #0C0F12, Deep Cyan #08959A, Signal Cyan #2EE6EA, Paper #E8EEF0, Slate; font Lexend). File này là bản chép để code đọc; khi lệch nhau, artifact là bản gốc.
 
@@ -71,6 +72,9 @@ Link trong bài **chỉ** đặt trên `background` (thân bài không có nền
 
 Bổ sung M4, cặp mới (sáng / tối), đo bằng công thức WCAG 2.2: thông báo lỗi (danger trên background) 5,75 / 8,04; số trên biểu tượng giỏ và Badge (background trên foreground) 17,98 / 16,40; số khi đang chờ (foreground trên background) 17,98 / 16,40; số trong ô số lượng (foreground trên surface) 19,22 / 14,53; "Đơn giá", "Đang cập nhật…" (muted trên background) 6,98 / 7,45; link "Xem giỏ hàng" (link trên background) 4,79 / 5,29; nút vô hiệu (muted trên surface-muted) 6,38 / 5,49. Không phải chữ: viền ô số lượng (border-strong) trên background 4,44 / 4,04, trên surface 4,75 / 3,58; focus ring vẽ vào trong ô số (ring trên surface) 5,13 / 4,68; ring trên surface-muted (nút "Xem sản phẩm" trong giỏ trống, nút − / + khi hover) 4,39 / 3,89; khối con trỏ trên surface-muted 3,11 / 9,19.
 `danger` chỉ dùng cho chữ lỗi vừa xảy ra (`role="alert"`) và ô vuông 8 px đi kèm; không dùng cho tồn kho thấp hay hết hàng.
+
+Bổ sung M5, cặp mới (sáng / tối), đo bằng công thức WCAG 2.2 (`design-work/m5/scripts/contrast_m5.py`): lỗi cạnh ô và lỗi chung (danger trên background) 5,75 / 8,04; gợi ý dưới nhãn, slug, tiêu đề cột, "Đang lưu…" (muted trên background) 6,98 / 7,45; link "Sửa"-breadcrumb "Sản phẩm", "Xem trên cửa hàng" (link trên background) 4,79 / 5,29; chữ gõ trong ô (foreground trên surface) 19,22 / 14,53; nút primary đang gửi (muted trên surface-muted) 6,38 / 5,49. Thanh admin (một theme, dải đảo): inverse-foreground trên inverse 16,40; trên inverse-border (hover "Đăng xuất") 8,73. Không phải chữ: viền ô `aria-invalid` (danger) trên surface 6,15 / 7,12, trên background 5,75 / 8,04; viền ô (border-strong) trên surface 4,75 / 3,58; viền nút "Đăng xuất" (inverse-muted trên inverse) 7,45; focus trên thanh admin (inverse-accent) trên inverse 12,47, trên inverse-border 6,64; ring trên surface 5,13 / 4,68.
+Link nằm trong câu lỗi ("Tải lại trang", "Đăng nhập lại", "Về danh sách sản phẩm") giữ màu `danger` + gạch chân, không dùng `text-link` (không thêm màu thứ ba trong một câu).
 
 ## 2. Component
 
@@ -261,6 +265,37 @@ Bổ sung M4, cặp mới (sáng / tối), đo bằng công thức WCAG 2.2: th�
     - Rồi empty state chuẩn `flex flex-col items-start gap-4 rounded-md bg-surface-muted px-6 py-10 md:p-16`: `.cursor-block size-8`, `<p className="text-xl font-semibold md:text-2xl">Giỏ hàng trống.</p>`, `<p className="text-muted-foreground">Sản phẩm bạn thêm được giữ trong giỏ 30 ngày.</p>` **[Cổng 2 #10]**, `<Link href="/products" className={buttonVariants({ variant: 'primary', className: 'w-full md:w-auto' })}>Xem sản phẩm</Link>`.
   - `CartSkeleton`: `<div aria-busy="true" className="flex flex-col gap-6 md:gap-8"><p className="sr-only">Đang tải…</p>` + `Skeleton h-6 w-24` (dòng đếm). Tiếp theo là `ul aria-hidden="true"` cùng class danh sách, chứa 2 dòng cùng class `li`, mỗi dòng: ảnh `size-20 rounded-md md:size-24`, tên `h-6 w-2/3` (trong hàng `min-h-11 flex items-center`), đơn giá `h-5 w-32`, điều khiển `h-11 w-48 rounded-md`, thành tiền `h-6 w-24`. Cuối cùng là tổng `h-8 w-60` (`md:self-end`).
   - Lỗi tải: `getCart()` ném → `(shop)/error.tsx` M2, không đổi chữ. Header vẫn còn; biểu tượng giỏ không có số.
+
+### Component M5
+
+Khu admin (`src/app/admin/`) nằm ngoài `(shop)`: không header giỏ, không footer cửa hàng, không `CartProvider`. Trang admin dùng `Container`, `Button` / `buttonVariants`, `Input`, `Badge`, `Skeleton`, `StatusMessage` có sẵn; không component UI mới trong `@/components/ui`.
+
+- **AdminShell / thanh admin** (`src/features/admin/components/admin-shell.tsx`, server; nút trong `logout-button.tsx`, `"use client"`) **[Cổng 2 #1]**:
+  - `<header className="border-b border-inverse-border bg-inverse text-inverse-foreground">`: dải đảo Ink giống footer, cùng giá trị ở hai theme; theme tối có viền dưới để tách khỏi nền trang (cũng là Ink). Focus trong thanh dùng `inverse-accent`, cùng cách của footer.
+  - Container + `flex flex-wrap items-center gap-x-8 py-2 sm:h-16 sm:flex-nowrap sm:py-0`, gồm theo thứ tự DOM:
+    1. Tiêu đề: `<p className="flex min-h-11 w-full items-center text-lg/7 font-bold tracking-tight whitespace-nowrap sm:w-auto">Quản trị next-store<CursorBlock className="bg-inverse-accent" /></p>`. Không phải link, không phải heading (mỗi trang có h1 riêng).
+    2. `<nav aria-label="Quản trị" className="-ml-2 flex sm:ml-0">`: link "Sản phẩm" → `/admin/products`, `inline-flex min-h-11 items-center px-2 font-medium underline-offset-8 hover:underline` (như link header cửa hàng). M6 thêm "Đơn hàng" cạnh nó. Không `aria-current` (Server Component không biết đường dẫn; cùng quyết định với header cửa hàng, NS-50).
+    3. `<form action={logoutAction} className="ml-auto">` + `<button type="submit" className="inline-flex min-h-11 items-center justify-center rounded-md border border-inverse-muted px-4 text-sm font-semibold whitespace-nowrap hover:bg-inverse-border">Đăng xuất</button>`.
+  - Dưới `sm` (390 px): hai hàng, cao 105 px kể cả viền: tiêu đề một hàng (`w-full`); hàng dưới "Sản phẩm" trái, "Đăng xuất" phải. Thứ tự DOM = thứ tự nhìn = thứ tự Tab. Từ `sm`: một hàng cao 64 px.
+  - Trang `/admin/login` dùng cùng header nhưng chỉ có tiêu đề và `<nav aria-label="Quản trị" className="-mr-2 ml-auto flex">` với một link "Về cửa hàng" → `/` (một hàng ở mọi bề rộng, cao 61 px). Không link nào khác về cửa hàng trên trang đăng nhập.
+  - `AdminShellSkeleton` (fallback của `<Suspense>` trong `(protected)/layout.tsx`): header chỉ có tiêu đề, không nav, không nút; `main` trống. Không lộ gì của khu admin trước khi kiểm phiên xong.
+
+- **Trang `/admin/login`** (`login/page.tsx`, `login-form.tsx`):
+  - Container `flex flex-col gap-6 pt-10 pb-16 md:gap-8 md:pt-16 md:pb-24` (như `/products`). h1 `text-4xl md:text-5xl font-bold tracking-tight` "Đăng nhập quản trị"; `<p className="max-w-xl text-muted-foreground md:text-lg">Khu quản lý sản phẩm của next-store. Chỉ chủ cửa hàng có mật khẩu.</p>`.
+  - `<form noValidate className="flex max-w-sm flex-col gap-6">` **[Cổng 2 #2]**:
+    - `<div className="flex flex-col gap-2">` gồm `<label htmlFor="admin-password" className="text-sm font-medium">Mật khẩu</label>`, `<Input id="admin-password" name="password" type="password" autoComplete="current-password" required aria-describedby="admin-password-error" aria-invalid={fieldError || undefined} className="aria-invalid:border-danger" />`, rồi `<div role="alert" id="admin-password-error">` (luôn có trong DOM, rỗng khi không lỗi).
+    - `<Button type="submit" aria-disabled={pending || undefined} className="w-full md:w-auto md:self-start">Đăng nhập</Button>`.
+  - Sau form: `<div role="status">`; khi chờ `<p className="flex min-h-11 items-center text-muted-foreground">Đang đăng nhập…</p>`.
+  - Lỗi trong alert: `<p className="flex items-center gap-2 text-sm font-medium text-danger before:size-2 before:shrink-0 before:bg-danger">{loginErrorMessage(error)}</p>`.
+  - `aria-invalid="true"` và focus về ô chỉ với `invalid` và `wrong-password`. `locked`, `not-configured`, `unavailable` không đánh dấu ô (lỗi không nằm ở chữ đã gõ). Ô và nút không bao giờ vô hiệu vì khoá.
+  - Ô giữ chữ đã gõ sau lỗi (không reset form).
+
+- **Nút đang gửi** (đăng nhập, lưu): chữ giữ nguyên; `aria-disabled="true"` khi `pending`, `onSubmit` gọi `preventDefault()` khi đang chờ (không gửi lần hai: đăng nhập lần hai bị đếm, lưu lần hai thành xung đột). Thêm vào Button: `aria-disabled:cursor-not-allowed aria-disabled:border-surface-muted aria-disabled:bg-surface-muted aria-disabled:text-muted-foreground` (cùng hình `disabled` M2). Chỉ form admin dùng; nút "Thêm vào giỏ" M4 giữ quy tắc không vô hiệu khi chờ.
+
+- **Code (Task 7):** dải Ink dùng chung là `AdminHeader` (`src/features/admin/components/admin-header.tsx`, server) với `layout: 'login'` (một hàng, tiêu đề `w-auto`) hoặc `'shell'` (tiêu đề `w-full sm:w-auto`, hai hàng dưới `sm`); `AdminShell` của Task 8 đặt nav "Sản phẩm" và `LogoutButton` vào slot của nó.
+- **Form bắt reject của action** **[Cổng 2 #6]**: `LoginForm` gọi `loginAction` qua một hàm bọc `try/catch`; lỗi chung (mất mạng, 500, id action cũ sau deploy) hiện trong alert dưới ô bằng `LOGIN_NETWORK_ERROR` = "Không kết nối được. Vui lòng tải lại trang và thử lại." (đúng chuỗi `CART_NETWORK_ERROR` M4), không rơi vào error boundary nên ô giữ chữ đã gõ. Redirect của Next.js (đăng nhập đúng) cũng là một reject: `unstable_rethrow` cho nó đi tiếp tới router.
+- Chuỗi của trang đăng nhập (bảng "Văn bản chính xác" của mock, `src/features/admin/messages.ts`): `invalid` "Vui lòng nhập mật khẩu."; `wrong-password` "Mật khẩu không đúng." (US-12, không đổi được); `locked` "Đăng nhập sai quá nhiều lần. Vui lòng thử lại sau 15 phút."; `not-configured` "Khu quản trị chưa được cấu hình."; `unavailable` "Không đăng nhập được lúc này. Vui lòng thử lại."; chờ "Đang đăng nhập…"; title "Đăng nhập · Quản trị".
+- Phần còn lại của đặc tả M5 (`/admin/products`, trang sửa sản phẩm, lỗi / 404 khu admin) chép vào đây ở Task 10.
 
 ### Ảnh Open Graph (1200 × 630, `src/lib/og-image.tsx`)
 

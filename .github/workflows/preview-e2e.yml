@@ -116,6 +116,10 @@ jobs:
           # scripts/redact-report.mjs matches across them.
           FORCE_COLOR: '0'
           NO_COLOR: '1'
+          # ADR-0018 15A: the Preview admin password (Preview and Dev share it; Production's differs and never reaches
+          # GitHub, 16A). Read only by the admin specs of plan M5 Task 14, which also extends the report redaction
+          # below to it; until then no spec types it anywhere.
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
         # A trace records request headers, the bypass header included, and the report below embeds traces.
         # playwright.config.ts already turns tracing off while the bypass is on; e2e/test.ts fails a test that turns it
         # back on.

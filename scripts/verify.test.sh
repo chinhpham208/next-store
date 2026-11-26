@@ -33,6 +33,11 @@ check 'e2e-not-a-number' 'exit 2' "$(ports E2E_PORT=31a0)"
 check 'e2e-zero' 'exit 2' "$(ports E2E_PORT=0)"
 check 'smoke-too-long' 'exit 2' "$(ports SMOKE_PORT=310000)"
 
+# Admin area of the local servers (plan M5 Task 7): fresh values long enough for readAdminConfig, the e2e copies
+# equal, password and secret different, and two runs never share them.
+check 'admin-env-shape' '32 44 true true true' "$(bash scripts/verify.sh __admin-env)"
+check 'admin-env-fresh' 'different' "$(a=$(bash -c 'source <(sed -n "/^admin_env()/,/^}/p" scripts/verify.sh); admin_env; echo "$ADMIN_PASSWORD"'); b=$(bash -c 'source <(sed -n "/^admin_env()/,/^}/p" scripts/verify.sh); admin_env; echo "$ADMIN_PASSWORD"'); [ "$a" != "$b" ] && echo different || echo same)"
+
 # A port held by someone else is refused and left running.
 BUSY=3189
 node -e "require('net').createServer(() => {}).listen($BUSY, '127.0.0.1')" &
