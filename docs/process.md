@@ -17,6 +17,22 @@
 
 Việc DevOps (CI, cấu hình Vercel / Neon, script) là ticket bình thường, do Implementer làm và Reviewer duyệt; thao tác cần tài khoản do chủ dự án làm.
 
+### Chọn model cho subagent (chủ dự án yêu cầu 2026-11-26)
+
+Orchestrator điều phối và kiểm kết quả; giao việc cho subagent theo độ khó:
+
+- **Haiku:** việc máy móc có hướng dẫn rõ: cập nhật ticket YouTrack, đọc log CI và tóm tắt, sửa chữ / tài liệu nhỏ, kiểm tên biến trên trang.
+- **Sonnet:** lập trình theo plan đã có, viết test / E2E, sửa theo audit.
+- **Opus:** Auditor bảo mật, gỡ lỗi khó chưa rõ nguyên nhân, Planner viết plan mốc.
+
+Orchestrator kiểm trước khi merge:
+
+- `scripts/pr-gate.sh` thoát 0 (quy tắc ở mục Cổng merge bên trên).
+- Tự đọc diff ở chỗ quan trọng.
+- Đối chiếu tiêu chí chấp nhận.
+- Đòi bằng chứng: test đỏ rồi xanh, số đo, log preview.
+- PR đụng bảo mật luôn qua Auditor Opus.
+
 ## 2. Vòng đời một mốc
 
 ```

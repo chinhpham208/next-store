@@ -116,6 +116,10 @@ jobs:
           # scripts/redact-report.mjs matches across them.
           FORCE_COLOR: '0'
           NO_COLOR: '1'
+          # ADR-0018 15A: the Preview admin password (Preview and Dev share it; Production's differs and never reaches
+          # GitHub, 16A). Read by the admin specs (e2e/admin.ts), which type it without fill(); the report redaction
+          # below masks it all the same (NS-129, audit PR #105 N1), with the session token of the admin cookie.
+          E2E_ADMIN_PASSWORD: ${{ secrets.E2E_ADMIN_PASSWORD }}
         # A trace records request headers, the bypass header included, and the report below embeds traces.
         # playwright.config.ts already turns tracing off while the bypass is on; e2e/test.ts fails a test that turns it
         # back on.
@@ -124,11 +128,17 @@ jobs:
       # NS-54 (audit PR #61 M1): when a request to the preview fails, Playwright puts every request header, the bypass
       # secret included, into the error message, and so into data/*.md and the zip embedded in index.html. GitHub masks
       # the log, not artifacts. Mask it in every form, then prove nothing is left; otherwise nothing is uploaded.
+      # NS-129: the same for the admin password (a fill step or an error message records it) and, by its shape, the
+      # admin session token (`cookie: __Host-ns_admin=<token>` in a network error, audit PR #106 L3); the report is kept
+      # 7 days and the token is a real session of the preview for 8 hours. One secret per line; an unset one is empty
+      # and left out.
       - name: redact Playwright report
         id: redact
         if: failure() && steps.e2e.outcome == 'failure'
         env:
-          REDACT_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+          REDACT_SECRETS: |
+            ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+            ${{ secrets.E2E_ADMIN_PASSWORD }}
         run: |
           node scripts/redact-report.mjs redact playwright-report/
           node scripts/redact-report.mjs check playwright-report/

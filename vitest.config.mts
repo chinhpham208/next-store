@@ -6,9 +6,10 @@ import { defineConfig } from 'vitest/config'
 const DB_TEST_FILES = [
   'src/db/**/*.test.ts',
   'src/app/sitemap.test.ts',
-  'src/features/products/{detail,listing,queries}.test.ts',
+  'src/features/products/{actions,admin-queries,detail,listing,queries}.test.ts',
   // schema.ts checks slugs with isProductSlug from @/features/products, whose index imports @/db.
   'src/features/cart/{actions,cookie,schema,store}.test.ts',
+  'src/features/admin/{login-limit,login-lock}.test.ts',
 ]
 
 export default defineConfig({

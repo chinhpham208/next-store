@@ -6,7 +6,7 @@ import { db } from '@/db/client'
 import { runMigrations } from '@/db/migrate'
 import { seed } from '@/db/seed'
 import { PRODUCT_SEEDS } from '@/db/seed-data'
-import { getFeaturedProducts, getProductSitemapEntries } from '@/features/products'
+import { getFeaturedProducts, getProductBySlug, getProductSitemapEntries } from '@/features/products'
 
 // cacheTag() throws outside a cacheComponents build (K7); Vitest also ignores 'use cache', so
 // these tests cover the query itself, and the directive's effect is checked by the build (Task 9).
@@ -38,24 +38,33 @@ it('tags the cache entry with products and an hours lifetime', async () => {
   expect(cacheTag).toHaveBeenCalledWith('products')
   expect(cacheLife).toHaveBeenCalledWith('hours')
 })
-it('orders by updatedAt newest first, then id', async () => {
+// NS-120 (ADR-0019 11A): created_at, not updated_at, so an admin edit does not reorder the home page.
+it('orders by createdAt newest first, then id', async () => {
   await seed()
   const featuredSlugs = PRODUCT_SEEDS.filter((product) => product.featured).map((product) => product.slug)
   expect((await getFeaturedProducts()).map((item) => item.slug)).toEqual(featuredSlugs)
 
-  // Restore the original updatedAt afterwards so later tests in this file still see seed order.
+  // Restore the original timestamps afterwards so later tests in this file still see seed order.
   const lastSlug = featuredSlugs.at(-1)
   if (lastSlug === undefined) throw new Error('no featured products in PRODUCT_SEEDS')
-  const [before] = await db.select({ at: products.updatedAt }).from(products).where(eq(products.slug, lastSlug))
+  const [before] = await db
+    .select({ createdAt: products.createdAt, updatedAt: products.updatedAt })
+    .from(products)
+    .where(eq(products.slug, lastSlug))
   if (before === undefined) throw new Error(`seeded product not found: ${lastSlug}`)
   try {
     await db
       .update(products)
       .set({ updatedAt: new Date(Date.now() + 60_000) })
       .where(eq(products.slug, lastSlug))
+    expect((await getFeaturedProducts()).map((item) => item.slug)).toEqual(featuredSlugs)
+    await db
+      .update(products)
+      .set({ createdAt: new Date(Date.now() + 60_000) })
+      .where(eq(products.slug, lastSlug))
     expect((await getFeaturedProducts())[0]?.slug).toBe(lastSlug)
   } finally {
-    await db.update(products).set({ updatedAt: before.at }).where(eq(products.slug, lastSlug))
+    await db.update(products).set(before).where(eq(products.slug, lastSlug))
   }
 })
 
@@ -116,4 +125,16 @@ describe('getFeaturedProducts called with arguments the page never passes (NS-10
     expect(await getFeaturedProducts(8)).toHaveLength(6)
     expect(await Reflect.apply(getFeaturedProducts, undefined, [undefined])).toHaveLength(6)
   })
+})
+
+// ADR-0019: every detail page reads the slug list, so its tag rides up to every /products/<slug> entry. It carries
+// product-slugs, not products, so an admin field edit (updateTag('products')) leaves the other detail pages cached.
+it('getCatalogSlugs is tagged product-slugs, not products', async () => {
+  await seed()
+  vi.mocked(cacheTag).mockClear()
+  vi.mocked(cacheLife).mockClear()
+  // An unknown slug stops at the slug list: getCatalogSlugs is the only cached function this call runs.
+  expect(await getProductBySlug('khong-ton-tai')).toBeNull()
+  expect(vi.mocked(cacheTag).mock.calls).toEqual([['product-slugs']])
+  expect(cacheLife).toHaveBeenCalledWith('hours')
 })

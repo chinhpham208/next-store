@@ -1,6 +1,7 @@
 import { unstable_doesMiddlewareMatch } from 'next/experimental/testing/server'
-import { NextRequest } from 'next/server'
+import { NextRequest, type NextResponse } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { signSession } from '@/features/admin/session'
 import { isPostSlug } from '@/features/blog/proxy-api'
 import { isCatalogSlug } from '@/features/products/proxy-api'
 import { config, proxy } from './proxy'
@@ -29,7 +30,12 @@ const catalogCheck = vi.mocked(isCatalogSlug)
 const postCheck = vi.mocked(isPostSlug)
 const KNOWN_POST = '/blog/chao-mung-den-next-store'
 const KNOWN_PRODUCT = '/products/ao-git-push-force'
-const call = (path: string) => proxy(new NextRequest(`https://shop.test${path}`))
+// Product and blog answers are synchronous (only the admin branch awaits Web Crypto): a Promise here is a failure.
+const syncAnswer = (answer: ReturnType<typeof proxy>): NextResponse => {
+  if (answer instanceof Promise) throw new Error('expected a synchronous answer')
+  return answer
+}
+const call = (path: string) => syncAnswer(proxy(new NextRequest(`https://shop.test${path}`)))
 const NOT_FOUND = 'https://shop.test/_khong-tim-thay'
 
 const isPassThrough = (response: Response) =>
@@ -76,8 +82,9 @@ describe('proxy', () => {
   })
 
   it('answers synchronously: nothing to wait for', () => {
-    expect(call(KNOWN_PRODUCT)).not.toBeInstanceOf(Promise)
-    expect(call('/products/khong-ton-tai')).not.toBeInstanceOf(Promise)
+    for (const path of [KNOWN_PRODUCT, '/products/khong-ton-tai', KNOWN_POST, '/blog/khong-ton-tai']) {
+      expect(proxy(new NextRequest(`https://shop.test${path}`))).not.toBeInstanceOf(Promise)
+    }
   })
 
   it('passes every registry slug through', async () => {
@@ -252,7 +259,7 @@ describe('proxy: open graph image paths', () => {
 // entry (audit NS-96, ADR-0014 (e)).
 describe('proxy: Server Actions and other methods', () => {
   const callWith = (method: string, path: string, headers?: Record<string, string>) =>
-    proxy(new NextRequest(`https://shop.test${path}`, { method, headers }))
+    syncAnswer(proxy(new NextRequest(`https://shop.test${path}`, { method, headers })))
   const ACTION = { 'next-action': '7f3a9c' }
 
   it.each([KNOWN_PRODUCT, '/products/khong-ton-tai', '/products/KHONG-TON-TAI', `${KNOWN_PRODUCT}.rsc`])(
@@ -334,11 +341,360 @@ describe('proxy: Server Actions and other methods', () => {
   })
 })
 
+// US-12 (ADR-0018, plan M5 Task 8): the admin branch runs first, before the Server Action shortcut, and never touches
+// the database (beforeEach makes every query throw; afterEach checks none ran). An optimistic check of the cookie
+// alone (D2): the layout and every admin action check again.
+describe('proxy: admin', () => {
+  // Fake values, test only.
+  const PASSWORD = 'test-admin-password-0123'
+  const SECRET = 'test-session-secret-0123456789abcdef'
+  const COOKIE = '__Host-ns_admin'
+  const LOGIN = 'https://shop.test/admin/login'
+  const ACTION = { 'next-action': '7f3a9c' }
+
+  const admin = async (path: string, init: { method?: string; headers?: Record<string, string> } = {}) =>
+    proxy(new NextRequest(`https://shop.test${path}`, init))
+  const withCookie = (cookie: string, init: { method?: string; headers?: Record<string, string> } = {}) => ({
+    ...init,
+    headers: { ...init.headers, cookie },
+  })
+  const freshToken = () => signSession({ secret: SECRET, now: new Date() })
+
+  const isLoginRedirect = (response: Response) =>
+    response.status === 307 && response.headers.get('location') === LOGIN
+  // Every Set-Cookie of the response, one per entry.
+  const setCookies = (response: Response) => response.headers.getSetCookie()
+  const clears = (response: Response, name: string) =>
+    setCookies(response).some(
+      (line) => line.startsWith(`${name}=;`) && /Max-Age=0|Expires=Thu, 01 Jan 1970/i.test(line) && /Path=\//.test(line),
+    )
+
+  beforeEach(() => {
+    vi.stubEnv('SITE_URL', 'https://shop.test')
+    vi.stubEnv('ADMIN_PASSWORD', PASSWORD)
+    vi.stubEnv('SESSION_SECRET', SECRET)
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('redirects /admin/products without a cookie to /admin/login with 307', async () => {
+    const response = await admin('/admin/products')
+    expect(isLoginRedirect(response)).toBe(true)
+    // Nothing to clear, and no next / returnTo parameter (no open redirect).
+    expect(setCookies(response)).toEqual([])
+    expect(new URL(response.headers.get('location') ?? '').search).toBe('')
+    expect(catalogCheck).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    '/admin',
+    '/admin/',
+    '/admin/products',
+    '/admin/products/ao-git-push-force',
+    '/admin.rsc',
+    '/admin/products.rsc',
+    '/admin/products.segments/_tree.segment.rsc',
+    '/admin/products.segments/_tree.segment',
+    '/admin/products/ao-git-push-force.segments/!KHNyb3RlY3RlZCk/admin/products/$d$slug/__PAGE__.segment.rsc',
+    '/admin.segments/_tree.segment.rsc',
+  ])('redirects GET %s without a session to /admin/login', async (path) => {
+    expect(isLoginRedirect(await admin(path))).toBe(true)
+    expect(isLoginRedirect(await admin(path, { headers: { rsc: '1' } }))).toBe(true)
+  })
+
+  it('treats HEAD like GET', async () => {
+    expect(isLoginRedirect(await admin('/admin/products', { method: 'HEAD' }))).toBe(true)
+  })
+
+  it('redirects with a tampered cookie and clears it', async () => {
+    const token = await freshToken()
+    const tampered = `${token.slice(0, -2)}${token.endsWith('AA') ? 'EA' : 'AA'}`
+    for (const value of [tampered, 'junk', '']) {
+      const response = await admin('/admin/products', withCookie(`${COOKIE}=${value}`))
+      expect(isLoginRedirect(response)).toBe(true)
+      expect(clears(response, COOKIE)).toBe(true)
+    }
+  })
+
+  it('clears both cookie names when the request carries both', async () => {
+    const response = await admin('/admin/products', withCookie(`${COOKIE}=junk; ns_admin=junk; ns_cart=keep`))
+    expect(isLoginRedirect(response)).toBe(true)
+    expect(clears(response, COOKIE)).toBe(true)
+    expect(clears(response, 'ns_admin')).toBe(true)
+    // The __Host- prefix needs Secure and Path=/ on the deleting Set-Cookie too, or the browser ignores it.
+    const host = setCookies(response).find((line) => line.startsWith(`${COOKIE}=`)) ?? ''
+    expect(host).toMatch(/; Secure/i)
+    expect(host).not.toMatch(/Domain=/i)
+    // Only admin cookies are touched.
+    expect(setCookies(response).some((line) => line.startsWith('ns_cart='))).toBe(false)
+  })
+
+  it('redirects with an expired cookie', async () => {
+    const nineHoursAgo = new Date(Date.now() - 9 * 60 * 60 * 1000)
+    const expired = await signSession({ secret: SECRET, now: nineHoursAgo })
+    const response = await admin('/admin/products', withCookie(`${COOKIE}=${expired}`))
+    expect(isLoginRedirect(response)).toBe(true)
+    expect(clears(response, COOKIE)).toBe(true)
+  })
+
+  it('redirects with a token signed by another secret', async () => {
+    const foreign = await signSession({ secret: 'other-session-secret-0123456789abcdef', now: new Date() })
+    expect(isLoginRedirect(await admin('/admin/products', withCookie(`${COOKIE}=${foreign}`)))).toBe(true)
+  })
+
+  it.each([
+    '/admin/login',
+    '/admin/login.rsc',
+    '/admin/login.segments/_tree.segment',
+    '/admin/login.segments/_tree.segment.rsc',
+    '/admin/login.segments/__PAGE__.segment.rsc',
+  ])('lets %s through without a cookie', async (path) => {
+    expect(isPassThrough(await admin(path))).toBe(true)
+    expect(isPassThrough(await admin(path, withCookie(`${COOKIE}=junk`)))).toBe(true)
+  })
+
+  it('lets /admin/login and its RSC forms through without a cookie, for the login action too', async () => {
+    expect(isPassThrough(await admin('/admin/login', { method: 'POST', headers: ACTION }))).toBe(true)
+    expect(isPassThrough(await admin('/admin/login.rsc', { headers: { rsc: '1' } }))).toBe(true)
+  })
+
+  it('lets a valid session through', async () => {
+    const cookie = `${COOKIE}=${await freshToken()}`
+    for (const path of ['/admin', '/admin/products', '/admin/products/ao-git-push-force', '/admin/products.rsc']) {
+      const response = await admin(path, withCookie(cookie))
+      expect(isPassThrough(response), path).toBe(true)
+      expect(setCookies(response)).toEqual([])
+    }
+    expect(isPassThrough(await admin('/admin/products', withCookie(cookie, { method: 'POST', headers: ACTION })))).toBe(
+      true,
+    )
+    expect(catalogCheck).not.toHaveBeenCalled()
+  })
+
+  it('checks the admin session before the Server Action shortcut', async () => {
+    // Before Task 8 this request went straight on: POST + next-action skipped every check (NS-103).
+    const response = await admin('/admin/products/x', { method: 'POST', headers: ACTION })
+    expect(response.status).toBe(401)
+    expect(isPassThrough(response)).toBe(false)
+  })
+
+  it('answers 401 to a Server Action on an admin page without a session', async () => {
+    for (const path of ['/admin', '/admin/products', '/admin/products/ao-git-push-force', '/admin/products.rsc']) {
+      for (const cookie of [undefined, `${COOKIE}=junk`]) {
+        const init = { method: 'POST', headers: cookie === undefined ? ACTION : { ...ACTION, cookie } }
+        const response = await admin(path, init)
+        expect(response.status, path).toBe(401)
+        expect(response.headers.get('location')).toBeNull()
+        expect(response.headers.get('x-middleware-next')).toBeNull()
+        expect(await response.text()).toBe('')
+      }
+    }
+  })
+
+  // Audit PR #106 L2 / M1 (a): the 401 clears a junk or stale cookie like the 307 does, so the next GET (the stale
+  // tab sent to /admin/login by LogoutButton) carries no broken cookie.
+  it('clears the admin cookies on a 401, like the 307', async () => {
+    const expired = await signSession({ secret: SECRET, now: new Date(Date.now() - 9 * 60 * 60 * 1000) })
+    for (const value of ['junk', expired]) {
+      for (const init of [{ method: 'POST', headers: ACTION }, { method: 'PUT' }]) {
+        const response = await admin('/admin/products/x', withCookie(`${COOKIE}=${value}; ns_admin=junk; ns_cart=keep`, init))
+        expect(response.status).toBe(401)
+        expect(clears(response, COOKIE)).toBe(true)
+        expect(clears(response, 'ns_admin')).toBe(true)
+        const host = setCookies(response).find((line) => line.startsWith(`${COOKIE}=`)) ?? ''
+        expect(host).toMatch(/; Secure/i)
+        expect(setCookies(response).some((line) => line.startsWith('ns_cart='))).toBe(false)
+        expect(await response.text()).toBe('')
+      }
+    }
+    // Nothing to clear without a cookie.
+    expect(setCookies(await admin('/admin/products', { method: 'POST', headers: ACTION }))).toEqual([])
+  })
+
+  it.each(['POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'])('answers 401 to %s without a session', async (method) => {
+    const response = await admin('/admin/products', { method })
+    expect(response.status).toBe(401)
+    expect(response.headers.get('location')).toBeNull()
+  })
+
+  it('does not touch the database for /admin', async () => {
+    const cookie = `${COOKIE}=${await freshToken()}`
+    await admin('/admin/products')
+    await admin('/admin/products', withCookie(cookie))
+    await admin('/admin/products', { method: 'POST', headers: ACTION })
+    await admin('/admin/login')
+    expect(database.imported).toBe(false)
+    expect(database.query).not.toHaveBeenCalled()
+  })
+
+  it('closes /admin when SESSION_SECRET is missing', async () => {
+    const cookie = `${COOKIE}=${await freshToken()}`
+    vi.stubEnv('SESSION_SECRET', '')
+    const response = await admin('/admin/products', withCookie(cookie))
+    expect(isLoginRedirect(response)).toBe(true)
+    expect(clears(response, COOKIE)).toBe(true)
+    expect((await admin('/admin/products', withCookie(cookie, { method: 'POST', headers: ACTION }))).status).toBe(401)
+    // The login page stays reachable: it says the area is not configured.
+    expect(isPassThrough(await admin('/admin/login'))).toBe(true)
+  })
+
+  it('closes /admin when ADMIN_PASSWORD is missing', async () => {
+    const cookie = `${COOKIE}=${await freshToken()}`
+    vi.stubEnv('ADMIN_PASSWORD', '')
+    expect(isLoginRedirect(await admin('/admin/products', withCookie(cookie)))).toBe(true)
+  })
+
+  // Audit PR #104 L4: if a router ever decoded escapes or folded case, these would read as admin pages. The proxy
+  // guards them like one, and never takes them for the login page.
+  it.each([
+    '/%61dmin/products',
+    '/admin%2Fproducts',
+    '/Admin/products',
+    '/ADMIN',
+    '/%61dmin/login',
+    '/Admin/login',
+    '/admin/%6Cogin',
+    '/admin%2Flogin',
+  ])('guards the non-canonical spelling %s like an admin page', async (path) => {
+    expect(isLoginRedirect(await admin(path))).toBe(true)
+    expect((await admin(path, { method: 'POST', headers: ACTION })).status).toBe(401)
+    expect(catalogCheck).not.toHaveBeenCalled()
+    expect(postCheck).not.toHaveBeenCalled()
+  })
+
+  it('never logs', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const plain = vi.spyOn(console, 'log').mockImplementation(() => {})
+    await admin('/admin/products', withCookie(`${COOKIE}=junk`))
+    await admin('/admin/products', { method: 'POST', headers: ACTION })
+    await admin('/admin/products', withCookie(`${COOKIE}=${await freshToken()}`))
+    for (const spy of [info, warn, plain]) expect(spy).not.toHaveBeenCalled()
+  })
+
+  it('leaves product and blog answers as they were', () => {
+    expect(isPassThrough(call(KNOWN_PRODUCT))).toBe(true)
+    expect(isNotFound(call('/products/khong-ton-tai'))).toBe(true)
+    expect(isPassThrough(call(KNOWN_POST))).toBe(true)
+  })
+})
+
+describe('proxy: admin CSP (ADR-0020)', () => {
+  // Fake values, test only.
+  const SECRET = 'test-session-secret-0123456789abcdef'
+  const NONCE_SOURCE = /'nonce-([A-Za-z0-9+/]{22}==)'/
+
+  beforeEach(() => {
+    vi.stubEnv('SITE_URL', 'https://shop.test')
+    vi.stubEnv('ADMIN_PASSWORD', 'test-admin-password-0123')
+    vi.stubEnv('SESSION_SECRET', SECRET)
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  const admin = async (path: string, init: { method?: string; headers?: Record<string, string> } = {}) =>
+    proxy(new NextRequest(`https://shop.test${path}`, init))
+  // NextResponse.next({ request: { headers } }) hands the new request headers to Next.js this way (Next.js 16.4.6,
+  // server/web/spec-extension/response.js; read back in server/lib/router-utils/resolve-routes.js).
+  const requestCsp = (response: Response) =>
+    (response.headers.get('x-middleware-override-headers') ?? '').split(',').includes('content-security-policy')
+      ? response.headers.get('x-middleware-request-content-security-policy')
+      : null
+  const responseCsp = (response: Response) => response.headers.get('content-security-policy')
+  const nonceOf = (policy: string | null) => NONCE_SOURCE.exec(policy ?? '')?.[1]
+
+  it('sets a fresh nonce CSP on admin requests and responses', async () => {
+    const cookie = `__Host-ns_admin=${await signSession({ secret: SECRET, now: new Date() })}`
+    const answers = [
+      await admin('/admin/login'),
+      await admin('/admin/login'),
+      await admin('/admin/login', { method: 'POST', headers: { 'next-action': '7f3a9c' } }),
+      await admin('/admin/products', { headers: { cookie } }),
+      await admin('/admin/products/ao-git-push-force', { headers: { cookie } }),
+    ]
+    const nonces = answers.map((response) => {
+      expect(isPassThrough(response)).toBe(true)
+      // The same policy on both sides: Next.js puts the request's nonce on its scripts, the browser enforces the
+      // response's.
+      expect(requestCsp(response)).toBe(responseCsp(response))
+      expect(responseCsp(response)).toMatch(/script-src 'self' 'nonce-[^']+' 'strict-dynamic'/)
+      expect(responseCsp(response)).not.toContain("'unsafe-inline'")
+      return nonceOf(responseCsp(response))
+    })
+    for (const nonce of nonces) expect(nonce).toBeDefined()
+    expect(new Set(nonces).size).toBe(nonces.length)
+  })
+
+  it('keeps the other request headers when it sets the CSP', async () => {
+    const response = await admin('/admin/login', { headers: { cookie: 'ns_cart=keep', 'x-forwarded-for': '203.0.113.9' } })
+    const overridden = (response.headers.get('x-middleware-override-headers') ?? '').split(',')
+    expect(overridden).toEqual(expect.arrayContaining(['cookie', 'x-forwarded-for', 'content-security-policy']))
+    expect(response.headers.get('x-middleware-request-cookie')).toBe('ns_cart=keep')
+    expect(response.headers.get('x-middleware-request-x-forwarded-for')).toBe('203.0.113.9')
+  })
+
+  // A client-sent CSP request header must never decide the nonce Next.js uses.
+  it('replaces a CSP request header sent by the client', async () => {
+    const response = await admin('/admin/login', {
+      headers: { 'content-security-policy': "script-src 'nonce-AAAAAAAAAAAAAAAAAAAAAA=='" },
+    })
+    expect(nonceOf(requestCsp(response))).not.toBe('AAAAAAAAAAAAAAAAAAAAAA==')
+    expect(requestCsp(response)).toBe(responseCsp(response))
+  })
+
+  it('sets no nonce CSP on the 307 and the 401', async () => {
+    for (const response of [
+      await admin('/admin/products'),
+      await admin('/admin/products', { method: 'POST', headers: { 'next-action': '7f3a9c' } }),
+    ]) {
+      expect(isPassThrough(response)).toBe(false)
+      expect(responseCsp(response)).toBeNull()
+    }
+  })
+
+  it.each([
+    KNOWN_PRODUCT,
+    KNOWN_POST,
+    `${KNOWN_PRODUCT}.rsc`,
+    '/products/khong-ton-tai',
+    `${KNOWN_PRODUCT}/opengraph-image-16g1u1`,
+  ])('never sets a nonce CSP for shop pages: %s', (path) => {
+    for (const init of [{}, { method: 'POST', headers: { 'next-action': '7f3a9c' } }]) {
+      const response = syncAnswer(proxy(new NextRequest(`https://shop.test${path}`, init)))
+      expect(responseCsp(response)).toBeNull()
+      expect(requestCsp(response)).toBeNull()
+      expect(response.headers.get('x-middleware-override-headers')).toBeNull()
+    }
+  })
+})
+
 describe('config.matcher', () => {
   it('is a constant list, so Next.js can analyse it statically', () => {
     expect(config).toEqual({
-      matcher: ['/products/:slug', '/products/:slug/:image', '/blog/:slug', '/blog/:slug/:image'],
+      matcher: ['/admin', '/admin/:path*', '/products/:slug', '/products/:slug/:image', '/blog/:slug', '/blog/:slug/:image'],
     })
+  })
+
+  it.each([
+    '/admin',
+    '/admin/',
+    '/admin.rsc',
+    '/admin.segments/_tree.segment.rsc',
+    '/admin/login',
+    '/admin/login.rsc',
+    '/admin/login.segments/_tree.segment.rsc',
+    '/admin/products',
+    '/admin/products.rsc',
+    '/admin/products/ao-git-push-force',
+    '/admin/products/ao-git-push-force.segments/_tree.segment.rsc',
+  ])('runs the proxy for the admin path %s', (url) => {
+    expect(unstable_doesMiddlewareMatch({ config, url })).toBe(true)
+  })
+
+  it.each(['/administrator', '/admins', '/admin-x', '/products/admin/x/y'])('leaves %s alone', (url) => {
+    expect(unstable_doesMiddlewareMatch({ config, url })).toBe(false)
   })
 
   it.each([

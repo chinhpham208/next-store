@@ -30,9 +30,16 @@ test('NS-105: only the reviewed Server Functions are exposed', () => {
     .map((entry) => `${entry.filename} ${entry.exportedName.startsWith('$$RSC_SERVER_CACHE_') ? "'use cache'" : entry.exportedName}`)
     .sort()
   expect(exposed).toEqual([
+    // M5 Task 7 (ADR-0018): loginAction checks the config, the input and the lock before the password; logoutAction
+    // only clears the cookie.
+    'src/features/admin/actions.ts loginAction',
+    'src/features/admin/actions.ts logoutAction',
     'src/features/cart/actions.ts addToCartAction',
     'src/features/cart/actions.ts removeFromCartAction',
     'src/features/cart/actions.ts setCartQuantityAction',
+    // M5 Task 9 (ADR-0019, ADR-0018): checks the admin session first, then parses with Zod, then one conditional
+    // UPDATE; src/admin-session-checks.test.ts holds the order.
+    'src/features/products/actions.ts updateProductAction',
     ...Array<string>(7).fill("src/features/products/queries.ts 'use cache'"),
   ])
 })

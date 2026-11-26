@@ -3,6 +3,7 @@
 import { useOptimistic, useRef, useState, useTransition, type FocusEvent, type FormEvent } from 'react'
 import { QuantityStepper } from '@/components/ui/quantity-stepper'
 import { removeFromCartAction, setCartQuantityAction } from '@/features/cart/actions'
+import { useCartOptimism } from '@/features/cart/components/cart-provider'
 import { MAX_LINE_QUANTITY } from '@/features/cart/limits'
 import { CART_NETWORK_ERROR, cartErrorMessage } from '@/features/cart/messages'
 import type { CartActionResult } from '@/features/cart/types'
@@ -54,6 +55,9 @@ export const CartLineControls = ({ slug, name, quantity, stock, lineTotal }: Car
   // What the customer is typing, until Enter or blur; null when not typing.
   const [draft, setDraft] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // NS-113: /cart keeps its <title> while the line's action re-renders the route. CartProvider holds the copy, so
+  // it outlives a removed line (src/lib/use-held-title.ts).
+  const { holdLineTitle, lineActionPending } = useCartOptimism()
 
   const shown = draft ?? sent
   const inputId = `quantity-${slug}`
@@ -65,7 +69,9 @@ export const CartLineControls = ({ slug, name, quantity, stock, lineTotal }: Car
   const run = (write: () => Promise<CartActionResult>, removes: boolean, next?: number) => {
     setError(null)
     const neighbour = removes ? neighbourOf(rootRef.current) : null
+    holdLineTitle()
     startTransition(async () => {
+      lineActionPending()
       if (next !== undefined) setSent(String(next))
       // A refusal comes back as a result; only a network failure, a 500 or a stale action id after a deploy rejects
       // (D5). Caught here, it shows on the line instead of reaching (shop)/error.tsx (D6).

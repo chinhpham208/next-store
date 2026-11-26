@@ -1,0 +1,74 @@
+import 'server-only'
+import { cookies } from 'next/headers'
+import { redirect } from 'next/navigation'
+import { connection } from 'next/server'
+import { readAdminConfig } from '@/features/admin/config'
+import { type AdminCookieName, adminCookieNameFor } from '@/features/admin/cookie-name'
+import { ADMIN_SESSION_TTL_SECONDS, signSession, verifySession } from '@/features/admin/session'
+import { getSiteUrl } from '@/lib/site-url'
+
+// The only file in the app that reads or writes the admin cookie (ADR-0018 6A, conventions.md §1); the proxy reads
+// it through proxy-api.ts. Never logs the cookie or a config value.
+
+const LOGIN_PATH = '/admin/login'
+const HOME_PATH = '/admin/products'
+
+type AdminCookieOptions = { httpOnly: true; sameSite: 'strict'; path: '/'; secure: boolean; maxAge: number }
+
+const isSecureSite = (): boolean => getSiteUrl().protocol === 'https:'
+
+// Same rule as the proxy (cookie-name.ts): __Host-ns_admin on an https site, ns_admin on http.
+export const adminCookieName = (): AdminCookieName => adminCookieNameFor(getSiteUrl())
+
+// Strict: a request started from another site never carries it (CSRF, ADR-0018 7A). maxAge equals the absolute TTL
+// inside the token; the token, not the browser, decides validity.
+export const adminCookieOptions = (): AdminCookieOptions => ({
+  httpOnly: true,
+  sameSite: 'strict',
+  path: '/',
+  secure: isSecureSite(),
+  maxAge: ADMIN_SESSION_TTL_SECONDS,
+})
+
+/** A valid session cookie under the current scheme's name. A disabled config closes the area: always false. */
+export const hasAdminSession = async (): Promise<boolean> => {
+  // The request first, the config after (audit PR #105 M1): reading env first returned before any dynamic API when
+  // the build had no ADMIN_PASSWORD / SESSION_SECRET (CI), so "no session" was prerendered into /admin/login and a
+  // requireAdminPage redirect would be baked into every admin page. Read this way, the route is dynamic whatever
+  // the build env. cookies() alone does not keep new Date() out of a prerender (blocking-prerender-current-time, as
+  // the cart's NS-104): the clock is read only after connection().
+  const token = (await cookies()).get(adminCookieName())?.value
+  await connection()
+  const config = readAdminConfig()
+  if (!config.enabled) return false
+  return verifySession({ token, secret: config.sessionSecret, now: new Date() })
+}
+
+/** Only in a Server Action, after the password matched. A disabled config throws: never a session without a secret. */
+export const writeAdminSession = async (): Promise<void> => {
+  const config = readAdminConfig()
+  if (!config.enabled) throw new Error('admin: not configured')
+  const token = await signSession({ secret: config.sessionSecret, now: new Date() })
+  ;(await cookies()).set(adminCookieName(), token, adminCookieOptions())
+}
+
+/** Only in a Server Action. Needs no valid session and no config: logging out always works. */
+export const clearAdminSession = async (): Promise<void> => {
+  // Same attributes as when it was set, or the browser keeps the __Host- cookie. No maxAge: the cookie library would
+  // turn it into an expiry in the future and undo the deletion.
+  const { httpOnly, sameSite, path, secure } = adminCookieOptions()
+  ;(await cookies()).delete({ name: adminCookieName(), httpOnly, sameSite, path, secure })
+}
+
+/**
+ * The first statement of every page under (protected) (audit PR #106 H1): no session → /admin/login. A second
+ * layer behind the proxy (plan M5 D2, D5); in a layout it does not keep the page from rendering.
+ */
+export const requireAdminPage = async (): Promise<void> => {
+  if (!(await hasAdminSession())) redirect(LOGIN_PATH)
+}
+
+/** For /admin/login: an admin who is already signed in has nothing to do there (plan M5 Task 7). */
+export const redirectSignedInAdmin = async (): Promise<void> => {
+  if (await hasAdminSession()) redirect(HOME_PATH)
+}

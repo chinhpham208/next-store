@@ -1,3 +1,5 @@
+// The shop's entry of products. The admin part (edit form, admin table, admin reads, edit messages) is in admin.ts,
+// which only src/app/admin/** imports (audit PR #108 M-1).
 export {
   getAllProductSlugs,
   getCategories,
@@ -25,7 +27,12 @@ export {
   type ProductDetailViewProps,
   type ProductPurchase,
 } from '@/features/products/components/product-detail'
-export type { CategoryOption, ProductDetail, ProductListing, ProductSummary } from '@/features/products/types'
+export type {
+  CategoryOption,
+  ProductDetail,
+  ProductListing,
+  ProductSummary,
+} from '@/features/products/types'
 export {
   buildProductsHref,
   DEFAULT_PRODUCT_QUERY,

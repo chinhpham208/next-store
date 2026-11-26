@@ -36,50 +36,61 @@ export const titleGaps = (page: Page): Promise<string[]> =>
   })
 
 /**
- * Holds back the row of every Server Action response that carries the route's <title> for `delayMs`, and passes
- * everything else on as it arrives. The server streams that row last (the head's metadata, Next.js 16.4.6); on a
- * loaded server it comes in a later network chunk than the rest of the tree, which is when the title went missing
- * (NS-107, 2 of 8 runs). This makes that order happen on every run. Install before the page loads; it wraps
- * window.fetch, which the App Router uses for Server Actions.
+ * Holds back the row of every Server Action response that carries the route's <title> for `delayMs` after the rest
+ * of the body has arrived, and passes every other row on as it arrives. The server streams that row late (the
+ * head's metadata, Next.js 16.4.6); on a loaded server it comes in a later network chunk than the rest of the tree,
+ * which is when the title went missing (NS-107, 2 of 8 runs). This makes that order happen on every run, also on
+ * /cart, where the cart's own rows stream after the title row (NS-113): only the title row waits, so the tree can
+ * commit without it. Install before the page loads; it wraps window.fetch, which the App Router uses for Server
+ * Actions.
  */
 export const delayActionTitleRow = async (page: Page, delayMs: number): Promise<void> => {
   await page.addInitScript((delay) => {
-    // A row starts a line; `buffered` itself starts a line, since only whole lines are passed on.
-    const TITLE_ROW = /(?:^|\n)([0-9a-f]+:\[\["\$","title")/
+    const TITLE_ROW = /^[0-9a-f]+:\[\["\$","title"/
     const realFetch = window.fetch.bind(window)
+    const countHeld = (change: number) =>
+      Reflect.set(window, '__heldTitleRows', Number(Reflect.get(window, '__heldTitleRows') ?? 0) + change)
     window.fetch = async (input, init) => {
       const response = await realFetch(input, init)
       if (!new Headers(init?.headers).has('next-action') || response.body === null) return response
       const reader = response.body.getReader()
       const decoder = new TextDecoder()
       const encoder = new TextEncoder()
-      let held = false
-      let buffered = ''
+      let heldRow: string | null = null
+      // The last line, until its end arrives: a row may be cut between two chunks.
+      let partial = ''
+      // Each pull reads until it has something to pass on or the body ends: a pull that enqueues nothing is not
+      // called again (Streams spec: only a read that arrives during the pull asks for another), and the page waits.
       const body = new ReadableStream<Uint8Array>({
         async pull(controller) {
-          const { done, value } = await reader.read()
-          if (done) {
-            if (held) await new Promise((resolve) => setTimeout(resolve, delay))
-            controller.enqueue(encoder.encode(buffered + decoder.decode()))
-            controller.close()
-            if (held) Reflect.set(window, '__heldTitleRows', Number(Reflect.get(window, '__heldTitleRows')) - 1)
+          for (;;) {
+            const { done, value } = await reader.read()
+            if (done) {
+              const rest = partial + decoder.decode()
+              if (heldRow !== null) {
+                if (rest !== '') controller.enqueue(encoder.encode(rest))
+                await new Promise((resolve) => setTimeout(resolve, delay))
+                controller.enqueue(encoder.encode(heldRow))
+                countHeld(-1)
+              } else if (rest !== '') controller.enqueue(encoder.encode(rest))
+              controller.close()
+              return
+            }
+            const lines = (partial + decoder.decode(value, { stream: true })).split('\n')
+            partial = lines.pop() ?? ''
+            const passed = lines
+              .filter((line) => {
+                if (heldRow !== null || !TITLE_ROW.test(line)) return true
+                heldRow = `${line}\n`
+                countHeld(1)
+                return false
+              })
+              .map((line) => `${line}\n`)
+              .join('')
+            if (passed === '') continue
+            controller.enqueue(encoder.encode(passed))
             return
           }
-          buffered += decoder.decode(value, { stream: true })
-          if (held) return
-          const match = TITLE_ROW.exec(buffered)
-          if (match === null) {
-            // A row may be cut between two chunks: keep the last line back until the next one arrives.
-            const lastLine = buffered.lastIndexOf('\n')
-            controller.enqueue(encoder.encode(buffered.slice(0, lastLine + 1)))
-            buffered = buffered.slice(lastLine + 1)
-            return
-          }
-          const rowStart = match.index + match[0].length - (match[1]?.length ?? 0)
-          controller.enqueue(encoder.encode(buffered.slice(0, rowStart)))
-          buffered = buffered.slice(rowStart)
-          held = true
-          Reflect.set(window, '__heldTitleRows', Number(Reflect.get(window, '__heldTitleRows') ?? 0) + 1)
         },
       })
       return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers })

@@ -2,7 +2,7 @@
 # Chạy kiểm tra của next-store, chịu được giới hạn ~180 giây mỗi lệnh shell của agent.
 #
 #   bash scripts/verify.sh quick   # typecheck, lint, check:deps, unit test
-#   bash scripts/verify.sh full    # quick + build + smoke + e2e (nếu đã có)
+#   bash scripts/verify.sh full    # quick + build + check:bundle + smoke + e2e (nếu đã có)
 #   bash scripts/verify.sh wait    # đợi tiếp lần chạy đang dở
 #
 # Chạy nền, ghi log vào .verify/<thời gian>.log. Mỗi lần gọi đợi tối đa VERIFY_WAIT giây (mặc định 160).
@@ -95,7 +95,8 @@ ports_free() {
 pipeline() {
   local mode=$1
   local steps=(typecheck lint check:deps test)
-  [ "$mode" = full ] && steps+=(build smoke e2e)
+  # check:bundle right after build: reads .next (audit PR #108 M-1, scripts/check-admin-bundle.mjs).
+  [ "$mode" = full ] && steps+=(build check:bundle smoke e2e)
   for s in "${steps[@]}"; do
     if ! has_script "$s"; then echo "::skip $s (chưa có script)"; continue; fi
     if [ "$s" = smoke ] || [ "$s" = e2e ]; then
@@ -137,10 +138,22 @@ wait_result() {
 
 resolve_ports || exit 2
 
+# Admin area for the local servers of smoke and e2e (ADR-0018, plan M5 Task 7): fresh fake values for every run,
+# never printed and never written to a file. playwright.config.ts hands them to its server; the specs log in with
+# E2E_ADMIN_PASSWORD (Task 14). Exported only into the background run, so the developer's shell keeps its own.
+admin_env() {
+  local password secret
+  password=$(node -e "process.stdout.write(require('crypto').randomBytes(24).toString('base64'))") || return 1
+  secret=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('base64'))") || return 1
+  export ADMIN_PASSWORD=$password SESSION_SECRET=$secret E2E_ADMIN_PASSWORD=$password E2E_SESSION_SECRET=$secret
+}
+
 case "${1:-}" in
-  __run) pipeline "$2" > "$3" 2>&1; echo $? > "$STATE_DIR/exit" ;;
+  __run) { admin_env && pipeline "$2"; } > "$3" 2>&1; echo $? > "$STATE_DIR/exit" ;;
   # Test hooks for scripts/verify.test.sh.
   __ports) echo "SMOKE_PORT=$SMOKE_PORT E2E_PORTS=${E2E_PORTS[*]}" ;;
+  # Lengths and equalities only, never the values.
+  __admin-env) admin_env && node -e "const e = process.env; console.log([e.ADMIN_PASSWORD.length, e.SESSION_SECRET.length, e.ADMIN_PASSWORD === e.E2E_ADMIN_PASSWORD, e.SESSION_SECRET === e.E2E_SESSION_SECRET, e.ADMIN_PASSWORD !== e.SESSION_SECRET].join(' '))" ;;
   __ports-free) ports_free ;;
   __own) shift; in_own_group "$@" ;;
   __stop-stale) stop_own_group ;;
