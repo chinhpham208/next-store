@@ -156,3 +156,7 @@ Phương án được chọn, chép nguyên văn từ plan:
   - `npm run check:bundle` (`scripts/check-route-handlers.mjs`) sau `next build`: danh sách route handler đúng allowlist, có webhook.
   - `scripts/smoke.sh`: `webhook-unsigned` (POST không chữ ký → 400, mọi môi trường kể cả Production), `checkout-gated` (khi `robots.txt` là `Allow: /`).
   - Audit toàn mốc (plan M6 Task 15) đọc lại thuật toán áp sự kiện và bốn lối vào của cửa thanh toán thử.
+
+## Bổ sung (NS-141, audit PR #125 L1 / PR #126 N4): `updated_at` của câu trừ kho
+
+Bước 5 ở trên đặt `updated_at = NEXT_UPDATED_AT` (`greatest(clock_timestamp(), updated_at + interval '1 microsecond')`), không phải `now()`; xem bổ sung cùng ngày của [ADR-0019](./0019-product-edits-and-cache-tags.md). Thêm: `createPendingOrder` trả `too-large` khi tổng vượt int4 (2147483647) và ném khi `items` không qua `orderItemsSchema`, cả hai trước `INSERT` (audit PR #126 L2, L3).

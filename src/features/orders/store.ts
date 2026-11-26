@@ -1,7 +1,7 @@
 import 'server-only'
 import { and, asc, eq, gte, isNull, sql } from 'drizzle-orm'
 import { cartItems, carts, dbQuery, orders, products } from '@/db'
-import { parseOrderItems } from '@/features/orders/schema'
+import { parseOrderItems, paymentRefSchema } from '@/features/orders/schema'
 import { decrementStockForOrder, type StockLine } from '@/features/products/stock'
 import type { ApplyOutcome, CreateOrderError, OrderItem, PaymentEvent, PaymentProviderId } from '@/features/orders/types'
 
@@ -12,9 +12,19 @@ import type { ApplyOutcome, CreateOrderError, OrderItem, PaymentEvent, PaymentPr
 // function, so the webhook answers 503 and the gateway sends the event again. Applying is idempotent (the row lock
 // and the status check share one transaction), so a resend is safe; a write that timed out may or may not have
 // committed (ADR-0011), which is why nothing here retries (audit PR #122 L1).
+//
+// dbQuery replaces the message of any error thrown in a transaction. One with a SQLSTATE (40P01, 22003, a timeout)
+// is the database's and a resend can fix it; one WITHOUT a code is a broken invariant of ours (stored items invalid,
+// an order that is not there) and will 503 on every resend until a human looks (audit PR #126 N3, Task 8 and 12).
+//
+// Lock order: applyPaymentEvent locks orders, then deletes cart_items. The cart purge and evict delete carts, which
+// cascades to cart_items and sets orders.cart_id to NULL: the reverse order. A purge of this very cart during a
+// payment can deadlock (40P01); the webhook answers 503, the gateway resends, and the purge swallows its own error.
 
 const STORED_ITEMS_INVALID = 'orders: stored items are invalid'
 const REF_NOT_ATTACHED = 'orders: payment ref not attached'
+// The largest value of orders.total (int4); audit PR #126 L2.
+const MAX_ORDER_TOTAL = 2_147_483_647
 
 type CreatePendingOrderInput = { cartId: string; liveSince: Date; provider: PaymentProviderId; now: Date }
 
@@ -71,6 +81,11 @@ export const createPendingOrder = async ({
       }))
       const total = items.reduce((sum, item) => sum + item.lineTotal, 0)
       if (total === 0) return { ok: false, error: 'zero-total' }
+      // 20 lines x 10 x 100.000.000 overflows int4: a domain error here, not a 22003 from the INSERT (audit PR #126 L2).
+      if (total > MAX_ORDER_TOTAL) return { ok: false, error: 'too-large' }
+      // Read back through the schema before it is stored: an order the webhook could never parse would be paid and
+      // then stuck pending forever (audit PR #126 L3). Throwing rolls the transaction back, so nothing is written.
+      if (parseOrderItems(items) === undefined) throw new Error(STORED_ITEMS_INVALID)
 
       const [created] = await tx
         .insert(orders)
@@ -85,6 +100,8 @@ type AttachPaymentRefInput = { orderId: number; paymentRef: string; now: Date }
 
 /** Sets the gateway's ref on a pending order that has none; any other order is a bug, so it throws a fixed message. */
 export const attachPaymentRef = async ({ orderId, paymentRef, now }: AttachPaymentRefInput): Promise<void> => {
+  // A ref outside the shape getOrderByRef accepts could never be looked up again (audit PR #126 N2).
+  if (!paymentRefSchema.safeParse(paymentRef).success) throw new Error(REF_NOT_ATTACHED)
   const updated = await dbQuery({
     name: 'orders.attach-ref',
     run: (db) =>

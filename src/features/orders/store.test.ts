@@ -1,3 +1,4 @@
+import { readFile } from 'node:fs/promises'
 import { count, eq } from 'drizzle-orm'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cartItems, carts, orders, products } from '@/db'
@@ -5,6 +6,7 @@ import { db } from '@/db/client'
 import { runMigrations } from '@/db/migrate'
 import { seed } from '@/db/seed'
 import { PRODUCT_SEEDS } from '@/db/seed-data'
+import { orderItemsSchema } from '@/features/orders/schema'
 import { applyPaymentEvent, attachPaymentRef, createPendingOrder } from '@/features/orders/store'
 import type { PaymentEvent } from '@/features/orders/types'
 
@@ -106,11 +108,12 @@ beforeEach(async () => {
   await db.delete(carts)
   await seed()
   // A known stock for the products used here, whatever the seed says.
-  for (const slug of [SHIRT, MUG]) {
-    // seed() keeps rows that exist, so a price changed by an earlier test is put back here.
-    const seeded = PRODUCT_SEEDS.find((product) => product.slug === slug)
-    if (seeded === undefined) throw new Error(`no seed product ${slug}`)
-    await db.update(products).set({ price: seeded.price, stock: 10 }).where(eq(products.slug, slug))
+  for (const seeded of PRODUCT_SEEDS) {
+    // seed() keeps rows that exist, so what an earlier test changed is put back here.
+    await db
+      .update(products)
+      .set({ price: seeded.price, stock: 10, name: seeded.name })
+      .where(eq(products.slug, seeded.slug))
   }
 })
 
@@ -204,6 +207,42 @@ describe('createPendingOrder', () => {
     expect(await orderCount()).toBe(0)
   })
 
+  it('refuses a total above int4 with too-large, before the INSERT (audit PR #126 L2)', async () => {
+    // 3 lines x 10 x 100.000.000 = 3.000.000.000 > 2.147.483.647.
+    const slugs = PRODUCT_SEEDS.slice(0, 3).map((product) => product.slug)
+    for (const slug of slugs) await db.update(products).set({ price: 100_000_000, stock: 10 }).where(eq(products.slug, slug))
+    await makeCart(
+      CART_A,
+      slugs.map((slug) => ({ slug, quantity: 10 })),
+    )
+    expect(await create(CART_A)).toEqual({ ok: false, error: 'too-large' })
+    expect(await orderCount()).toBe(0)
+    // Two lines (2.000.000.000) still fit.
+    await db.delete(cartItems).where(eq(cartItems.productId, (await productOf(slugs[2] ?? '')).id))
+    expect((await create(CART_A)).ok).toBe(true)
+  })
+
+  it('throws and writes no order when the snapshot would not pass orderItemsSchema (audit PR #126 L3)', async () => {
+    await db.update(products).set({ name: 'x'.repeat(201) }).where(eq(products.slug, SHIRT))
+    await makeCart(CART_A, [{ slug: SHIRT, quantity: 1 }])
+    await expect(create(CART_A)).rejects.toThrow('database query failed: orders.create')
+    expect(await orderCount()).toBe(0)
+  })
+
+  it('the schema bounds cover the limits of the cart and of the product edit form', async () => {
+    // orders must not import cart or the admin entry of products, so the limits are read from their source files.
+    const limit = async (file: string, name: string) => {
+      const match = new RegExp(`${name}\\s*[=:]\\s*(\\d+)`).exec(await readFile(file, 'utf8'))
+      if (match?.[1] === undefined) throw new Error(`no ${name} in ${file}`)
+      return Number(match[1])
+    }
+    const maxQuantity = await limit('src/features/cart/limits.ts', 'MAX_LINE_QUANTITY')
+    const maxLines = await limit('src/features/cart/limits.ts', 'MAX_CART_LINES')
+    const nameMax = await limit('src/features/products/schema.ts', 'nameMax')
+    const item = { productId: 1, slug: 'a', name: 'n'.repeat(nameMax), price: 1, quantity: maxQuantity, lineTotal: maxQuantity }
+    expect(orderItemsSchema.safeParse(Array.from({ length: maxLines }, () => item)).success).toBe(true)
+  })
+
   it('two checkouts of one cart create two pending orders', async () => {
     // Recorded behaviour, not a promise (plan M6 "Cố ý không làm" 4): the second order simply never gets paid.
     await makeCart(CART_A, [{ slug: SHIRT, quantity: 1 }])
@@ -220,6 +259,18 @@ describe('attachPaymentRef', () => {
     await makeCart(CART_A, [{ slug: SHIRT, quantity: 1 }])
     const { orderId } = await orderFor(CART_A, 'fake_attach01')
     expect((await orderRow(orderId)).paymentRef).toBe('fake_attach01')
+  })
+
+  it('refuses a ref outside the shape getOrderByRef accepts (audit PR #126 N2)', async () => {
+    await makeCart(CART_A, [{ slug: SHIRT, quantity: 1 }])
+    const result = await create(CART_A)
+    if (!result.ok) throw new Error('order not created')
+    for (const paymentRef of ['short', 'has space1', 'x'.repeat(65), "a'b'c'd'e'f'g"]) {
+      await expect(attachPaymentRef({ orderId: result.orderId, paymentRef, now: NOW })).rejects.toThrow(
+        'orders: payment ref not attached',
+      )
+    }
+    expect((await orderRow(result.orderId)).paymentRef).toBeNull()
   })
 
   it('throws a fixed message for an order that already has a ref or is not pending', async () => {

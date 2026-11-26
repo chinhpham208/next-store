@@ -24,7 +24,7 @@ export type OrderItem = {
   lineTotal: number
 }
 
-export type CreateOrderError = 'missing-cart' | 'empty' | 'over-stock' | 'out-of-stock' | 'zero-total'
+export type CreateOrderError = 'missing-cart' | 'empty' | 'over-stock' | 'out-of-stock' | 'zero-total' | 'too-large'
 
 /**
  * What applying a payment event did. `duplicate`: the order was no longer pending, nothing was written. `ignored`:
