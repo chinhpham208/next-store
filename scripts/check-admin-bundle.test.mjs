@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { afterEach, test } from 'node:test'
-import { bundleProblems } from './check-admin-bundle.mjs'
+import { adminShellProblems, bundleProblems } from './check-admin-bundle.mjs'
 
 const EDIT_ID = '60aa'.padEnd(42, '0')
 const LOGIN_ID = '40bb'.padEnd(42, '0')
@@ -61,4 +61,51 @@ test('shop HTML that loads the form chunk is reported', () => {
 
 test('a build where the check would be vacuous is reported', () => {
   assert.ok(bundleProblems(build({ editPage: false })).some((p) => p.includes('xanh vì rỗng')))
+})
+
+// Check 3 (ADR-0020, NS-133): every /admin route renders per request, so every script carries the proxy's nonce.
+const EMPTY = { response: 'empty', htmlSize: 0 }
+const SHELL = { response: 'initial', htmlSize: 9247 }
+const prerender = ({ routes = {}, dynamicRoutes = {}, redirectStatus = 307 } = {}) => {
+  const root = mkdtempSync(join(tmpdir(), 'admin-shell-'))
+  dirs.push(root)
+  const manifest = {
+    routes: { '/admin': { response: 'complete', htmlSize: 12344 }, '/admin/login': EMPTY, '/admin/products': EMPTY, '/': SHELL, ...routes },
+    dynamicRoutes: { '/admin/products/[slug]': EMPTY, '/admin/[...rest]': EMPTY, '/products/[slug]': SHELL, ...dynamicRoutes },
+  }
+  put(root, 'prerender-manifest.json', JSON.stringify(manifest))
+  put(root, 'server/app/admin.meta', JSON.stringify({ status: redirectStatus, headers: { location: '/admin/products' } }))
+  return root
+}
+
+test('admin routes without a static shell, and the /admin redirect, have no problems', () => {
+  assert.deepEqual(adminShellProblems(prerender()), [])
+})
+
+test('an admin page with a prerendered shell is reported', () => {
+  const problems = adminShellProblems(prerender({ routes: { '/admin/orders': SHELL } }))
+  assert.deepEqual(problems.length, 1, problems.join('\n'))
+  assert.ok(problems[0].startsWith('/admin/orders có vỏ prerender'), problems.join('\n'))
+})
+
+test('a dynamic admin route with a fallback shell, or a static one, is reported', () => {
+  const problems = adminShellProblems(
+    prerender({ dynamicRoutes: { '/admin/orders/[id]': SHELL }, routes: { '/admin/help': { response: 'complete', htmlSize: 800 } } }),
+  )
+  assert.ok(problems.some((p) => p.startsWith('/admin/orders/[id] có vỏ prerender')), problems.join('\n'))
+  assert.ok(problems.some((p) => p.startsWith('/admin/help có vỏ prerender')), problems.join('\n'))
+})
+
+test('/admin is allowed only as a 307 redirect', () => {
+  const problems = adminShellProblems(prerender({ redirectStatus: 200 }))
+  assert.ok(problems.some((p) => p.startsWith('/admin có vỏ prerender')), problems.join('\n'))
+})
+
+test('a manifest without the admin routes, or without the catch-all, is reported', () => {
+  const root = prerender()
+  put(root, 'prerender-manifest.json', JSON.stringify({ routes: {}, dynamicRoutes: {} }))
+  const problems = adminShellProblems(root)
+  for (const route of ['/admin/login', '/admin/products', '/admin/[...rest]']) {
+    assert.ok(problems.some((p) => p.includes(route) && p.includes('xanh vì rỗng')), problems.join('\n'))
+  }
 })

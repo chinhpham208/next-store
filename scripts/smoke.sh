@@ -608,10 +608,16 @@ done
 # ADR-0020 (plan M5 Task 12): the admin pages run under the proxy's nonce policy ('strict-dynamic', no 'unsafe-inline'),
 # with a fresh nonce on each request, and every <script> Next.js rendered carries it: a prerendered admin shell would
 # not (audit PR #105 L3), and its form would never hydrate. On Vercel the baseline of next.config.ts may come as a
-# second CSP header; the browser enforces both, so only the nonce policy is looked for here.
+# second CSP header; the browser enforces both, so only the nonce policy is looked for here. How many CSP headers
+# came, and each value, is printed for the log of e2e-preview / release-smoke (audit M5 L4, NS-133): one or two are
+# both safe (audit PR #110), none fails. A nonce is single-use and public in the HTML anyway, so printing it leaks nothing.
 ADMIN_NONCES=()
 expect_admin_csp() { # expect_admin_csp <html> <response-headers-file> <label>
-  local html=$1 dump=$2 label=$3 policy nonce scripts with_nonce
+  local html=$1 dump=$2 label=$3 policy nonce scripts with_nonce csp_count
+  csp_count=$(tr -d '\r' < "$dump" | grep -ci '^content-security-policy:' || true)
+  echo "smoke: GET /admin/login${label:+ ($label)} → $csp_count header content-security-policy"
+  tr -d '\r' < "$dump" | grep -i '^content-security-policy:' | sed 's/^[^:]*: */smoke:   content-security-policy: /' || true
+  if [ "$csp_count" -lt 1 ]; then admin_fail "GET /admin/login${label:+ ($label)} không có header content-security-policy nào"; return 0; fi
   policy=$(tr -d '\r' < "$dump" | grep -i '^content-security-policy:' | grep -E "script-src 'self' 'nonce-[A-Za-z0-9+/]{22}==' 'strict-dynamic'" | tail -n 1 || true)
   if [ -z "$policy" ]; then admin_fail "GET /admin/login${label:+ ($label)} không có CSP nonce 'strict-dynamic' (ADR-0020)"; return 0; fi
   if [[ $policy == *"'unsafe-inline'"* ]]; then admin_fail "GET /admin/login${label:+ ($label)}: CSP nonce có 'unsafe-inline'"; return 0; fi
