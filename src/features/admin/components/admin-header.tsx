@@ -16,7 +16,7 @@ export const AdminHeader = ({ layout, children }: AdminHeaderProps) => (
   <header className="border-b border-inverse-border bg-inverse text-inverse-foreground [--color-ring:var(--color-inverse-accent)]">
     <Container
       className={cn(
-        'flex items-center gap-x-8 py-2 sm:h-16 sm:flex-nowrap sm:py-0',
+        'flex items-center gap-x-2 py-2 sm:h-16 sm:flex-nowrap sm:gap-x-8 sm:py-0',
         layout === 'shell' ? 'flex-wrap' : 'flex-nowrap',
       )}
     >

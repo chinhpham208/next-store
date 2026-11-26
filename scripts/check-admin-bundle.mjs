@@ -15,7 +15,8 @@
 //      htmlSize 0), tức là render theo request (ƒ) và mọi <script> mang nonce của proxy. Vỏ prerender (○ hay ◐ có
 //      HTML) mang script không nonce: dưới CSP nonce của /admin trình duyệt chặn hết, trang không hydrate (audit PR
 //      #105 L3, audit M5 L1). Ngoại lệ duy nhất: /admin, redirect tĩnh có .meta status 307 (trình duyệt theo Location,
-//      không render HTML). Không xanh vì rỗng: /admin/login, /admin/products và catch-all /admin/[...rest] phải có.
+//      không render HTML). Không xanh vì rỗng: /admin/login, /admin/products, /admin/errors (M6) và catch-all
+//      /admin/[...rest] phải có.
 // Mã thoát: 0 = sạch, 1 = có lỗi (in từng dòng), 2 = thiếu bản build.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative, sep } from 'node:path'
@@ -34,7 +35,7 @@ const walk = (dir) =>
 const posix = (path) => path.split(sep).join('/')
 
 // The admin routes that must be in the manifest, so check 3 cannot pass on an empty one.
-const REQUIRED_ADMIN_ROUTES = ['/admin/login', '/admin/products', '/admin/[...rest]']
+const REQUIRED_ADMIN_ROUTES = ['/admin/login', '/admin/products', '/admin/errors', '/admin/[...rest]']
 const STATIC_REDIRECT = { route: '/admin', meta: 'server/app/admin.meta', status: 307 }
 const isAdminRoute = (route) => route === '/admin' || route.startsWith('/admin/')
 

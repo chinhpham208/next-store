@@ -906,7 +906,11 @@ describe('the admin area holds only checked route files (audit PR #106 H1, re-au
     const imports = importDeclarations(file).map((statement) =>
       ts.isStringLiteral(statement.moduleSpecifier) ? statement.moduleSpecifier.text : '?',
     )
-    expect(imports.sort()).toEqual(['@/features/admin/ui', 'next/server', 'react'])
+    // NS-146 (plan M6 Task 12): the one domain the layout names is monitoring's admin entry, for the count in the chip of
+    // "Lỗi". `admin` cannot import a domain, so the layout hands the read to the gate as a function. It runs after the
+    // gate's own session check and starts with its own (admin-queries.ts, below), and the layout still awaits nothing
+    // but `connection`.
+    expect(imports.sort()).toEqual(['@/features/admin/ui', '@/features/monitoring/admin', 'next/server', 'react'])
     expect(topLevelAwaits(file)).toBe(0)
     // ADR-0020: the one await is `connection`, first, so no admin page has a prerendered shell without the CSP nonce;
     // it reads no cookie, header or data.
@@ -916,7 +920,12 @@ describe('the admin area holds only checked route files (audit PR #106 H1, re-au
     expect(source).toMatch(/export default async function ProtectedAdminLayout\([^)]*\) \{\n {2}await connection\(\);\n/)
     expect(source).toMatch(/^export const instant = false;$/m)
     expect(code).not.toMatch(/cookies\(|headers\(|dbQuery|process\./)
-    expect(readFileSync(PROTECTED_LAYOUT, 'utf8')).toMatch(/<Suspense fallback=\{<AdminShellSkeleton \/>\}>\s*<AdminGate>\{children\}<\/AdminGate>/)
+    expect(source).toMatch(
+      /<Suspense fallback=\{<AdminShellSkeleton \/>\}>\s*<AdminGate countErrors=\{countRecentErrorsForAdmin\}>\{children\}<\/AdminGate>/,
+    )
+    // The read is passed, never called here: a call in the layout would run before the gate's check (and for a visitor).
+    expect(code).not.toMatch(/countRecentErrorsForAdmin\(/)
+    expect(code.match(/countRecentErrorsForAdmin/g)).toHaveLength(2)
   })
 
   it('/admin itself only redirects, reading nothing', () => {

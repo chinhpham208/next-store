@@ -7,7 +7,7 @@ import { logoutAction } from '@/features/admin/actions'
 import { requireAdminPage } from '@/features/admin/cookie'
 import { AdminGate } from '@/features/admin/components/admin-gate'
 import { AdminHeader } from '@/features/admin/components/admin-header'
-import { AdminShell, AdminShellSkeleton } from '@/features/admin/components/admin-shell'
+import { AdminShell, AdminShellSkeleton, type AdminShellProps } from '@/features/admin/components/admin-shell'
 import { LoginForm } from '@/features/admin/components/login-form'
 import { LogoutButton, submitLogout } from '@/features/admin/components/logout-button'
 
@@ -128,19 +128,44 @@ describe('LogoutButton', () => {
   })
 })
 
-describe('AdminShell (Gate 2 decision 1, M5 Task 8)', () => {
+describe('AdminShell (Gate 2 decision 1, M5 Task 8; decision 9, M6 Task 12)', () => {
   const html = render(createElement(AdminShell, null, createElement('h1', null, 'Trang')))
+  const withCount = (errorCount: number) =>
+    render(createElement(AdminShell, { errorCount } as AdminShellProps, createElement('h1', null, 'Trang')))
+  const errorLink = (page: string) => /<a [^>]*href="\/admin\/errors"[^>]*>[\s\S]*?<\/a>/.exec(page)?.[0] ?? ''
 
-  it('is the shell header with the "Sản phẩm" link and "Đăng xuất", then the page in main', () => {
+  it('is the shell header with the "Sản phẩm" and "Lỗi" links and "Đăng xuất", then the page in main', () => {
     expect(html).toMatch(/^<header /)
     expect(html).toMatch(/ flex-wrap"/)
     expect(html).toContain('<nav aria-label="Quản trị" class="-ml-2 flex sm:ml-0">')
     const link = /<a [^>]*>Sản phẩm<\/a>/.exec(html)?.[0] ?? ''
     expect(link).toContain('href="/admin/products"')
-    expect(link).toContain('min-h-11')
+    expect(link).toContain('min-h-11 min-w-11')
+    expect(errorLink(html)).toMatch(/>Lỗi<\/a>$/)
+    expect(errorLink(html)).toContain('min-h-11 min-w-11')
+    expect(html.indexOf('/admin/products')).toBeLessThan(html.indexOf('/admin/errors'))
     expect(html).toContain('>Đăng xuất</button>')
     expect(html).toContain('<main class="flex-1"><h1>Trang</h1></main>')
     expect(html).not.toContain('aria-current')
+  })
+
+  it('has no chip without errors in the last 24 hours', () => {
+    expect(withCount(0)).not.toContain('lỗi trong 24 giờ qua')
+    expect(errorLink(withCount(0))).not.toContain('<span')
+  })
+
+  it('shows the number in a chip, with the full text for a screen reader', () => {
+    const link = errorLink(withCount(3))
+    expect(link).toContain('<span class="sr-only"> (3 lỗi trong 24 giờ qua)</span>')
+    expect(link).toMatch(/<span aria-hidden="true" class="[^"]*font-mono[^"]*">3<\/span>/)
+  })
+
+  it('caps the chip at 9+ and keeps the real number for a screen reader', () => {
+    expect(errorLink(withCount(9))).toMatch(/">9<\/span>/)
+    const link = errorLink(withCount(10))
+    expect(link).toMatch(/">9\+<\/span>/)
+    expect(link).toContain('(10 lỗi trong 24 giờ qua)')
+    expect(errorLink(withCount(250))).toMatch(/">9\+<\/span>/)
   })
 
   it('has a skeleton with the title only: no nav, no button, an empty main', () => {
@@ -165,6 +190,35 @@ describe('AdminGate', () => {
     const html = render(element)
     expect(html).toContain('Đăng xuất')
     expect(html).toContain('<p>bí mật</p>')
+    expect(html).not.toContain('lỗi trong 24 giờ qua')
+  })
+
+  it('counts the errors for the chip only after the session check', async () => {
+    const order: string[] = []
+    gate.mockImplementation(async () => {
+      order.push('session')
+    })
+    const countErrors = vi.fn(async () => {
+      order.push('count')
+      return 4
+    })
+    const html = render(await AdminGate({ children: null, countErrors }))
+    expect(order).toEqual(['session', 'count'])
+    expect(html).toContain('(4 lỗi trong 24 giờ qua)')
+  })
+
+  it('does not count when the check redirects', async () => {
+    gate.mockRejectedValue(new Error('NEXT_REDIRECT'))
+    const countErrors = vi.fn(async () => 4)
+    await expect(AdminGate({ children: null, countErrors })).rejects.toThrow('NEXT_REDIRECT')
+    expect(countErrors).not.toHaveBeenCalled()
+  })
+
+  it('keeps the bar, without a chip, when the count cannot be read', async () => {
+    gate.mockResolvedValue(undefined)
+    const html = render(await AdminGate({ children: null, countErrors: () => Promise.reject(new Error('down')) }))
+    expect(html).toContain('Đăng xuất')
+    expect(html).not.toContain('lỗi trong 24 giờ qua')
   })
 
   // Only the shell (nav, "Đăng xuất") is kept back. The page is not: Next.js renders a page alongside its layout,
@@ -179,8 +233,10 @@ describe('AdminGate', () => {
 
   it('is the gate of the (protected) layout, inside Suspense with the skeleton as fallback', () => {
     const layout = readFileSync('src/app/admin/(protected)/layout.tsx', 'utf8')
-    expect(layout).toMatch(/<Suspense fallback=\{<AdminShellSkeleton \/>\}>\s*<AdminGate>\{children\}<\/AdminGate>\s*<\/Suspense>/)
+    expect(layout).toMatch(
+      /<Suspense fallback=\{<AdminShellSkeleton \/>\}>\s*<AdminGate countErrors=\{countRecentErrorsForAdmin\}>\{children\}<\/AdminGate>\s*<\/Suspense>/,
+    )
     const source = readFileSync('src/features/admin/components/admin-gate.tsx', 'utf8')
-    expect(source).toMatch(/await requireAdminPage\(\)\s*return <AdminShell>/)
+    expect(source).toMatch(/await requireAdminPage\(\)\s*return <AdminShell /)
   })
 })

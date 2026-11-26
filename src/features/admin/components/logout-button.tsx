@@ -24,7 +24,7 @@ export const LogoutButton = () => (
   <form action={submitLogout} className="ml-auto">
     <button
       type="submit"
-      className="inline-flex min-h-11 items-center justify-center rounded-md border border-inverse-muted px-4 text-sm font-semibold whitespace-nowrap hover:bg-inverse-border"
+      className="inline-flex min-h-11 items-center justify-center rounded-md border border-inverse-muted px-3 text-sm font-semibold whitespace-nowrap hover:bg-inverse-border sm:px-4"
     >
       Đăng xuất
     </button>
