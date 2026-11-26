@@ -1,6 +1,6 @@
 # ADR-0015: Giới hạn tốc độ ở biên bằng một quy tắc Vercel WAF cho Server Action
 
-- Trạng thái: Đã chấp nhận (chủ dự án duyệt 2026-11-23, PR #66); bổ sung bởi [ADR-0018](./0018-admin-auth.md) (đề xuất, M5: quy tắc cũng đếm `loginAction`; giới hạn đăng nhập sai nằm trong app, bảng `admin_login_failures`)
+- Trạng thái: Đã chấp nhận (chủ dự án duyệt 2026-11-23, PR #66); bổ sung bởi [ADR-0018](./0018-admin-auth.md) (đề xuất, M5: quy tắc cũng đếm `loginAction`; giới hạn đăng nhập sai nằm trong app, bảng `admin_login_failures`) và [ADR-0021](./0021-payment-orders-and-webhook.md) (M6: webhook thanh toán không vào quy tắc)
 - Ngày: 2026-11-23
 - Quyết định của chủ dự án: 2026-11-23 (plan M4, Cổng 1, quyết định 8)
 - Bổ sung: [ADR-0008](./0008-listing-cache-keys.md) (câu "Cần ADR riêng nếu thêm thư viện hoặc kho đếm" ở mục *Giới hạn tần suất*), [ADR-0009](./0009-product-404-in-proxy.md) (gạch đầu dòng "Cần giới hạn tần suất ở biên (chưa làm ở M2)… ADR riêng")
@@ -59,6 +59,7 @@ Quyết định 8A áp như sau.
 - **Khoá IP chặn chung người dùng sau NAT.** Một văn phòng hay mạng di động dùng chung IP chia nhau 60 action mỗi phút. Với một cửa hàng quà tặng, 60 lần thêm / sửa / xoá mỗi phút cho cả một IP là đủ; chế độ Log trong ngày đầu cho thấy có ai chạm ngưỡng không trước khi bật 429.
 - **429 đến từ biên, không từ action.** Client nhận lỗi HTTP thay vì `CartActionResult`, nên nút thêm vào giỏ xử lý nó như mọi POST thất bại (ADR-0014: `try` / `catch`, số trở lại như cũ, thông báo "Không kết nối được. Vui lòng tải lại trang và thử lại."). Không có trang lỗi.
 - **Webhook thanh toán (M6) là POST.** Nếu quy tắc chỉ lọc được theo `POST` (C5), webhook của cổng thanh toán cũng bị đếm theo IP của cổng. M6 phải thêm ngoại lệ đường dẫn `/api/webhooks/payment` vào điều kiện (vẫn trong cùng một quy tắc) hoặc xác nhận ngưỡng đủ cao cho lưu lượng webhook.
+  - **Trả lời (M6, chủ dự án duyệt 2026-11-26, quyết định 11A, [ADR-0021](./0021-payment-orders-and-webhook.md)):** không thêm quy tắc WAF và không sửa điều kiện. C5 đã cho thấy quy tắc lọc được theo header: nó chỉ đếm `POST` **có** `next-action`, nên webhook (không có header đó) không bị đếm. Chữ ký được kiểm trước mọi đọc DB và thân tối đa 8 KB, nên POST rác chỉ tốn một HMAC. Rủi ro còn lại: một đợt POST rác vẫn tốn invocation (hạn mức Hobby).
 - **Một phần cấu hình có thể chỉ nằm ngoài repo.** Nếu C5 cho thấy quy tắc chỉ cấu hình được trong console: thay đổi không qua PR, không có lịch sử trong git. Bù lại bằng việc chép cấu hình vào ADR này và ghi ngày đổi Log → 429.
 - **Cách kiểm:**
   - Task 10 Step 3: trên Production sau `v0.4.0` (hoặc Preview nếu quy tắc áp ở đó), 61 POST giả lập từ một IP trong 60 s bằng `curl` có `next-action` không hợp lệ (action ID sai không ghi gì) cho thấy log Firewall có lượt khớp, và trang `GET` không bị đếm. Sau khi đổi sang 429, request thứ 61 nhận 429.

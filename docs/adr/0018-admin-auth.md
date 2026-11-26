@@ -4,6 +4,7 @@
 - Ngày: 2026-11-25
 - Quyết định của chủ dự án: 2026-11-25 (plan M5, Cổng 1, quyết định 5, 6, 7, 8, 15, 16, phương án A)
 - Bổ sung: [ADR-0015](./0015-edge-rate-limit.md) (quy tắc WAF cho Server Action cũng đếm `loginAction`; giới hạn đăng nhập sai nằm trong app vì Hobby chỉ có một quy tắc rate limit)
+- Bổ sung bởi: [ADR-0023](./0023-admin-orders-and-password-strength.md) (M6: `ADMIN_PASSWORD` thêm luật ≥ 16 ký tự khác nhau, ngoài ≥ 20 ký tự của quyết định 5A; hai trang admin chỉ đọc `/admin/orders`, `/admin/errors`)
 - Liên quan: [ADR-0009](./0009-product-404-in-proxy.md) và [ADR-0017](./0017-product-slug-registry-in-proxy.md) (proxy không chạm DB), [ADR-0010](./0010-app-role-and-preview-data.md) (role app chỉ DML), [ADR-0011](./0011-db-query-wrapper.md) (`dbQuery`, không log dữ liệu), [ADR-0014](./0014-cart-storage-and-cookie.md) (cookie giỏ, CSRF của Server Action), [ADR-0016](./0016-security-headers-and-action-body-limit.md) (body action tối đa 16 KB), [ADR-0020](./0020-content-security-policy-and-hsts.md) (CSP nonce cho `/admin`), `docs/plans/M5.md` Task 6, 7, 8, 13, 14, ticket NS-95
 
 ## Bối cảnh

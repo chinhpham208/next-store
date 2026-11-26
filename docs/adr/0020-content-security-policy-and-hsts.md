@@ -4,6 +4,7 @@
 - Ngày: 2026-11-25
 - Quyết định của chủ dự án: 2026-11-25 (plan M5, Cổng 1, quyết định 9, 10, phương án A)
 - Thay thế một phần: [ADR-0016](./0016-security-headers-and-action-body-limit.md) (gạch đầu dòng "CSP chỉ có `frame-ancestors`"; `Content-Security-Policy: frame-ancestors 'none'` đơn lẻ được thay bằng CSP nền đầy đủ, vẫn có `frame-ancestors 'none'`)
+- Bổ sung bởi: [ADR-0021](./0021-payment-orders-and-webhook.md) (M6: CSP không đổi cho FakeProvider; điều kiện CSP cho adapter cổng thật)
 - Liên quan: [ADR-0003](./0003-cache-strategy.md) (Cache Components, prerender), [ADR-0005](./0005-hosting.md) (Vercel), [ADR-0018](./0018-admin-auth.md) (khu admin), `docs/plans/M5.md` Task 12, 13, ticket NS-108
 
 ## Bối cảnh
@@ -64,6 +65,7 @@ Quyết định 9A và 10A áp như sau. Chuỗi chính xác nằm ở plan M5 T
 - **Trang cửa hàng vẫn cho script inline** (`'unsafe-inline'`). CSP nền không chặn XSS inline ở đó; nó chặn script từ nguồn ngoài, `<object>`, đổi `<base>`, form gửi ra site khác, nhúng frame. Rủi ro chấp nhận: React escape mọi chuỗi, trang cửa hàng không render HTML do người dùng nhập; nội dung admin nhập (tên, mô tả) hiển thị dạng văn bản.
 - **Khu admin có CSP chặt** (nonce + `'strict-dynamic'`): script inline không mang nonce bị chặn. Trang admin vốn động nên nonce không làm mất gì.
 - **Mỗi nguồn ngoài mới** (analytics, font CDN, ảnh ngoài, cổng thanh toán M6 nếu nhúng script hay gửi form ra ngoài) phải được thêm vào CSP trong cùng PR. Đặc biệt M6: `form-action 'self'` chặn form POST thẳng tới cổng thanh toán, và chuyển hướng 303 sau Server Action sang domain cổng có thể bị `form-action` chặn ở một số trình duyệt; M6 phải kiểm lại và ghi vào ADR của M6.
+  - **Trả lời (M6, chủ dự án duyệt 2026-11-26, quyết định 5A, [ADR-0021](./0021-payment-orders-and-webhook.md)):** CSP không đổi ở M6. FakeProvider chỉ dùng cùng origin (`/checkout/test`, `/api/webhooks/payment`), nên `form-action 'self'` và `connect-src 'self'` giữ nguyên, không thêm `frame-src`. Adapter cổng thật phải thêm origin của cổng vào `form-action` (cổng nhận form POST), `frame-src` (nhúng) hoặc `connect-src` (client gọi API cổng) **cùng PR với adapter**, và kiểm lại `redirect()` từ Server Action sang origin ngoài (M6 chỉ kiểm cùng origin). E2E `ns-csp.spec.ts` có ca cho trang thanh toán mới.
 - **Vi phạm không gỡ được bằng một nguồn `'self'`** ở Task 12 Step 1 (C4, C5) → dừng, báo Orchestrator, xét lại quyết định 9.
 - **HSTS phụ thuộc Vercel.** Khi gắn domain riêng, mặc định chỉ có `max-age=63072000` (không `includeSubDomains`, không `preload`): xét lại lúc đó (ADR mới hoặc bổ sung). Chạy ngoài Vercel (VPS) thì không có HSTS cho tới khi tự đặt.
 - **ADR-0016 còn hiệu lực** ở mọi phần khác: ba header, `bodySizeLimit = '16kb'`, ghi chú về `frame-ancestors 'self'` nếu sau này cần xem trước trong iframe.

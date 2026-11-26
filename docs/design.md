@@ -56,17 +56,18 @@ next-store/
 │  │  │  ├─ blog/                → /blog, /blog/:slug (trong `(shop)`: chung header, footer, trang lỗi — ADR-0012)
 │  │  │  ├─ cart/                → /cart
 │  │  │  └─ checkout/            → /checkout/success, /checkout/test
-│  │  ├─ admin/                  → /admin/login, /admin/products, /admin/orders
-│  │  ├─ api/webhooks/payment/route.ts
+│  │  ├─ admin/                  → /admin/login, /admin/products, /admin/orders, /admin/errors (M6)
+│  │  ├─ api/webhooks/payment/route.ts   # route handler duy nhất, ADR-0021
 │  │  ├─ layout.tsx
 │  │  ├─ sitemap.ts
 │  │  └─ robots.ts
 │  ├─ features/                  # Logic nghiệp vụ, mỗi thư mục một miền
-│  │  ├─ products/ · cart/ · checkout/ · orders/ · blog/ · admin/
+│  │  ├─ products/ · cart/ · checkout/ · orders/ · monitoring/ · blog/ · admin/
 │  ├─ db/                        # schema.ts, client.ts, migrate.ts, seed.ts
 │  ├─ components/ui/             # Component giao diện dùng chung (theo design system)
 │  ├─ lib/                       # Tiện ích không gắn nghiệp vụ
 │  ├─ mdx-components.tsx         # Bắt buộc với @next/mdx; trả PROSE_COMPONENTS của components/ui/prose
+│  ├─ instrumentation.ts         # onRequestError: ghi lỗi server (M6, ADR-0022)
 │  └─ proxy.ts
 ├─ drizzle/                      # Migration SQL sinh bởi drizzle-kit
 ├─ .dependency-cruiser.cjs
@@ -105,7 +106,8 @@ Lý do chọn cấu trúc này thay vì đặt component cạnh route: dễ mở
 | `admin_login_failures` | id (uuid do server sinh, không sequence), ipHash (HMAC-SHA256 của IP bằng `SESSION_SECRET`, không lưu IP thô), failedAt; index `(ip_hash, failed_at)` và `(failed_at)`; hàng quá 24 giờ bị xoá dần (M5) — [ADR-0018](./adr/0018-admin-auth.md) |
 | `carts` | id (uuid v4 do server sinh, không default; lưu trong cookie httpOnly), createdAt, updatedAt (hết hạn 30 ngày trượt; index `carts_updated_at_idx`) — [ADR-0014](./adr/0014-cart-storage-and-cookie.md) |
 | `cart_items` | cartId (FK `carts`, `ON DELETE CASCADE`), productId (FK `products`, `ON DELETE CASCADE`; index `cart_items_product_id_idx`), quantity (`CHECK quantity > 0`; trần 10 nằm ở code), createdAt (thứ tự dòng); khoá chính `(cart_id, product_id)`: một dòng mỗi sản phẩm. Không cột giá: giỏ luôn dùng giá hiện tại. Không sequence |
-| `orders` | id (serial — dùng làm mã đơn gửi cổng thanh toán), items (json snapshot), total, status (`pending` \| `paid` \| `needs_refund` \| `cancelled`), provider, paymentRef (unique), createdAt |
+| `orders` | id (serial — dùng làm mã đơn gửi cổng thanh toán; ngoại lệ có chủ ý của quy tắc "không sequence", role app có quyền sequence), items (jsonb snapshot, giá chụp lúc tạo đơn), total (`CHECK total > 0`), status (`pending` \| `paid` \| `needs_refund` \| `cancelled`), refundReason (`out-of-stock` \| `amount-mismatch`; có khi và chỉ khi `needs_refund`), provider, paymentRef (unique, nullable: đơn tạo trước, ref gắn sau), cartId (FK `carts`, `ON DELETE SET NULL`), createdAt, updatedAt (mọi ghi đặt rõ, không `$onUpdate`); index `(created_at desc, id desc)` và `(status, created_at desc)` (M6) — [ADR-0021](./adr/0021-payment-orders-and-webhook.md) |
+| `error_events` | fingerprint (khoá chính: SHA-256 của loại route, đường dẫn route, digest hoặc tên lỗi, thông điệp cố định), routeType, routePath, method, digest, errorName, message (chỉ thông điệp cố định của `dbQuery`), count, firstSeenAt, lastSeenAt; không sequence; trần 500 hàng, giữ 30 ngày; không header, cookie, query, IP (M6) — [ADR-0022](./adr/0022-error-tracking-and-web-vitals.md) |
 
 Bài blog là file MDX, không nằm trong DB. Schema thay đổi bằng migration của drizzle-kit (file SQL trong `drizzle/`), không sửa DB bằng tay. Quy tắc expand / contract: [conventions.md](./conventions.md) §10.
 
@@ -122,10 +124,11 @@ Chi tiết và lý do: [ADR-0014](./adr/0014-cart-storage-and-cookie.md); giới
 - Proxy không tham gia giỏ hàng; nó chỉ cho Server Action (`POST` có header `next-action`) đi thẳng trước mọi kiểm slug (ADR-0014; NS-103 thu hẹp từ "mọi request không phải `GET` / `HEAD`"). Mọi request khác, kể cả `POST` không có header, `PUT`, `DELETE`, được kiểm slug như `GET` (ADR-0009). Giới hạn tốc độ ở biên: một quy tắc Vercel WAF cho `POST` theo IP, 60 request / 60 s (ADR-0015).
 
 ### Thanh toán
-1. Khách bấm thanh toán → Server Action kiểm tra tồn kho, tạo `orders` trạng thái `pending`, gọi `PaymentProvider.createCheckout()`.
-2. Khách được chuyển tới trang thanh toán của provider (hiện tại: `/checkout/test` của `FakeProvider`, có nhãn rõ "Môi trường thử nghiệm — không thu tiền").
-3. Provider gọi `/api/webhooks/payment`. Route Handler xác minh chữ ký, rồi trong một transaction: đổi đơn sang `paid`, trừ kho bằng câu lệnh có điều kiện `stock >= quantity`, xoá giỏ.
-4. Kho không đủ (hai người cùng mua món cuối): đơn chuyển `needs_refund`.
+Chi tiết và lý do: [ADR-0021](./adr/0021-payment-orders-and-webhook.md).
+1. Khách bấm thanh toán → Server Action kiểm tra tồn kho, tạo `orders` trạng thái `pending` (giá chụp vào `items`; tổng 0 ₫ bị từ chối), gọi `PaymentProvider.createCheckout()`. Ở chế độ `TEST_PAYMENTS_ACCESS` khác `public` (Production), bốn lối vào của thanh toán thử (ô thanh toán của `/cart`, `startCheckoutAction`, `/checkout/test`, `fakeGatewayAction`) đòi phiên admin; khách thấy "Thanh toán chưa mở.".
+2. Khách được chuyển tới trang thanh toán của provider (hiện tại: `/checkout/test` của `FakeProvider`, có nhãn rõ "Môi trường thử nghiệm — không thu tiền"). Nút bấm gọi một Server Action ký sự kiện ở server; trình duyệt chuyển tiếp sự kiện ký đó bằng `fetch` tới `/api/webhooks/payment`, nên webhook đi đúng HTTP như cổng thật.
+3. Route Handler đọc thân tối đa 8 KB, xác minh chữ ký (HMAC-SHA256, hạn 5 phút) **trước** mọi đọc DB, rồi trong một transaction: khoá hàng `orders` theo `paymentRef`; đơn không còn `pending` thì trả "đã xử lý"; đủ kho thì trừ kho bằng câu lệnh có điều kiện `stock >= quantity` (đặt `updated_at`), đổi đơn sang `paid`, xoá giỏ.
+4. Kho không đủ (hai người cùng mua món cuối): **không trừ dòng nào**, đơn chuyển `needs_refund`, giỏ giữ nguyên. Số tiền khác `orders.total` cũng là `needs_refund`.
 5. `paymentRef` unique → webhook gửi lặp chỉ được xử lý một lần.
 6. Sau khi trừ kho: `revalidateTag('product:<slug>', 'max')` cho các sản phẩm liên quan (Route Handler không gọi được `updateTag`; `updateTag` chỉ dùng trong Server Action).
 7. Khách huỷ ở trang thanh toán → đơn `cancelled`, giỏ giữ nguyên.
@@ -133,8 +136,8 @@ Chi tiết và lý do: [ADR-0014](./adr/0014-cart-storage-and-cookie.md); giới
 Luồng này không phụ thuộc provider cụ thể; xem ADR-0004.
 
 ### Admin
-Chi tiết và lý do: [ADR-0018](./adr/0018-admin-auth.md) (xác thực), [ADR-0019](./adr/0019-product-edits-and-cache-tags.md) (sửa sản phẩm), [ADR-0020](./adr/0020-content-security-policy-and-hsts.md) (CSP).
-- Một admin. Đăng nhập bằng `ADMIN_PASSWORD` (≥ 20 ký tự, khác nhau giữa Production và Preview), so `sha256` bằng `timingSafeEqual` → cookie phiên `v1.<hết hạn>.<HMAC-SHA256>` ký bằng `SESSION_SECRET` (≥ 32 ký tự, Web Crypto). Cookie `__Host-ns_admin` (`ns_admin` khi không HTTPS), `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`, không `Domain`, hạn tuyệt đối 8 giờ, không trượt; không chạm DB. Thiếu hoặc yếu cấu hình → khu admin đóng. Thu hồi mọi phiên: đổi `SESSION_SECRET` + redeploy.
+Chi tiết và lý do: [ADR-0018](./adr/0018-admin-auth.md) (xác thực), [ADR-0019](./adr/0019-product-edits-and-cache-tags.md) (sửa sản phẩm), [ADR-0020](./adr/0020-content-security-policy-and-hsts.md) (CSP), [ADR-0023](./adr/0023-admin-orders-and-password-strength.md) (danh sách đơn và lỗi, độ mạnh mật khẩu).
+- Một admin. Đăng nhập bằng `ADMIN_PASSWORD` (≥ 20 ký tự và ≥ 16 ký tự khác nhau từ M6, [ADR-0023](./adr/0023-admin-orders-and-password-strength.md); khác nhau giữa Production và Preview), so `sha256` bằng `timingSafeEqual` → cookie phiên `v1.<hết hạn>.<HMAC-SHA256>` ký bằng `SESSION_SECRET` (≥ 32 ký tự, Web Crypto). Cookie `__Host-ns_admin` (`ns_admin` khi không HTTPS), `HttpOnly`, `Secure`, `SameSite=Strict`, `Path=/`, không `Domain`, hạn tuyệt đối 8 giờ, không trượt; không chạm DB. Thiếu hoặc yếu cấu hình → khu admin đóng. Thu hồi mọi phiên: đổi `SESSION_SECRET` + redeploy.
 - Đăng nhập sai bị đếm trong `admin_login_failures` (IP băm HMAC): 5 lần / 15 phút mỗi IPv4 hay mỗi IPv6 /64 thì khoá (không có khoá toàn cục; quá 1000 hàng / 15 phút thì ngừng ghi, không khoá ai: ADR-0018, NS-132); kiểm khoá trước khi so mật khẩu, lỗi DB khi kiểm khoá thì từ chối đăng nhập. Quy tắc WAF của ADR-0015 vẫn đếm `loginAction`.
 - `proxy.ts` chặn `/admin/*` (trừ `/admin/login`) nếu cookie không hợp lệ (M5), **trước** lối tắt Server Action: `GET` / `HEAD` nhận 307 sang `/admin/login` (xoá cookie hỏng), request khác nhận 401. Proxy chỉ kiểm lạc quan; layout admin và **mỗi** Server Action admin kiểm lại phiên trước khi parse input hay chạm DB. CSRF: `SameSite=Strict` + kiểm `Origin` của Next.js. Cùng file này, từ M2, đã trả 404 cho `/products/<slug>` không tồn tại ([ADR-0009](./adr/0009-product-404-in-proxy.md)); từ M3 cả `/blog/<slug>` không tồn tại (đối chiếu registry tĩnh, không chạm DB) và đường dẫn ảnh Open Graph `/products|blog/<slug>/opengraph-image[-<băm>]` của slug lạ ([ADR-0012](./adr/0012-blog-static-registry.md)). `matcher` là `['/products/:slug', '/products/:slug/:image', '/blog/:slug', '/blog/:slug/:image']`; `/blog`, `/products`, `/opengraph-image`, sitemap, robots, `/_next/*` không qua proxy. M5 mở rộng `matcher`.
 - Từ M5 proxy trả 404 cho slug sản phẩm lạ bằng registry tĩnh `catalog-slugs.ts`, không chạm DB ([ADR-0017](./adr/0017-product-slug-registry-in-proxy.md)); thêm / bỏ sản phẩm = sửa seed + registry trong một PR và deploy.
@@ -159,7 +162,7 @@ Lưu ý trên Vercel: cache của `"use cache"` nằm trong bộ nhớ từng in
 | Mọi truy vấn runtime | Qua `dbQuery` của `@/db`: lỗi thay bằng thông điệp cố định (tên truy vấn + SQLSTATE / errno), quá **5 giây** (`DB_QUERY_TIMEOUT_MS`, 100 → 10000) thì ném lỗi để trang lỗi hiện thay vì chờ `connect_timeout` 10 giây ([ADR-0011](./adr/0011-db-query-wrapper.md)); hết giờ thì dựng lại client Postgres để kết nối bị mạng nuốt gói không giữ pool ([ADR-0013](./adr/0013-db-client-recycle.md)) |
 | Blog | Tĩnh trừ lỗ biểu tượng giỏ ở header (ADR-0014): nội dung MDX biên dịch lúc build, registry `posts.ts` trong repo; `/blog` và mọi `/blog/<slug>` prerender (`generateStaticParams`), không `"use cache"`, không tag — bài chỉ đổi khi deploy. Slug lạ: `proxy.ts` đối chiếu danh sách slug tĩnh, không chạm DB, nên không tạo entry route cache nào cho slug bịa ra — cả trang lẫn ảnh OG ([ADR-0012](./adr/0012-blog-static-registry.md)) |
 | `sitemap.xml`, `robots.txt` | Sitemap: sản phẩm đọc qua `getProductSitemapEntries` (`"use cache"`, `cacheTag('products')`, `cacheLife('hours')`), bài từ registry; route `○ /sitemap.xml  1h  1d`. `robots.txt` tĩnh (`Disallow: /` ngoài production, §7). Cả hai prerender lúc build: URL tuyệt đối lấy từ `getSiteUrl()` với biến môi trường **lúc build** |
-| Trang admin, giỏ hàng, checkout | Động hoàn toàn |
+| Trang admin (gồm `/admin/orders`, `/admin/errors`), giỏ hàng, checkout (`/checkout/test`, `/checkout/success`) | Động hoàn toàn: đọc DB theo request, không `"use cache"`; dữ liệu đơn và lỗi không bao giờ nằm trong cache (M6) |
 
 ## 7. Môi trường
 
