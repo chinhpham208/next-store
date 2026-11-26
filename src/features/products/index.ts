@@ -44,4 +44,5 @@ export {
   type ProductQuery,
   type ProductSort,
 } from '@/features/products/schema'
-export { decrementStockForOrder, type StockDecrement, type StockLine } from '@/features/products/stock'
+// decrementStockForOrder is not re-exported: only features/orders imports products/stock.ts (dependency-cruiser
+// stock-only-from-orders, audit PR #125 N1), so no other feature can reach the stock write through this barrel.

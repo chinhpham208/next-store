@@ -1,4 +1,4 @@
-import { eq, sql } from 'drizzle-orm'
+import { eq } from 'drizzle-orm'
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { cartItems, carts, dbQuery as realDbQuery, products } from '@/db'
 import { db } from '@/db/client'
@@ -9,6 +9,7 @@ import { updateProductAction } from '@/features/products/actions'
 import { PRODUCT_SLUGS_TAG, tagsForProductWrite } from '@/features/products/cache-tags'
 import { decrementStockForOrder } from '@/features/products/stock'
 import type { ProductEditState } from '@/features/products/types'
+import { UPDATED_AT_TEXT } from '@/features/products/updated-at-text'
 
 const updateTag = vi.hoisted(() => vi.fn())
 vi.mock('next/cache', () => ({ updateTag }))
@@ -35,12 +36,9 @@ const SLUG = 'ao-git-push-force'
 const OTHER = PRODUCT_SEEDS.find((product) => product.slug !== SLUG)?.slug ?? ''
 const IDLE: ProductEditState = { status: 'idle' }
 
-// updated_at as the form carries it: UTC, to the microsecond.
+// updated_at as the form carries it: UTC, to the microsecond (the same expression the admin read uses).
 const updatedAtOf = async (slug: string): Promise<string> => {
-  const [row] = await db
-    .select({ at: sql<string>`to_char(${products.updatedAt} at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')` })
-    .from(products)
-    .where(eq(products.slug, slug))
+  const [row] = await db.select({ at: UPDATED_AT_TEXT }).from(products).where(eq(products.slug, slug))
   if (row === undefined) throw new Error(`no product ${slug}`)
   return row.at
 }
@@ -113,6 +111,19 @@ describe('updateProductAction (US-13, ADR-0019)', () => {
     await updateProductAction(IDLE, await edit())
     expect((await rowOf(SLUG)).updatedAt.getTime()).toBeGreaterThanOrEqual(before.updatedAt.getTime())
     expect(await updatedAtOf(SLUG)).not.toBe(before.updatedAt.toISOString())
+  })
+
+  it('moves updated_at by one microsecond when the stored value is ahead of the clock', async () => {
+    // audit PR #125 L1: greatest(clock_timestamp(), updated_at + 1µs), never now() (the transaction start).
+    const ahead = new Date(Math.floor((Date.now() + 86_400_000) / 1000) * 1000)
+    await db.update(products).set({ updatedAt: ahead }).where(eq(products.slug, SLUG))
+    const before = await updatedAtOf(SLUG)
+    const state = await updateProductAction(IDLE, await edit({ price: '260000' }))
+    expect(state).toMatchObject({ status: 'saved' })
+    const after = await updatedAtOf(SLUG)
+    expect(after).not.toBe(before)
+    expect(after > before).toBe(true)
+    expect(after.slice(0, 20)).toBe(before.slice(0, 20))
   })
 
   it('an admin form opened before a checkout gets conflict', async () => {

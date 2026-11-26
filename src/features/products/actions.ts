@@ -7,7 +7,7 @@ import { hasAdminSession } from '@/features/admin'
 import { tagsForProductWrite } from '@/features/products/cache-tags'
 import { parseProductEdit } from '@/features/products/schema'
 import type { ProductEdit, ProductEditState } from '@/features/products/types'
-import { UPDATED_AT_TEXT } from '@/features/products/updated-at-text'
+import { NEXT_UPDATED_AT, UPDATED_AT_TEXT } from '@/features/products/updated-at-text'
 
 // Every product write lives in features/products (ADR-0003); this is the admin edit of ADR-0019 3A, 13A. The action
 // is a public POST and its id is global, so it can be posted to /admin/login where the proxy lets everything through
@@ -32,7 +32,7 @@ const save = async (edit: ProductEdit): Promise<SaveResult> => {
           description: edit.description,
           price: edit.price,
           stock: edit.stock,
-          updatedAt: sql`now()`,
+          updatedAt: NEXT_UPDATED_AT,
         })
         .where(and(eq(products.slug, edit.slug), sql`${products.updatedAt} = ${edit.expectedUpdatedAt}::timestamptz`))
         .returning({ updatedAt: UPDATED_AT_TEXT }),

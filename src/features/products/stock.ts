@@ -1,12 +1,14 @@
 import 'server-only'
 import { and, eq, gte, inArray, sql } from 'drizzle-orm'
 import { products, type DbTx } from '@/db'
+import { NEXT_UPDATED_AT } from '@/features/products/updated-at-text'
 
 // The only stock decrement for orders (plan M6 Task 5, ADR-0019, ADR-0021); every product write lives in
 // features/products (ADR-0003). It runs inside the caller's transaction and never touches the cache: the caller
 // refreshes the tags of the returned slugs after commit.
 //
-// Every UPDATE sets updated_at = now(): the admin form carries updated_at (ADR-0019 13A), so a form opened before a
+// Every UPDATE sets updated_at = NEXT_UPDATED_AT (greatest(clock_timestamp(), updated_at + 1µs), audit PR #125 L1; never
+// now(), which repeats inside a transaction): the admin form carries updated_at (ADR-0019 13A), so a form opened before a
 // checkout gets `conflict` instead of saving the old stock over the new one (audit PR #107 L-4).
 
 export type StockLine = { productId: number; quantity: number }
@@ -55,7 +57,7 @@ export const decrementStockForOrder = async (tx: DbTx, lines: readonly StockLine
   for (const { productId, quantity } of [...lines].sort((a, b) => a.productId - b.productId)) {
     const updated = await tx
       .update(products)
-      .set({ stock: sql`${products.stock} - ${quantity}`, updatedAt: sql`now()` })
+      .set({ stock: sql`${products.stock} - ${quantity}`, updatedAt: NEXT_UPDATED_AT })
       .where(and(eq(products.id, productId), gte(products.stock, quantity)))
       .returning({ id: products.id })
     // The row is locked, so this cannot happen; if it does, roll the whole transaction back rather than half-sell.

@@ -6,6 +6,7 @@ import { runMigrations } from '@/db/migrate'
 import { seed } from '@/db/seed'
 import { PRODUCT_SEEDS } from '@/db/seed-data'
 import { decrementStockForOrder, type StockLine } from '@/features/products/stock'
+import { UPDATED_AT_TEXT } from '@/features/products/updated-at-text'
 
 // PGlite runs one transaction at a time (plan M6 C7), so these tests prove the logic of the decrement (what is
 // written, what is not), not the row locks: that is Postgres's job and the order of the lock query is checked below.
@@ -19,6 +20,11 @@ const rowBySlug = async (slug: string) => {
   const [row] = await db.select().from(products).where(eq(products.slug, slug))
   if (row === undefined) throw new Error(`no product ${slug}`)
   return row
+}
+
+const updatedAtText = async (id: number, client: Pick<typeof db, 'select'> = db): Promise<string | undefined> => {
+  const [row] = await client.select({ at: UPDATED_AT_TEXT }).from(products).where(eq(products.id, id))
+  return row?.at
 }
 
 const run = (lines: readonly StockLine[]) => db.transaction((tx) => decrementStockForOrder(tx, lines))
@@ -62,6 +68,30 @@ describe('decrementStockForOrder (ADR-0019, plan M6 Task 5)', () => {
     await run([{ productId: before.id, quantity: 1 }])
     const after = await rowBySlug(FIRST.slug)
     expect(after.updatedAt.getTime()).toBeGreaterThan(before.updatedAt.getTime())
+  })
+
+  it('moves updated_at forward even when the clock has not passed it', async () => {
+    // audit PR #125 L1: now() is the transaction's start, so two writes in one transaction (or one microsecond)
+    // would share a value and a form opened between them would still save. greatest(clock_timestamp(), old + 1µs)
+    // always differs: a stored value ahead of the clock still moves by exactly one microsecond.
+    const ahead = new Date(Math.floor((Date.now() + 86_400_000) / 1000) * 1000)
+    await db.update(products).set({ updatedAt: ahead }).where(eq(products.slug, FIRST.slug))
+    const before = await rowBySlug(FIRST.slug)
+    await run([{ productId: before.id, quantity: 1 }])
+    // Whole seconds ahead, so + 1µs only changes the last digit.
+    expect(await updatedAtText(before.id)).toBe(ahead.toISOString().replace('.000Z', '.000001Z'))
+  })
+
+  it('two decrements in one transaction leave two different updated_at values', async () => {
+    const before = await rowBySlug(FIRST.slug)
+    const seen = await db.transaction(async (tx) => {
+      await decrementStockForOrder(tx, [{ productId: before.id, quantity: 1 }])
+      const first = await updatedAtText(before.id, tx)
+      await decrementStockForOrder(tx, [{ productId: before.id, quantity: 1 }])
+      return [first, await updatedAtText(before.id, tx)]
+    })
+    expect(seen[0]).toBeDefined()
+    expect(seen[1]).not.toBe(seen[0])
   })
 
   it('writes nothing when one line is short', async () => {
