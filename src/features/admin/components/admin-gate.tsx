@@ -1,3 +1,4 @@
+import { unstable_rethrow } from 'next/navigation'
 import type { ReactNode } from 'react'
 import { AdminShell } from '@/features/admin/components/admin-shell'
 import { requireAdminPage } from '@/features/admin/cookie'
@@ -17,7 +18,9 @@ const readErrorCount = async (countErrors: AdminGateProps['countErrors']): Promi
   if (countErrors === undefined) return 0
   try {
     return await countErrors()
-  } catch {
+  } catch (error) {
+    // Control flow of Next.js (a redirect, notFound, a postponed render) is not a failed read (as LoginForm).
+    unstable_rethrow(error)
     return 0
   }
 }

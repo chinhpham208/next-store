@@ -30,6 +30,14 @@ describe('reportRequestError', () => {
     expect(recordErrorReport).not.toHaveBeenCalled()
   })
 
+  it('logs only for a routeType it does not know (a renamed proxy must not reach the database)', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    await reportRequestError(input('middleware'))
+    expect(log).toHaveBeenCalledTimes(1)
+    expect(String(log.mock.calls[0]?.[0])).toContain('"routeType":"unknown"')
+    expect(recordErrorReport).not.toHaveBeenCalled()
+  })
+
   it.each(['render', 'route', 'action'])('logs and records for routeType %s', async (routeType) => {
     const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
     await reportRequestError(input(routeType))

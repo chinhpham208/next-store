@@ -98,3 +98,28 @@ test('fails when a listed chunk is not on disk', () => {
   rmSync(join(root, 'server/chunks/[root-of-the-server]__b._.js'))
   assert.ok(proxyBundleProblems(root).some((p) => p.includes('không thấy file')))
 })
+
+test('follows a chunk that a listed chunk loads at run time (dynamic import)', () => {
+  for (const proxy of ['node', 'edge']) {
+    const dir = proxy === 'node' ? 'server/chunks' : 'server/edge/chunks'
+    const root = build({ proxy, extraProxyChunk: `;e.l("${dir}/lazy._.js")` })
+    put(root, `${dir}/lazy._.js`, 'x;Symbol.for("drizzle:entityKind")')
+    const problems = proxyBundleProblems(root)
+    assert.ok(problems.some((p) => p.startsWith('bundle proxy chứa mã DB (drizzle)') && p.includes('lazy._.js')), `${proxy}: ${problems.join('\n')}`)
+  }
+})
+
+test('follows chunks of chunks, and a lazy chunk that is not on disk is reported', () => {
+  const root = build({ extraProxyChunk: ';e.l("server/chunks/one._.js")' })
+  put(root, 'server/chunks/one._.js', 'e.l("server/chunks/two._.js")')
+  assert.ok(proxyBundleProblems(root).some((p) => p.includes('không thấy file server/chunks/two._.js')))
+  put(root, 'server/chunks/two._.js', 'require("postgres")')
+  assert.ok(proxyBundleProblems(root).some((p) => p.includes('(postgres)') && p.includes('two._.js')))
+})
+
+test('does not loop on chunks that name each other', () => {
+  const root = build({ extraProxyChunk: ';e.l("server/chunks/a._.js")' })
+  put(root, 'server/chunks/a._.js', 'e.l("server/chunks/b._.js")')
+  put(root, 'server/chunks/b._.js', 'e.l("server/chunks/a._.js")')
+  assert.deepEqual(proxyBundleProblems(root), [])
+})

@@ -14,7 +14,8 @@
 //      (`middleware.<tên>.files`). Cả hai dạng đều đọc; thiếu cả hai là lỗi. Bundle phải chứa mã của proxy (`/admin/login`).
 //   2. Bundle edge của `instrumentation`: `server/instrumentation/middleware-manifest.json` (`instrumentation.files`).
 //      Bundle node của `instrumentation` (`server/instrumentation.js`) KHÔNG kiểm: nó nạp phần ghi DB bằng `import()`.
-// Chuỗi bị cấm: `drizzle`, `postgres`, `pglite` (không phân biệt hoa thường) trong mọi file .js của hai bundle.
+// Chuỗi bị cấm: `drizzle`, `postgres`, `pglite` (không phân biệt hoa thường) trong mọi file .js của hai bundle, kể cả
+// chunk mà một file trong đó nhắc tới bằng đường dẫn (`import()` động nạp lúc chạy, audit PR #127 L1).
 // Mã thoát: 0 = sạch, 1 = có lỗi (in từng dòng), 2 = thiếu bản build.
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -49,12 +50,21 @@ const instrumentationEdgeFiles = (nextDir) => {
   return readJson(manifest).instrumentation?.files
 }
 
+// Every chunk a listed file names by path: `R.l("server/chunks/x.js")` of a dynamic import(), a chunk list inside a
+// chunk, an edge chunk's own reference. Turbopack loads those at run time, so the entry's `R.c(...)` list does not
+// have them, and a database module behind an import() of the proxy would otherwise go unseen (audit PR #127 L1).
+const CHUNK_REFERENCE = /server\/(?:edge\/)?chunks\/(?:[^"'`\s\\)]+)\.js(?![.\w])/g
+
 const scan = (nextDir, label, files) => {
   const problems = []
   let text = ''
-  for (const file of files) {
+  const seen = new Set()
+  const queue = files.filter((file) => file.endsWith('.js'))
+  while (queue.length > 0) {
+    const file = queue.shift()
+    if (seen.has(file)) continue
+    seen.add(file)
     const path = join(nextDir, file)
-    if (!file.endsWith('.js')) continue
     if (!existsSync(path)) {
       problems.push(`${label}: không thấy file ${file} (danh sách chunk lệch bản build)`)
       continue
@@ -63,6 +73,7 @@ const scan = (nextDir, label, files) => {
     text += content
     const found = FORBIDDEN.exec(content)
     if (found !== null) problems.push(`${label} chứa mã DB (${found[0]}) trong ${file}`)
+    for (const reference of content.match(CHUNK_REFERENCE) ?? []) queue.push(reference)
   }
   return { problems, text }
 }

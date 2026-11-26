@@ -7,7 +7,9 @@
 // path (it carries the query) have no place in it, so no caller can hand them over by accident.
 
 export const ERROR_ROUTE_TYPES = ['render', 'route', 'action', 'proxy'] as const
-export type ErrorRouteType = (typeof ERROR_ROUTE_TYPES)[number]
+// `unknown`: a value Next.js sends that this list does not know (it renamed the proxy's once). It is logged and never
+// written to the table: a renamed proxy branch must not start reaching the database (ADR-0009, audit PR #127).
+export type ErrorRouteType = (typeof ERROR_ROUTE_TYPES)[number] | 'unknown'
 
 export type ErrorReport = {
   fingerprint: string
@@ -29,7 +31,7 @@ export type ErrorReportInput = {
 export const MAX_ROUTE_PATH_LENGTH = 200
 const HTTP_METHODS: readonly string[] = ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS']
 const FALLBACK_METHOD = 'OTHER'
-const FALLBACK_ROUTE_TYPE: ErrorRouteType = 'render'
+const FALLBACK_ROUTE_TYPE: ErrorRouteType = 'unknown'
 const FALLBACK_ERROR_NAME = 'Error'
 // The same shapes as the CHECK constraints of error_events (the last line of defence behind this file).
 const ERROR_NAME = /^[A-Za-z]{1,40}$/
@@ -37,7 +39,7 @@ const DIGEST = /^[A-Za-z0-9_-]{1,64}$/
 // The fixed message of dbQuery (ADR-0011): a name written in code and a SQLSTATE / errno, never user input.
 const DB_QUERY_MESSAGE = /^database query (failed|timed out): [a-z0-9.-]{1,60}( \([0-9A-Z_]{1,12}\))?$/
 
-const isRouteType = (value: string): value is ErrorRouteType => (ERROR_ROUTE_TYPES as readonly string[]).includes(value)
+const isRouteType = (value: string): value is Exclude<ErrorRouteType, 'unknown'> => (ERROR_ROUTE_TYPES as readonly string[]).includes(value)
 
 // Next.js passes the route file's pattern (`/app/products/[slug]`), not the URL. A query or fragment is cut anyway,
 // and the cut counts characters, not UTF-16 units: PostgreSQL refuses half a surrogate pair.
@@ -85,3 +87,8 @@ export const toErrorReport = async ({ error, method, routeType, routePath }: Err
 /** One line, fixed fields, JSON-escaped: nothing a visitor typed can start a second line. */
 export const formatErrorLogLine = ({ routeType, routePath, digest, errorName }: ErrorReport): string =>
   `monitoring: request error ${JSON.stringify({ routeType, routePath, digest, errorName })}`
+
+const RECORDED_ROUTE_TYPES: readonly ErrorRouteType[] = ['render', 'route', 'action']
+
+/** Only these reach the table: the proxy never touches the database, and an unknown type is not trusted to be safe. */
+export const isRecordable = ({ routeType }: ErrorReport): boolean => RECORDED_ROUTE_TYPES.includes(routeType)

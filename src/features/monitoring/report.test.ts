@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, expectTypeOf, it } from 'vitest'
-import { formatErrorLogLine, toErrorReport } from '@/features/monitoring/report'
+import { formatErrorLogLine, isRecordable, toErrorReport } from '@/features/monitoring/report'
 
 const BASE = { method: 'GET', routeType: 'render', routePath: '/app/products/[slug]' }
 const DB_MESSAGE = 'database query failed: products.list (08006)'
@@ -101,7 +101,10 @@ describe('toErrorReport', () => {
     expect((await report({ method: 'PROPFIND' })).method).toBe('OTHER')
     expect((await report({ method: 'GET /x' })).method).toBe('OTHER')
     expect((await report({ routeType: 'proxy' })).routeType).toBe('proxy')
-    expect((await report({ routeType: 'nonsense' })).routeType).toBe('render')
+    expect((await report({ routeType: 'nonsense' })).routeType).toBe('unknown')
+    expect(isRecordable(await report({ routeType: 'nonsense' }))).toBe(false)
+    expect(isRecordable(await report({ routeType: 'proxy' }))).toBe(false)
+    for (const routeType of ['render', 'route', 'action']) expect(isRecordable(await report({ routeType }))).toBe(true)
     expect((await report({ routePath: `/${'a'.repeat(300)}` })).routePath).toHaveLength(200)
     // A query or a fragment never reaches the report, even if a caller passed one in the route path.
     expect((await report({ routePath: '/app/products/[slug]?ref=bi-mat#top' })).routePath).toBe('/app/products/[slug]')

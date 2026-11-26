@@ -105,8 +105,10 @@ module.exports = {
         'pure @/features/monitoring/report; the part that writes (@/features/monitoring, with @/db) only with import(), ' +
         'at run time, on the Node.js runtime. Nothing else of src. scripts/check-proxy-bundle.mjs checks the build.',
       from: { path: '^src/instrumentation\\.ts$' },
+      // Nothing of src but the two monitoring files, and no package but Next.js itself (the type of onRequestError):
+      // a static import of @/db, drizzle-orm, postgres or @electric-sql/pglite is refused, whatever its spelling.
       to: {
-        path: '^src/',
+        path: '^(src/|node_modules/(?!next/))',
         pathNot: '^src/features/monitoring/(report\\.ts|index\\.ts)$',
       },
     },
@@ -125,6 +127,15 @@ module.exports = {
         '(no @/db, no server-only, no zod; Web Crypto is a global). Not even a type, so the rule stays one line.',
       from: { path: '^src/features/monitoring/report\\.ts$' },
       to: { path: '^(src/|node_modules/)' },
+    },
+    {
+      name: 'monitoring-report-no-builtins',
+      severity: 'error',
+      comment:
+        'report.ts uses Web Crypto (a global), not node:crypto or any other Node.js builtin: it runs on the edge runtime ' +
+        'too, where a builtin is not there (or is bundled in as a polyfill).',
+      from: { path: '^src/features/monitoring/report\\.ts$' },
+      to: { dependencyTypes: ['core'] },
     },
     {
       name: 'proxy-api-only-from-proxy',

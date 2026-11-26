@@ -214,6 +214,17 @@ describe('AdminGate', () => {
     expect(countErrors).not.toHaveBeenCalled()
   })
 
+  it('lets a Next.js redirect from the count through instead of swallowing it', async () => {
+    gate.mockResolvedValue(undefined)
+    let redirectError: unknown
+    try {
+      redirect('/admin/login')
+    } catch (error) {
+      redirectError = error
+    }
+    await expect(AdminGate({ children: null, countErrors: () => Promise.reject(redirectError) })).rejects.toBe(redirectError)
+  })
+
   it('keeps the bar, without a chip, when the count cannot be read', async () => {
     gate.mockResolvedValue(undefined)
     const html = render(await AdminGate({ children: null, countErrors: () => Promise.reject(new Error('down')) }))
