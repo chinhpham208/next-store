@@ -50,6 +50,8 @@ const FAR_DB_PGLITE_DIR = '.verify/e2e-far-db-pglite'
 if (!BASE_URL) {
   process.env.E2E_ADMIN_PASSWORD ||= randomBytes(24).toString('base64')
   process.env.E2E_SESSION_SECRET ||= randomBytes(32).toString('base64')
+  // The payment webhook (plan M6 Task 8): the same kind of throwaway value; the specs that sign by hand read it.
+  process.env.E2E_FAKE_PAYMENT_SECRET ||= randomBytes(32).toString('base64')
 }
 // What the closed server runs with (a fake value, like the rest): `abab…` is long enough and weak (ADR-0023); the
 // session secret is the valid one of this run, so a token signed with it is exactly what the area must still refuse.
@@ -57,6 +59,9 @@ const CLOSED_CONFIG_ADMIN_PASSWORD = 'ab'.repeat(12)
 const LOCAL_ADMIN_ENV = {
   ADMIN_PASSWORD: process.env.E2E_ADMIN_PASSWORD ?? '',
   SESSION_SECRET: process.env.E2E_SESSION_SECRET ?? '',
+  // Payments are open to everyone on this server (decision 14A) and the webhook has a secret to verify with.
+  FAKE_PAYMENT_SECRET: process.env.E2E_FAKE_PAYMENT_SECRET ?? '',
+  TEST_PAYMENTS_ACCESS: 'public',
 }
 
 // The two specs that log in and write; they run in their own project below.

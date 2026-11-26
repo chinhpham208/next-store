@@ -37,6 +37,7 @@ HSTS_SHORT_PORT=3173
 CSP_PREVIEW_PORT=3172
 CSP_PREVIEW_ALLOW_PORT=3171
 ADMIN_TWO_CSP_PORT=3170
+WEBHOOK_PORT=3169
 
 TMP=$(mktemp -d)
 PIDS=()
@@ -58,6 +59,8 @@ exec "$REAL_CURL" "\$@"
 EOF
 chmod +x "$TMP/bin/curl"
 
+# NS-142: <webhook-mode> shapes POST /api/webhooks/payment: default 400 `unsigned` (the real route without a signature),
+# `not-configured` 503, `open` 200, `other-400` a 400 that is not the webhook's. Other methods get 405.
 # start_server <port> <header-file> [status] [404-body] [soft-regex] [hard-404-regex]: answers / and the smoke's
 # product page (and its RSC / segment prefetch forms) with the default SMOKE_TEXT, /cart with the empty cart, /blog and the smoke's post (and its
 # RSC / segment prefetch forms) with an article and its h1, the smoke's listing paths with the labelled grid (or with <status>, e.g. 401 like Vercel Deployment Protection), everything else with 404 and
@@ -82,9 +85,9 @@ chmod +x "$TMP/bin/curl"
 # nonce per request, on every <script>, ADR-0020); `csp-missing` (baseline only), `csp-script-without-nonce`,
 # `csp-same-nonce` and `csp-unsafe-inline` break it. <hsts>, when set, is sent as Strict-Transport-Security.
 start_server() {
-  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} postStatus=${11:-} rscStatus=${12:-} securityFile=${13:-} adminMode=${14:-} hsts=${15:-} ready="$TMP/ready-$1"
+  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} postStatus=${11:-} rscStatus=${12:-} securityFile=${13:-} adminMode=${14:-} hsts=${15:-} webhookMode=${16:-} ready="$TMP/ready-$1"
   node -e '
-    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule, ogStatus, postStatus, rscStatus, securityFile, adminMode, hsts] = process.argv.slice(1)
+    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule, ogStatus, postStatus, rscStatus, securityFile, adminMode, hsts, webhookMode] = process.argv.slice(1)
     const adminCsp = (nonce) => `default-src \x27self\x27; script-src \x27self\x27 \x27nonce-${nonce}\x27 \x27strict-dynamic\x27${adminMode === "csp-unsafe-inline" ? " \x27unsafe-inline\x27" : ""}; style-src \x27self\x27 \x27nonce-${nonce}\x27; object-src \x27none\x27; frame-ancestors \x27none\x27`
     const loginPage = (res) => {
       const nonce = adminMode === "csp-same-nonce" ? "AAAAAAAAAAAAAAAAAAAAAA==" : require("node:crypto").randomBytes(16).toString("base64")
@@ -125,6 +128,15 @@ start_server() {
       if (robotsTag) res.setHeader("x-robots-tag", robotsTag)
       if (hsts) res.setHeader("strict-transport-security", hsts)
       if (admin(req, res)) return
+      if (req.url === "/api/webhooks/payment") {
+        const answer = (code, text) => { res.writeHead(code, { "content-type": "application/json" }); res.end(text) }
+        if (req.method !== "POST") answer(405, "")
+        else if (webhookMode === "not-configured") answer(503, "{\"error\":\"not-configured\"}")
+        else if (webhookMode === "open") answer(200, "{\"received\":true,\"outcome\":\"ignored\"}")
+        else if (webhookMode === "other-400") answer(400, "<h1>Bad Request</h1>")
+        else answer(400, "{\"error\":\"unsigned\"}")
+        return
+      }
       if (rscStatus && req.headers.rsc === "1" && soft && new RegExp(soft).test(req.url)) { res.writeHead(Number(rscStatus), { location: `${req.url}?_rsc` }); res.end(); return }
       if (postStatus && req.method !== "GET" && (!soft || new RegExp(soft).test(req.url))) { res.writeHead(Number(postStatus), { "content-type": "text/html; charset=utf-8" }); res.end(body); return }
       const locs = ["/", "/products/ao-404-not-found", "/blog/chao-mung-den-next-store"]
@@ -140,7 +152,7 @@ start_server() {
       else if (soft && new RegExp(soft).test(req.url)) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
       else { res.writeHead(404, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
     }).listen(Number(port), "127.0.0.1", () => fs.writeFileSync(ready, ""))
-  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" "$ogStatus" "$postStatus" "$rscStatus" "$securityFile" "$adminMode" "$hsts" &
+  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" "$ogStatus" "$postStatus" "$rscStatus" "$securityFile" "$adminMode" "$hsts" "$webhookMode" &
   PIDS+=($!)
   local i
   for i in $(seq 1 50); do [ -f "$ready" ] && return 0; sleep 0.1; done
@@ -552,3 +564,27 @@ for mode in open keep-cookie action-open encoded-open login-guarded csp-none csp
   rm -f "$TMP/ready-$ADMIN_PORT"
 done
 echo "ok admin-guard"
+
+# webhook-unsigned (NS-142, ADR-0021): smoke POSTs without a signature and needs 400 `unsigned` on every environment,
+# Production included. 503 means the deployment has no usable FAKE_PAYMENT_SECRET and must fail (a preview that cannot
+# take a payment is not a pass), as must any other answer.
+: > "$TMP/headers"
+run BASE_URL="http://127.0.0.1:$PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail webhook-unsigned "webhook đúng: thoát $CODE, cần 0"
+grep -qF 'smoke: POST /api/webhooks/payment (không chữ ký) → 400 unsigned' "$TMP/out" || fail webhook-unsigned "thiếu dòng kết quả"
+! grep -F '"/api/webhooks/payment"' "$TMP/headers" >/dev/null || true
+for mode in not-configured open other-400; do
+  start_server "$WEBHOOK_PORT" "$TMP/webhook-headers-$mode" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 "" "" "" "" "" "$mode"
+  run BASE_URL="http://127.0.0.1:$WEBHOOK_PORT" -- bash scripts/smoke.sh
+  [ "$CODE" = 1 ] || fail webhook-unsigned "$mode: thoát $CODE, cần 1"
+  case $mode in
+    not-configured) expected='LỖI: POST /api/webhooks/payment trả 503: webhook chưa được cấu hình' ;;
+    open) expected='LỖI: POST /api/webhooks/payment (không chữ ký) trả 200, cần 400' ;;
+    other-400) expected='LỖI: POST /api/webhooks/payment (không chữ ký) trả 400 nhưng thân không phải {"error":"unsigned"}' ;;
+  esac
+  grep -qF -- "$expected" "$TMP/out" || fail webhook-unsigned "$mode: thiếu \"$expected\""
+  kill "${PIDS[-1]}" 2>/dev/null || true
+  wait "${PIDS[-1]}" 2>/dev/null || true
+  rm -f "$TMP/ready-$WEBHOOK_PORT"
+done
+echo "ok webhook-unsigned"

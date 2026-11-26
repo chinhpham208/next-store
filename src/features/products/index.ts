@@ -46,3 +46,4 @@ export {
 } from '@/features/products/schema'
 // decrementStockForOrder is not re-exported: only features/orders imports products/stock.ts (dependency-cruiser
 // stock-only-from-orders, audit PR #125 N1), so no other feature can reach the stock write through this barrel.
+export { tagsForProductWrite } from '@/features/products/cache-tags'
