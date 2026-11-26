@@ -1,5 +1,17 @@
 import { sql } from 'drizzle-orm'
-import { boolean, check, index, integer, pgTable, primaryKey, serial, text, timestamp, uuid } from 'drizzle-orm/pg-core'
+import {
+  boolean,
+  check,
+  index,
+  integer,
+  jsonb,
+  pgTable,
+  primaryKey,
+  serial,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core'
 
 export const categories = pgTable('categories', {
   id: serial('id').primaryKey(),
@@ -93,8 +105,84 @@ export const adminLoginFailures = pgTable(
   ],
 )
 
+// ADR-0021: the order statuses and refund reasons; the CHECKs below and the order store read the same lists.
+export const ORDER_STATUSES = ['pending', 'paid', 'needs_refund', 'cancelled'] as const
+export const REFUND_REASONS = ['out-of-stock', 'amount-mismatch'] as const
+
+const inList = (values: readonly string[]) => sql.raw(values.map((value) => `'${value}'`).join(', '))
+
+// ADR-0021: the one serial of the schema (the order code sent to the gateway); the app role has USAGE / SELECT on
+// sequences (ADR-0010). No $onUpdate: every write sets updated_at, as for carts. payment_ref is attached after the
+// provider answers, so it is nullable (Postgres lets many NULLs share a unique column).
+export const orders = pgTable(
+  'orders',
+  {
+    id: serial('id').primaryKey(),
+    // Snapshot of the cart lines with the price at the time of the order (ADR-0014 (c)).
+    items: jsonb('items').notNull(),
+    total: integer('total').notNull(),
+    status: text('status', { enum: ORDER_STATUSES }).notNull().default('pending'),
+    refundReason: text('refund_reason', { enum: REFUND_REASONS }),
+    provider: text('provider').notNull(),
+    paymentRef: text('payment_ref').unique(),
+    cartId: uuid('cart_id').references(() => carts.id, { onDelete: 'set null' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check('orders_total_positive', sql`${table.total} > 0`),
+    check('orders_status_known', sql`${table.status} IN (${inList(ORDER_STATUSES)})`),
+    check('orders_refund_reason_known', sql`${table.refundReason} IS NULL OR ${table.refundReason} IN (${inList(REFUND_REASONS)})`),
+    // A refund reason exists exactly when the order needs a refund.
+    check('orders_refund_reason_matches_status', sql`(${table.status} = 'needs_refund') = (${table.refundReason} IS NOT NULL)`),
+    // The orders column is a JSON array of lines (the Zod schema of the order store is the first line of defence).
+    check('orders_items_is_array', sql`jsonb_typeof(${table.items}) = 'array'`),
+    // /admin/orders: ORDER BY created_at DESC, id DESC (ADR-0023). Postgres reads a bare DESC as DESC NULLS FIRST and
+    // drizzle-kit writes NULLS LAST unless told otherwise, which no such query can use: say nullsFirst() (audit PR #122 M1).
+    index('orders_created_at_idx').on(table.createdAt.desc().nullsFirst(), table.id.desc().nullsFirst()),
+    index('orders_status_created_at_idx').on(
+      table.status,
+      table.createdAt.desc().nullsFirst(),
+      table.id.desc().nullsFirst(),
+    ),
+    // ON DELETE SET NULL runs one UPDATE orders WHERE cart_id = … per deleted cart (cart purge, ADR-0014); without an
+    // index each of them scans the whole table (audit PR #122 M2). Also serves later lookups of orders by cart.
+    index('orders_cart_id_idx').on(table.cartId),
+  ],
+)
+
+// ADR-0022: one row per fingerprint of (routeType | routePath | errorName | message); the digest is a column of its
+// own (latest value, to find the log line) and not part of the fingerprint. No serial / identity (DML-only role).
+export const errorEvents = pgTable(
+  'error_events',
+  {
+    fingerprint: text('fingerprint').primaryKey(),
+    routeType: text('route_type').notNull(),
+    routePath: text('route_path').notNull(),
+    method: text('method').notNull(),
+    digest: text('digest'),
+    errorName: text('error_name').notNull(),
+    // Only the fixed message of dbQuery (ADR-0011); null for every other error.
+    message: text('message'),
+    count: integer('count').notNull().default(1),
+    firstSeenAt: timestamp('first_seen_at', { withTimezone: true }).notNull().defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    // Last line of defence behind toErrorReport (ADR-0022): the caps of the fields that are written.
+    check('error_events_route_path_length', sql`char_length(${table.routePath}) <= 200`),
+    check('error_events_error_name_shape', sql`${table.errorName} ~ '^[A-Za-z]{1,40}$'`),
+    check('error_events_digest_shape', sql`${table.digest} IS NULL OR ${table.digest} ~ '^[A-Za-z0-9_-]{1,64}$'`),
+    check('error_events_count_positive', sql`${table.count} >= 1`),
+    // /admin/errors and the retention purge scan by age.
+    index('error_events_last_seen_at_idx').on(table.lastSeenAt),
+  ],
+)
+
 export type Category = typeof categories.$inferSelect
 export type Product = typeof products.$inferSelect
 export type Cart = typeof carts.$inferSelect
 export type CartItem = typeof cartItems.$inferSelect
 export type AdminLoginFailure = typeof adminLoginFailures.$inferSelect
+export type Order = typeof orders.$inferSelect
+export type ErrorEvent = typeof errorEvents.$inferSelect

@@ -18,8 +18,10 @@ const applyStatements = async (statements: string[]) => {
   for (const statement of statements) await db.execute(sql.raw(statement))
 }
 
-// cart_items references products (NS-88): truncated together, named rather than CASCADE so a new reference fails here.
-const resetTables = () => db.execute(sql`truncate table cart_items, carts, products, categories restart identity`)
+// cart_items references products (NS-88) and orders references carts (NS-138): truncated together, named rather than
+// CASCADE so a new reference fails here.
+const resetTables = () =>
+  db.execute(sql`truncate table orders, cart_items, carts, products, categories restart identity`)
 
 const omit = (row: Product, keys: readonly (keyof Product)[]) =>
   Object.fromEntries(Object.entries(row).filter(([key]) => !keys.some((omitted) => omitted === key)))

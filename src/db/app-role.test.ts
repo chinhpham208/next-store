@@ -1,4 +1,6 @@
-import { readFileSync } from 'node:fs'
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type { PGlite } from '@electric-sql/pglite'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { closeConnection, createConnection, type Connection } from '@/db/client'
@@ -167,6 +169,36 @@ describe('scripts/sql/app-role.sql on a migrated database (NS-60)', () => {
       await client.query('DELETE FROM products WHERE id = $1', [productId])
       await client.query('DELETE FROM categories WHERE id = $1', [categoryId])
     }
+  })
+
+  // NS-138 (M6 Task 4): the statements the order store and the error recorder need, as the DML-only role. orders.id is
+  // the one serial of the schema (ADR-0021), so the INSERT … RETURNING id proves the role may use its sequence.
+  it('orders and error_events queries run as a DML-only role', async () => {
+    await asApp(client, async () => {
+      const id = (await client.query<{ id: number }>(
+        "INSERT INTO orders (items, total, provider) VALUES ('[]'::jsonb, 1000, 'fake') RETURNING id",
+      )).rows[0]?.id
+      expect(id).toBeTypeOf('number')
+      expect((await client.query('SELECT id FROM orders WHERE id = $1 FOR UPDATE', [id])).rows).toHaveLength(1)
+      await client.query("UPDATE orders SET payment_ref = 'role-ref', updated_at = now() WHERE id = $1", [id])
+      const upsert = `INSERT INTO error_events (fingerprint, route_type, route_path, method, error_name)
+        VALUES ('role', 'render', '/app/x', 'GET', 'Error')
+        ON CONFLICT (fingerprint) DO UPDATE SET count = error_events.count + 1, last_seen_at = now()`
+      await client.query(upsert)
+      await client.query(upsert)
+      expect((await client.query('SELECT count FROM error_events WHERE fingerprint = $1', ['role'])).rows).toEqual([{ count: 2 }])
+      await client.query(
+        "DELETE FROM error_events WHERE fingerprint IN (SELECT fingerprint FROM error_events WHERE last_seen_at < now() - interval '30 days' ORDER BY last_seen_at LIMIT 50)",
+      )
+      await client.query('DELETE FROM error_events WHERE fingerprint = $1', ['role'])
+      await client.query('DELETE FROM orders WHERE id = $1', [id])
+      for (const statement of ['TRUNCATE orders', 'TRUNCATE error_events', 'ALTER TABLE orders ADD COLUMN x int']) {
+        expect(await sqlState(() => client.exec(statement)), statement).toBe('42501')
+      }
+    })
+    expect((await explicitGrants(client, 'orders')).sort()).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE'])
+    expect((await explicitGrants(client, 'error_events')).sort()).toEqual(['DELETE', 'INSERT', 'SELECT', 'UPDATE'])
+    expect(await check(client)).toEqual(DML_ONLY)
   })
 
   it.each([
@@ -461,5 +493,43 @@ describe('the SQL scripts carry no secrets', () => {
   })
   it('the check script only reads', () => {
     expect(CHECK_SQL.replace(/--[^\n]*/g, '')).not.toMatch(/\b(?:GRANT|REVOKE|ALTER|CREATE|DROP|INSERT|UPDATE|DELETE)\b\s/)
+  })
+})
+
+// Audit PR #122 L2: on Neon the order is the reverse of the describe above. app-role.sql already ran when a migration
+// creates a table and its sequence, so their rights come from ALTER DEFAULT PRIVILEGES alone. orders_id_seq is the
+// first sequence to travel that way.
+describe('a table with a serial created after app-role.sql ran (NS-138)', () => {
+  const copyMigrations = (upTo: number) => {
+    const folder = mkdtempSync(join(tmpdir(), 'ns138-migrations-'))
+    cpSync('drizzle', folder, { recursive: true })
+    const journalPath = join(folder, 'meta', '_journal.json')
+    const journal = JSON.parse(readFileSync(journalPath, 'utf8')) as { entries: { idx: number }[] }
+    journal.entries = journal.entries.filter((entry) => entry.idx <= upTo)
+    writeFileSync(journalPath, JSON.stringify(journal))
+    return folder
+  }
+
+  it('lets the app role insert into orders through the default privileges on its sequence', async () => {
+    const { connection, client } = await openDatabase()
+    const before = copyMigrations(3)
+    try {
+      await runMigrations(connection, before)
+      await applyAppRole(client)
+      expect((await client.query("SELECT to_regclass('orders') AS t")).rows).toEqual([{ t: null }])
+      await runMigrations(connection)
+      await asApp(client, async () => {
+        const first = await client.query<{ id: number }>(
+          "INSERT INTO orders (items, total, provider) VALUES ('[]'::jsonb, 1000, 'fake') RETURNING id",
+        )
+        expect(first.rows[0]?.id).toBeTypeOf('number')
+        await client.query("INSERT INTO error_events (fingerprint, route_type, route_path, method, error_name) VALUES ('a', 'render', '/x', 'GET', 'Error')")
+      })
+      expect((await explicitGrants(client, 'orders_id_seq')).sort()).toEqual(['SELECT', 'USAGE'])
+      expect(await check(client)).toEqual(DML_ONLY)
+    } finally {
+      rmSync(before, { recursive: true, force: true })
+      await closeConnection(connection)
+    }
   })
 })

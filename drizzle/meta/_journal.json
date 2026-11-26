@@ -29,6 +29,13 @@
       "when": 1795600526623,
       "tag": "0003_products_created_at_backfill",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795705781537,
+      "tag": "0004_left_pixie",
+      "breakpoints": true
     }
   ]
 }
