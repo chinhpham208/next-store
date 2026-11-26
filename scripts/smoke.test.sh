@@ -30,6 +30,7 @@ UNKNOWN_405_PORT=3180
 UNKNOWN_307_PORT=3179
 REDIRECT_PORT=3178
 SECURITY_PORT=3177
+ADMIN_PORT=3176
 
 TMP=$(mktemp -d)
 PIDS=()
@@ -67,10 +68,30 @@ chmod +x "$TMP/bin/curl"
 # Every response carries the site's security headers (NS-108, next.config.ts) unless <security-file> names a file whose
 # first line is a regex: matching URLs then leave out the header named on its second line, or all of them. The file is
 # read on each request, so one server serves every security case.
+# The admin area (US-12, M5 Task 8) answers like src/proxy.ts without a session: /admin/login 200 (noindex), every other
+# /admin/* (and /%61dmin/*, /admin%2F…; not /Admin/…) GET 307 to /admin/login clearing each admin cookie sent, any
+# other method 401. <admin-mode> breaks one part: `open` (/admin/products 200 with the signed-in shell), `keep-cookie`
+# (no clearing Set-Cookie), `action-open` (a POST with next-action 200), `encoded-open` (/%61dmin/products 200 with the
+# shell), `login-guarded` (/admin/login 307 like any admin page).
 start_server() {
-  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} postStatus=${11:-} rscStatus=${12:-} securityFile=${13:-} ready="$TMP/ready-$1"
+  local port=$1 headers=$2 status=${3:-200} body=${4:-"<h1>Không tìm thấy trang</h1>"} soft=${5:-} hard=${6:-} robotsTag=${7:-} origin=${8:-https://shop.example.test} robotsRule=${9:-Allow: /} ogStatus=${10:-200} postStatus=${11:-} rscStatus=${12:-} securityFile=${13:-} adminMode=${14:-} ready="$TMP/ready-$1"
   node -e '
-    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule, ogStatus, postStatus, rscStatus, securityFile] = process.argv.slice(1)
+    const [port, headers, ready, status, body, soft, hard, robotsTag, origin, robotsRule, ogStatus, postStatus, rscStatus, securityFile, adminMode] = process.argv.slice(1)
+    const SHELL = "<header>Quản trị next-store<nav><a href=\"/admin/products\">Sản phẩm</a></nav><button>Đăng xuất</button></header>"
+    const admin = (req, res) => {
+      if (req.url === "/admin/login" && adminMode !== "login-guarded") { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end("<meta name=\"robots\" content=\"noindex, nofollow\"/><h1>Đăng nhập quản trị</h1>"); return true }
+      if (!/^\/(?:admin|%61dmin)(?:$|[/.?]|%2F)/.test(req.url)) return false
+      const action = req.method === "POST" && "next-action" in req.headers
+      if ((adminMode === "open" && req.url === "/admin/products") || (adminMode === "encoded-open" && req.url === "/%61dmin/products") || (adminMode === "action-open" && action)) {
+        res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(SHELL); return true
+      }
+      if (req.method !== "GET" && req.method !== "HEAD") { res.writeHead(401); res.end(); return true }
+      const sent = (req.headers.cookie || "").split(/; */).map((pair) => pair.split("=")[0])
+      const clear = adminMode === "keep-cookie" ? [] : ["__Host-ns_admin", "ns_admin"].filter((name) => sent.includes(name))
+      res.writeHead(307, { location: `http://127.0.0.1:${port}/admin/login`, "set-cookie": clear.map((name) => `${name}=; Path=/; Max-Age=0; HttpOnly; SameSite=strict`) })
+      res.end()
+      return true
+    }
     const SECURITY = { "x-frame-options": "DENY", "content-security-policy": "frame-ancestors \x27none\x27", "x-content-type-options": "nosniff", "referrer-policy": "strict-origin-when-cross-origin" }
     const og = (path) => `<meta property="og:image" content="http://localhost:3000${path}"/>`
     const images = ["/opengraph-image?a1b2c3", "/products/ao-404-not-found/opengraph-image-16g1u1?d4e5f6", "/blog/chao-mung-den-next-store/opengraph-image-16g1u1?a7b8c9"]
@@ -82,6 +103,7 @@ start_server() {
         if (!(omitUrl && new RegExp(omitUrl).test(req.url) && (!omitName || omitName === name))) res.setHeader(name, value)
       }
       if (robotsTag) res.setHeader("x-robots-tag", robotsTag)
+      if (admin(req, res)) return
       if (rscStatus && req.headers.rsc === "1" && soft && new RegExp(soft).test(req.url)) { res.writeHead(Number(rscStatus), { location: `${req.url}?_rsc` }); res.end(); return }
       if (postStatus && req.method !== "GET" && (!soft || new RegExp(soft).test(req.url))) { res.writeHead(Number(postStatus), { "content-type": "text/html; charset=utf-8" }); res.end(body); return }
       const locs = ["/", "/products/ao-404-not-found", "/blog/chao-mung-den-next-store"]
@@ -97,7 +119,7 @@ start_server() {
       else if (soft && new RegExp(soft).test(req.url)) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
       else { res.writeHead(404, { "content-type": "text/html; charset=utf-8" }); res.end(body) }
     }).listen(Number(port), "127.0.0.1", () => fs.writeFileSync(ready, ""))
-  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" "$ogStatus" "$postStatus" "$rscStatus" "$securityFile" &
+  ' "$port" "$headers" "$ready" "$status" "$body" "$soft" "$hard" "$robotsTag" "$origin" "$robotsRule" "$ogStatus" "$postStatus" "$rscStatus" "$securityFile" "$adminMode" &
   PIDS+=($!)
   local i
   for i in $(seq 1 50); do [ -f "$ready" ] && return 0; sleep 0.1; done
@@ -418,3 +440,39 @@ for name in x-frame-options content-security-policy x-content-type-options refer
 done
 rm -f "$TMP/security-omit"
 echo "ok security-headers"
+
+# admin-guard (US-12, M5 Task 8): smoke checks every admin path a visitor without a session can reach. The default
+# server answers like the proxy; each mode breaks one part and must fail smoke, naming it.
+: > "$TMP/headers"
+run BASE_URL="http://127.0.0.1:$PORT" -- bash scripts/smoke.sh
+[ "$CODE" = 0 ] || fail admin-guard "proxy đúng: thoát $CODE, cần 0"
+for line in 'smoke: GET /admin/products (không cookie) → 307 /admin/login' \
+  'smoke: GET /admin/products (cookie __Host-ns_admin rác) → Set-Cookie xoá __Host-ns_admin' \
+  'smoke: GET /admin/products (cookie ns_admin rác) → Set-Cookie xoá ns_admin' \
+  'smoke: POST /admin/products (Server Action, không phiên) → 401' \
+  'smoke: GET /%61dmin/products (đường dẫn admin viết khác) → 307' \
+  'smoke: GET /Admin/products (đường dẫn admin viết khác) → 404' \
+  'smoke: GET /admin/login → 200, noindex, không Set-Cookie'; do
+  grep -qF -- "$line" "$TMP/out" || fail admin-guard "thiếu dòng \"$line\""
+done
+# The next-action header reaches only /admin/* (the fake server logs every request's headers).
+grep -c '"next-action"' "$TMP/headers" | grep -qx 2 || fail admin-guard "next-action được gửi ngoài hai request admin"
+for mode in open keep-cookie action-open encoded-open login-guarded; do
+  start_server "$ADMIN_PORT" "$TMP/admin-headers-$mode" 200 "<h1>Không tìm thấy trang</h1>" "" "" "" https://shop.example.test "Allow: /" 200 "" "" "" "$mode"
+  run BASE_URL="http://127.0.0.1:$ADMIN_PORT" -- bash scripts/smoke.sh
+  [ "$CODE" = 1 ] || fail admin-guard "$mode: thoát $CODE, cần 1"
+  grep -qF 'khu admin không được chặn đúng' "$TMP/out" || fail admin-guard "$mode: thiếu thông báo tổng"
+  case $mode in
+    open) expected='LỖI: GET /admin/products (không cookie) trả 200, cần 307 tới /admin/login' ;;
+    keep-cookie) expected='LỖI: GET /admin/products (cookie __Host-ns_admin rác) không xoá cookie' ;;
+    action-open) expected='LỖI: POST /admin/products (Server Action, không phiên) trả 200, cần 401' ;;
+    encoded-open) expected='LỖI: GET /%61dmin/products (đường dẫn admin viết khác) trả 200 kèm nội dung khu admin' ;;
+    login-guarded) expected='LỖI: GET /admin/login trả 307, cần 200' ;;
+  esac
+  grep -qF -- "$expected" "$TMP/out" || fail admin-guard "$mode: thiếu \"$expected\""
+  # One port for every mode: stop this server and forget its ready file before the next one starts.
+  kill "${PIDS[-1]}" 2>/dev/null || true
+  wait "${PIDS[-1]}" 2>/dev/null || true
+  rm -f "$TMP/ready-$ADMIN_PORT"
+done
+echo "ok admin-guard"

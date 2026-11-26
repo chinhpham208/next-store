@@ -1,6 +1,6 @@
 import { NextRequest } from 'next/server'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { hasValidAdminCookie, isAdminLoginPath, isAdminPath } from '@/features/admin/proxy-api'
+import { hasValidAdminCookie, isAdminLoginPath, isAdminPath, isGuardedAdminPath } from '@/features/admin/proxy-api'
 import { signSession } from '@/features/admin/session'
 
 // Fake values, test only.
@@ -45,6 +45,62 @@ describe('isAdminPath', () => {
   })
 })
 
+// Audit PR #104 L4: isAdminPath reads the pathname as the proxy gets it, not decoded and case-sensitive. These are the
+// spellings a router that decoded or folded case would read as admin; isAdminPath does not, isGuardedAdminPath does.
+const LOOSE_ADMIN_SPELLINGS = [
+  '/%61dmin/products',
+  '/%61%64%6d%69%6e/products',
+  '/admin%2Fproducts',
+  '/admin%2fproducts',
+  '/Admin/products',
+  '/ADMIN',
+  '/aDmIn/products/ao-git-push-force',
+  '/%41dmin/products',
+  '/Admin.rsc',
+  '/%61dmin/login',
+  '/Admin/login',
+  '/admin/%6Cogin',
+]
+
+describe('isAdminPath: the canonical spelling only', () => {
+  it.each(LOOSE_ADMIN_SPELLINGS.filter((path) => !path.startsWith('/admin/')))(
+    'does not match the non-canonical %s (decoded or case-folded, it would)',
+    (path) => {
+      expect(isAdminPath(path)).toBe(false)
+    },
+  )
+})
+
+describe('isGuardedAdminPath', () => {
+  it.each([
+    '/admin',
+    '/admin/login',
+    '/admin/products',
+    '/admin.rsc',
+    '/admin.segments/_tree.segment.rsc',
+    ...LOOSE_ADMIN_SPELLINGS,
+  ])('guards %s', (path) => {
+    expect(isGuardedAdminPath(path)).toBe(true)
+  })
+
+  it.each([
+    '/',
+    '/administrator',
+    '/Administrator',
+    '/%61dministrator',
+    '/admins',
+    '/admin-x',
+    '/products/admin',
+    '/products/%61dmin',
+    '/blog/Admin',
+    // One decoding step only, as a router does: a double-encoded spelling is not admin to it either.
+    '/%2561dmin/products',
+    '/%zzadmin',
+  ])('leaves %s alone', (path) => {
+    expect(isGuardedAdminPath(path)).toBe(false)
+  })
+})
+
 describe('isAdminLoginPath', () => {
   it('matches /admin/login and its RSC and segment forms', () => {
     for (const path of [
@@ -72,6 +128,12 @@ describe('isAdminLoginPath', () => {
       '/admin/login.segments/../products/x.segment',
       '/admin/login.segments/a/%2e%2e/b.segment',
       '/login',
+      // Non-canonical spellings of the login page are guarded like any admin page (audit PR #104 L4).
+      '/Admin/login',
+      '/ADMIN/LOGIN',
+      '/%61dmin/login',
+      '/admin/%6Cogin',
+      '/admin%2Flogin',
     ]) {
       expect(isAdminLoginPath(path), path).toBe(false)
     }

@@ -35,6 +35,21 @@ export const isAdminPath = (pathname: string): boolean => ADMIN_PATH.test(pathna
 
 export const isAdminLoginPath = (pathname: string): boolean => ADMIN_LOGIN_PATH.test(pathname)
 
+// The pathname as a router that decodes percent escapes or ignores case could read it (audit PR #104 L4). Each
+// escape is decoded on its own, so one malformed escape does not hide the others; `%2F` becomes `/` too, so
+// `/admin%2Fproducts` reads as `/admin/products`. Never used to let a request through: only to guard more.
+const PERCENT_ESCAPE = /%[0-9A-Fa-f]{2}/g
+const decodeEscape = (escape: string): string => String.fromCharCode(Number.parseInt(escape.slice(1), 16))
+const looseSpelling = (pathname: string): string => pathname.replace(PERCENT_ESCAPE, decodeEscape).toLowerCase()
+
+/**
+ * True for every path the proxy must guard as admin: the canonical forms of isAdminPath, and any spelling that
+ * reads as one once percent escapes are decoded and case is folded (`/%61dmin/…`, `/admin%2F…`, `/Admin/…`).
+ * isAdminLoginPath stays canonical only, so a loose spelling of the login page is guarded like any admin page.
+ */
+export const isGuardedAdminPath = (pathname: string): boolean =>
+  isAdminPath(pathname) || isAdminPath(looseSpelling(pathname))
+
 /**
  * True when the admin cookie of the site's scheme holds a valid session. Reads the env directly (config.ts is
  * `server-only`) with the same fail-closed rules: a missing or weak value → false, never a check against an empty

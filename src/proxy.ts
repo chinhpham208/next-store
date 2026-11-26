@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server'
+import { hasValidAdminCookie, isAdminLoginPath, isGuardedAdminPath } from '@/features/admin/proxy-api'
 import { isPostSlug } from '@/features/blog/proxy-api'
 import { isCatalogSlug, isProductSlug } from '@/features/products/proxy-api'
 
@@ -40,7 +41,42 @@ const answerProduct = (request: NextRequest, slug: string | undefined): NextResp
 const ACTION_HEADER = 'next-action'
 const isServerAction = (request: NextRequest) => request.method === 'POST' && request.headers.has(ACTION_HEADER)
 
-export const proxy = (request: NextRequest): NextResponse => {
+// US-12 (ADR-0018, plan M5 Task 8): an optimistic check of the session cookie alone, no database (D2, `proxy-no-db`);
+// the layout and every admin action check again. It is the source of the real 307: a redirect() in the streamed
+// layout is only a meta tag (D5). Both cookie names are cleared when the request carries them, so a junk or stale
+// cookie of either scheme does not stay behind (audit PR #104 note). __Host- needs Secure and Path=/ on the deleting
+// Set-Cookie too. Not logged.
+const LOGIN_PATH = '/admin/login'
+const ADMIN_COOKIES = [
+  { name: '__Host-ns_admin', secure: true },
+  { name: 'ns_admin', secure: false },
+] as const
+
+const redirectToLogin = (request: NextRequest): NextResponse => {
+  // No next / returnTo parameter: nothing to turn into an open redirect.
+  const response = NextResponse.redirect(new URL(LOGIN_PATH, request.url), 307)
+  for (const { name, secure } of ADMIN_COOKIES) {
+    if (!request.cookies.has(name)) continue
+    response.cookies.set({ name, value: '', path: '/', maxAge: 0, httpOnly: true, sameSite: 'strict', secure })
+  }
+  return response
+}
+
+const answerAdmin = async (request: NextRequest): Promise<NextResponse> => {
+  // Canonical spelling only: `/Admin/login` or `/%61dmin/login` is guarded like any other admin page.
+  if (isAdminLoginPath(request.nextUrl.pathname)) return NextResponse.next()
+  if (await hasValidAdminCookie(request)) return NextResponse.next()
+  if (request.method === 'GET' || request.method === 'HEAD') return redirectToLogin(request)
+  // A Server Action (POST + next-action) or any other method: no redirect for a fetch to follow, an empty 401.
+  return new NextResponse(null, { status: 401 })
+}
+
+// Fixed order (plan M5 Global Constraints): (1) admin, (2) the Server Action shortcut, (3) product and blog slugs.
+// The admin branch comes first, or a POST with `next-action` to /admin/* would skip it. Everything else stays
+// synchronous: only the admin branch waits, on Web Crypto.
+export const proxy = (request: NextRequest): NextResponse | Promise<NextResponse> => {
+  // Also the spellings a decoding or case-folding router would read as admin (audit PR #104 L4).
+  if (isGuardedAdminPath(request.nextUrl.pathname)) return answerAdmin(request)
   if (isServerAction(request)) return NextResponse.next()
   const [, section, slug] = SLUG_PATH.exec(request.nextUrl.pathname) ?? []
   if (section === 'products') return answerProduct(request, slug)
@@ -51,7 +87,8 @@ export const proxy = (request: NextRequest): NextResponse => {
 }
 
 // Constant, so Next.js can analyse it at build time. `:image` is the Open Graph image route of the page (K10); a
-// second segment that is not one fails SLUG_PATH → 404, which is what Next.js would answer for it anyway.
+// second segment that is not one fails SLUG_PATH → 404, which is what Next.js would answer for it anyway. `/admin`
+// and everything under it, with their transport forms (Next.js adds those to every matcher), for the admin guard.
 export const config = {
-  matcher: ['/products/:slug', '/products/:slug/:image', '/blog/:slug', '/blog/:slug/:image'],
+  matcher: ['/admin', '/admin/:path*', '/products/:slug', '/products/:slug/:image', '/blog/:slug', '/blog/:slug/:image'],
 }
