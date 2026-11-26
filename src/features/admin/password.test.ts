@@ -68,3 +68,18 @@ describe('passwordMatches', () => {
     expect(passwordMatches(`${EXPECTED}\n`, config.password)).toBe(false)
   })
 })
+
+// Audit PR #105 N3: the form check (actions.ts) and the comparison (password.ts) share one input limit.
+describe('the password length limit', () => {
+  it('lives once in limits.ts and both actions.ts and password.ts import it', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { MAX_PASSWORD_LENGTH } = await import('@/features/admin/limits')
+    expect(MAX_PASSWORD_LENGTH).toBe(256)
+    for (const path of ['src/features/admin/actions.ts', 'src/features/admin/password.ts']) {
+      const source = readFileSync(path, 'utf8')
+      // SHA-256 aside, no second copy of the number.
+      expect(source, path).not.toMatch(/(?<!SHA-)\b256\b/)
+      expect(source, path).toMatch(/import \{[^}]*\bMAX_PASSWORD_LENGTH\b[^}]*\} from '@\/features\/admin\/limits'/)
+    }
+  })
+})

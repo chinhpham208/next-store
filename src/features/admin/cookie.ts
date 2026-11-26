@@ -32,12 +32,15 @@ export const adminCookieOptions = (): AdminCookieOptions => ({
 
 /** A valid session cookie under the current scheme's name. A disabled config closes the area: always false. */
 export const hasAdminSession = async (): Promise<boolean> => {
+  // The request first, the config after (audit PR #105 M1): reading env first returned before any dynamic API when
+  // the build had no ADMIN_PASSWORD / SESSION_SECRET (CI), so "no session" was prerendered into /admin/login and a
+  // requireAdminPage redirect would be baked into every admin page. Read this way, the route is dynamic whatever
+  // the build env. cookies() alone does not keep new Date() out of a prerender (blocking-prerender-current-time, as
+  // the cart's NS-104): the clock is read only after connection().
+  const token = (await cookies()).get(adminCookieName())?.value
+  await connection()
   const config = readAdminConfig()
   if (!config.enabled) return false
-  const token = (await cookies()).get(adminCookieName())?.value
-  // cookies() alone does not keep new Date() out of a prerender (blocking-prerender-current-time on /admin/login,
-  // as the cart's NS-104): the clock is read only once the request is real.
-  await connection()
   return verifySession({ token, secret: config.sessionSecret, now: new Date() })
 }
 

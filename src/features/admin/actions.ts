@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation'
 import { hashClientIp, readClientIp } from '@/features/admin/client-ip'
 import { readAdminConfig } from '@/features/admin/config'
 import { clearAdminSession, writeAdminSession } from '@/features/admin/cookie'
+import { MAX_PASSWORD_LENGTH } from '@/features/admin/limits'
 import { isLoginLocked, purgeLoginFailures, recordLoginFailure } from '@/features/admin/login-limit'
 import { passwordMatches } from '@/features/admin/password'
 import type { LoginError, LoginState } from '@/features/admin/types'
@@ -17,11 +18,9 @@ const RECORD_FAILED_LOG = 'admin: recording a login failure failed'
 const LOCK_CHECK_FAILED_LOG = 'admin: the login lock check failed'
 const PURGE_FAILED_LOG = 'admin: purging old login failures failed'
 
-const MAX_PASSWORD_LENGTH = 256
-
 const refused = (error: LoginError): LoginState => ({ status: 'error', error })
 
-// A string of 1..256 characters, as typed: not trimmed (only the env value is, ADR-0018 "Sửa theo audit PR #104").
+// A string of 1..MAX_PASSWORD_LENGTH characters, as typed: not trimmed (only the env value is, ADR-0018 "Sửa theo audit PR #104").
 // The action is callable with any argument, so anything but FormData is invalid too.
 const typedPassword = (formData: unknown): string | undefined => {
   if (!(formData instanceof FormData)) return undefined
