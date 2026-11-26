@@ -86,27 +86,14 @@ export const loginAsAdmin = async (page: Page): Promise<void> => {
 export const adminCookie = async (context: BrowserContext) =>
   (await context.cookies()).find(({ name }) => ADMIN_COOKIE_NAMES.some((admin) => admin === name))
 
-const cookieNameFor = (baseURL: string): string => adminCookieNameFor(new URL(baseURL))
-
-/** Puts a cookie of the admin session in the context, under the name the site uses; `__Host-` needs Secure and Path=/. */
-export const setAdminCookie = async (context: BrowserContext, baseURL: string | undefined, value: string): Promise<void> => {
-  if (!baseURL) throw new Error('setAdminCookie cần baseURL')
-  await context.addCookies([
-    {
-      name: cookieNameFor(baseURL),
-      value,
-      url: baseURL,
-      httpOnly: true,
-      sameSite: 'Strict',
-      secure: new URL(baseURL).protocol === 'https:',
-    },
-  ])
+/** The cookie's name on this site: `__Host-ns_admin` on https, `ns_admin` on http. */
+export const adminCookieName = (baseURL: string | undefined): string => {
+  if (!baseURL) throw new Error('adminCookieName cần baseURL')
+  return adminCookieNameFor(new URL(baseURL))
 }
 
-export const adminCookieHeader = (baseURL: string | undefined, value: string): string => {
-  if (!baseURL) throw new Error('adminCookieHeader cần baseURL')
-  return `${cookieNameFor(baseURL)}=${value}`
-}
+/** A Cookie request header for the admin session. Sent on a request of its own: a browser redirect would lose the bypass header. */
+export const adminCookieHeader = (baseURL: string | undefined, value: string): string => `${adminCookieName(baseURL)}=${value}`
 
 // A signature with one character changed, kept canonical (the last character of a 43-character base64url value
 // carries only 4 bits, so the change is in the last but one).

@@ -1,12 +1,13 @@
 import { randomInt } from 'node:crypto'
+import type { APIResponse } from '@playwright/test'
 import {
   adminCookie,
+  adminCookieName,
   adminCookieHeader,
   adminPassword,
   forgedToken,
   loginAsAdmin,
   openLogin,
-  setAdminCookie,
   submitPassword,
   tamper,
 } from './admin'
@@ -35,33 +36,34 @@ const VIEWPORTS = [
 const locationPath = (location: string | undefined): string | undefined =>
   location === undefined ? undefined : new URL(location, 'http://x').pathname
 
+// The 307 is read from the response itself (`maxRedirects: 0`), never by letting the browser follow it: on a preview the
+// bypass header does not go along a browser redirect (e2e/bypass.ts), so the hop to /admin/login would meet Vercel's
+// own login. The login page is opened by its own address.
+const clearsCookie = (response: APIResponse, name: string): boolean =>
+  response
+    .headersArray()
+    .some(({ name: header, value }) => header.toLowerCase() === 'set-cookie' && value.startsWith(`${name}=;`) && /max-age=0/i.test(value))
+
+const expectLoginRedirect = (response: APIResponse): void => {
+  expect(response.status()).toBe(307)
+  expect(locationPath(response.headers().location)).toBe('/admin/login')
+}
+
 test.describe('US-12: chưa đăng nhập', () => {
   test('US-12: chưa đăng nhập mở /admin/products thì bị chuyển tới /admin/login', async ({ page, request }) => {
-    const response = await request.get('/admin/products', { maxRedirects: 0 })
-    expect(response.status()).toBe(307)
-    expect(locationPath(response.headers().location)).toBe('/admin/login')
+    expectLoginRedirect(await request.get('/admin/products', { maxRedirects: 0 }))
 
-    await page.goto('/admin/products')
-    await expect(page).toHaveURL(/\/admin\/login$/)
+    await page.goto('/admin/login')
     await expect(page.getByRole('heading', { level: 1, name: 'Đăng nhập quản trị' })).toBeVisible()
   })
 
-  test('US-12: cookie giả thì bị chuyển tới /admin/login và cookie bị xoá', async ({ page, context, request, baseURL }) => {
-    const forged = forgedToken()
-    // The same answer without a browser: 307 and a Set-Cookie that clears the cookie.
+  test('US-12: cookie giả thì bị chuyển tới /admin/login và cookie bị xoá', async ({ request, baseURL }) => {
     const response = await request.get('/admin/products', {
-      headers: { cookie: adminCookieHeader(baseURL, forged) },
+      headers: { cookie: adminCookieHeader(baseURL, forgedToken()) },
       maxRedirects: 0,
     })
-    expect(response.status()).toBe(307)
-    expect(locationPath(response.headers().location)).toBe('/admin/login')
-
-    await setAdminCookie(context, baseURL, forged)
-    expect(await adminCookie(context)).toBeDefined()
-    await page.goto('/admin/products')
-    await expect(page).toHaveURL(/\/admin\/login$/)
-    await expect(page.getByRole('heading', { level: 1, name: 'Đăng nhập quản trị' })).toBeVisible()
-    await expect.poll(() => adminCookie(context)).toBeUndefined()
+    expectLoginRedirect(response)
+    expect(clearsCookie(response, adminCookieName(baseURL)), 'Set-Cookie xoá cookie giả').toBe(true)
   })
 
   test('US-12: trang admin có noindex và không nằm trong sitemap', async ({ request }) => {
@@ -112,27 +114,33 @@ test.describe('US-12: đăng nhập', { tag: WRITE_TAG }, () => {
     expect(Math.abs((session?.expires ?? 0) - expectedExpiry)).toBeLessThan(5 * 60)
   })
 
-  test('US-12: cookie phiên bị sửa tay thì bị đá ra', async ({ page, context, baseURL }) => {
+  test('US-12: cookie phiên bị sửa tay thì bị đá ra', async ({ page, context, request, baseURL }) => {
     await loginAsAdmin(page)
     const session = await adminCookie(context)
     expect(session, 'cookie phiên admin sau khi đăng nhập').toBeDefined()
+    const token = session?.value ?? ''
 
-    await setAdminCookie(context, baseURL, tamper(session?.value ?? ''))
-    await page.goto('/admin/products')
-    await expect(page).toHaveURL(/\/admin\/login$/)
-    await expect(page.getByRole('heading', { level: 1, name: 'Đăng nhập quản trị' })).toBeVisible()
-    await expect.poll(() => adminCookie(context)).toBeUndefined()
+    const valid = await request.get('/admin/products', { headers: { cookie: adminCookieHeader(baseURL, token) }, maxRedirects: 0 })
+    expect(valid.status(), 'cookie nguyên vẹn qua proxy').toBe(200)
+
+    const tampered = await request.get('/admin/products', {
+      headers: { cookie: adminCookieHeader(baseURL, tamper(token)) },
+      maxRedirects: 0,
+    })
+    expectLoginRedirect(tampered)
+    expect(clearsCookie(tampered, adminCookieName(baseURL)), 'Set-Cookie xoá cookie bị sửa').toBe(true)
   })
 
-  test('US-12: đăng xuất thì không vào lại được', async ({ page, context }) => {
+  test('US-12: đăng xuất thì không vào lại được', async ({ page, context, request }) => {
     await loginAsAdmin(page)
     await page.getByRole('button', { name: 'Đăng xuất', exact: true }).click()
     await expect(page).toHaveURL(/\/admin\/login$/)
     await expect.poll(() => adminCookie(context)).toBeUndefined()
 
-    await page.goto('/admin/products')
-    await expect(page).toHaveURL(/\/admin\/login$/)
     await expect(page.getByRole('heading', { level: 1, name: 'Đăng nhập quản trị' })).toBeVisible()
+    await expect(page.getByRole('button', { name: 'Đăng xuất' })).toHaveCount(0)
+    // Without the cookie the proxy sends /admin/products back to the login, as for any visitor.
+    expectLoginRedirect(await request.get('/admin/products', { maxRedirects: 0 }))
   })
 
   // Local only: on a deployment it would lock the runner's address out of the admin of that preview for 15 minutes,
