@@ -3,7 +3,8 @@ import { notFound } from "next/navigation";
 import { Breadcrumb } from "@/components/layout/breadcrumb";
 import { Container } from "@/components/ui/container";
 import { requireAdminPage } from "@/features/admin";
-import { getProductForAdmin, ProductEditForm, renderProductName } from "@/features/products";
+import { renderProductName } from "@/features/products";
+import { getProductForAdmin, ProductEditForm } from "@/features/products/admin";
 
 // US-13 (plan M5 Task 10). Both functions check the session first, before params or data (audit PR #106 H1). No
 // generateStaticParams: an admin page is rendered per request, from the database, never cached.

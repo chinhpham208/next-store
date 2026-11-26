@@ -26,10 +26,34 @@ module.exports = {
       name: 'feature-public-api-only',
       severity: 'error',
       comment:
-        'Outside a feature, import it only via @/features/<name> (index.ts). Exception: src/proxy.ts (and its test) ' +
-        'use the narrow entry @/features/<name>/proxy-api, see proxy-narrow-entry.',
+        'Outside a feature, import it only via @/features/<name> (index.ts). Exceptions: src/proxy.ts (and its test) ' +
+        'use the narrow entry @/features/<name>/proxy-api, see proxy-narrow-entry; src/app/admin/** uses the admin ' +
+        'entry @/features/products/admin, see products-admin-entry-only-from-admin.',
       from: { pathNot: '^src/(features/|proxy(\\.test)?\\.ts$)' },
-      to: { path: '^src/features/[^/]+/(?!index\\.ts$)' },
+      to: { path: '^src/features/[^/]+/(?!index\\.ts$)', pathNot: '^src/features/products/admin\\.ts$' },
+    },
+    {
+      name: 'products-admin-entry-only-from-admin',
+      severity: 'error',
+      comment:
+        'admin.ts is the admin entry of products (audit PR #108 M-1): the edit form and the admin table are client ' +
+        'references, and a shop page that imports them ships their chunk and the id of updateProductAction. Only ' +
+        'src/app/admin/** (and files of products itself) may import it; scripts/check-admin-bundle.mjs checks the build.',
+      from: { pathNot: '^src/(app/admin/|features/products/)' },
+      to: { path: '^src/features/products/admin\\.ts$' },
+    },
+    {
+      name: 'components-and-lib-not-to-db',
+      severity: 'error',
+      comment:
+        'Shared UI and helpers never read the database (audit PR #108 L-1): a static admin file (not-found, loading, ' +
+        'error) may import @/components and @/lib/cn without a session check, so a component that queried @/db would ' +
+        'put rows on screen. Drivers are already refused by db-drivers-stay-in-db. Checked transitively.',
+      from: { path: '^src/(components|lib)/' },
+      to: {
+        path: '^(src/db/|node_modules/(postgres|pg|@neondatabase/serverless|@electric-sql/pglite|drizzle-orm)/)',
+        reachable: true,
+      },
     },
     {
       name: 'proxy-api-only-from-proxy',

@@ -35,7 +35,7 @@ flowchart TB
 
 ## 2. Các miền nghiệp vụ (`src/features`)
 
-Mỗi miền chỉ lộ ra ngoài qua `index.ts`. Mũi tên là "được phép import".
+Mỗi miền chỉ lộ ra ngoài qua `index.ts`; riêng phần admin của `products` lộ qua `admin.ts`, chỉ `src/app/admin/**` import (audit PR #108 M-1). Mũi tên là "được phép import".
 
 ```mermaid
 flowchart LR
@@ -50,7 +50,7 @@ flowchart LR
 
 | Miền | Trách nhiệm | Mốc |
 |---|---|---|
-| `products` | Đọc danh mục, danh sách, chi tiết; registry slug cho proxy (`catalog-slugs.ts`, M5); ghi sản phẩm (kèm `updateTag` theo `tagsForProductWrite`, [ADR-0019](./adr/0019-product-edits-and-cache-tags.md)); đọc admin (`admin-queries.ts`), bảng `/admin/products` và form sửa sản phẩm (`components/product-edit-form.tsx`, client) — kiểm phiên bằng `hasAdminSession` của `admin`, nên chiều là `products → admin`, không ngược lại (audit PR #107 M-2) | M1, M2, M5 |
+| `products` | Đọc danh mục, danh sách, chi tiết; registry slug cho proxy (`catalog-slugs.ts`, M5); ghi sản phẩm (kèm `updateTag` theo `tagsForProductWrite`, [ADR-0019](./adr/0019-product-edits-and-cache-tags.md)); đọc admin (`admin-queries.ts`), bảng `/admin/products` và form sửa sản phẩm (`components/product-edit-form.tsx`, client), cả ba qua lối vào `admin.ts`, không qua `index.ts` — kiểm phiên bằng `hasAdminSession` của `admin`, nên chiều là `products → admin`, không ngược lại (audit PR #107 M-2) | M1, M2, M5 |
 | `blog` | Registry bài viết (`posts.ts`, không import gì), nội dung MDX (`content.ts`), metadata bài viết | M3 |
 | `cart` | Cookie giỏ hàng, thêm / sửa / xoá, kiểm tra tồn kho | M4 |
 | `admin` | Cấu hình và mật khẩu admin, phiên đăng nhập (ký / xác minh cookie HMAC), giới hạn đăng nhập sai, thanh admin; không import miền nào khác. CSP nonce cho `/admin` ([ADR-0018](./adr/0018-admin-auth.md), [ADR-0020](./adr/0020-content-security-policy-and-hsts.md)) | M5 |

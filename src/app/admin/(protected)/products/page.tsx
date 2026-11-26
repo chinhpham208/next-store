@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { Container } from "@/components/ui/container";
 import { requireAdminPage } from "@/features/admin";
-import { AdminProductTable, AdminProductTableSkeleton } from "@/features/products";
+import { AdminProductTable, AdminProductTableSkeleton } from "@/features/products/admin";
 
 export const metadata: Metadata = { title: "Sản phẩm" };
 

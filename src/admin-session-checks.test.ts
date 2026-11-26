@@ -29,7 +29,9 @@ const ROUTE_EXTENSION = /\.(tsx|ts|jsx|js)$/
 // Route files under (protected) that only show fixed text: no data, no request, nothing async.
 const STATIC_ROUTE_FILES = ['loading', 'error', 'not-found']
 // What a static route file may import: React, links, shared UI. Never a feature, the database or the request.
-const STATIC_IMPORTS = /^(react|next|next\/link|@\/components\/.+|@\/lib\/cn)$/
+// Only the shared UI folders (audit PR #108 L-1); dependency-cruiser `components-and-lib-not-to-db` keeps them off the
+// database.
+const STATIC_IMPORTS = /^(react|next|next\/link|@\/components\/(ui|layout)\/[a-z0-9-]+|@\/lib\/cn)$/
 
 // Admin Server Actions. A new 'use server' file must be listed here or as a shop file (the net below).
 const ADMIN_ACTION_FILES = ['src/features/admin/actions.ts', 'src/features/products/actions.ts']
@@ -376,6 +378,40 @@ type AppFile = { path: string; source: string }
 // `(.)admin`, `Admin`. Route groups do not change the URL, so `src/app/(shop)/admin/x` serves /admin/x (re-audit M-A).
 const isAdminSegment = (segment: string): boolean => segment.replace(/^(\(\.{1,3}\))+/, '').toLowerCase() === 'admin'
 
+// Audit PR #108 L-2: `[x]`, `[...x]` and `[[...x]]` as the first URL segment match `admin`, so with a valid session
+// such a page would answer /admin/foo (even /admin/_session-probe) with 200, outside every check of this file. Route
+// groups and slots do not change the URL and an interception marker is set aside; a `_private` folder is no route.
+// No such segment exists today; one that must exist goes in the list with its reason (ADR-0018).
+const DYNAMIC_TOP_LEVEL_ALLOWED: readonly string[] = []
+const firstUrlSegment = (segments: readonly string[]): string | undefined => {
+  if (segments.some((segment) => segment.startsWith('_'))) return undefined
+  return segments
+    .filter((segment) => !/^\(.*\)$/.test(segment) && !segment.startsWith('@'))
+    .map((segment) => segment.replace(/^(\(\.{1,3}\))+/, ''))
+    .find((segment) => segment !== '')
+}
+const isDynamicSegment = (segment: string | undefined): boolean => segment !== undefined && /^\[.*\]$/.test(segment)
+
+// Audit PR #108 L-2: next.config.ts and vercel.json route before the proxy's matcher sees the URL they serve, so a
+// rewrite from a public path to /admin/… (or a redirect, basePath, i18n prefix) moves the admin area away from it.
+// The repo uses none of them: every such key is refused, found as an identifier or a string anywhere in the config.
+const NEXT_ROUTING_KEYS = ['rewrites', 'redirects', 'basePath', 'i18n']
+const VERCEL_ROUTING_KEYS = ['rewrites', 'redirects', 'routes']
+const routingConfigProblems = (nextConfig: string, vercelJson: string): string[] => {
+  const names = new Set<string>()
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) || ts.isPrivateIdentifier(node)) names.add(node.text)
+    else if (ts.isStringLiteralLike(node)) names.add(node.text)
+    ts.forEachChild(node, visit)
+  }
+  visit(parse(nextConfig))
+  const vercelKeys = Object.keys(JSON.parse(vercelJson) as Record<string, unknown>)
+  return [
+    ...NEXT_ROUTING_KEYS.filter((key) => names.has(key)).map((key) => `next.config.ts: ${key} is not used (conventions.md §2)`),
+    ...VERCEL_ROUTING_KEYS.filter((key) => vercelKeys.includes(key)).map((key) => `vercel.json: ${key} is not used (conventions.md §2)`),
+  ]
+}
+
 const baseName = (path: string): string => path.slice(path.lastIndexOf('/') + 1)
 const routeName = (path: string): string => baseName(path).replace(ROUTE_EXTENSION, '')
 
@@ -392,6 +428,9 @@ const adminRouteProblems = (files: readonly AppFile[]): string[] => {
     const inAdminRoot = file.path.startsWith(`${ADMIN_ROOT}/`)
     if (!inAdminRoot) {
       if (segments.some(isAdminSegment)) report(file, ['an admin route outside src/app/admin'])
+      else if (isDynamicSegment(firstUrlSegment(segments)) && !DYNAMIC_TOP_LEVEL_ALLOWED.includes(file.path)) {
+        report(file, ['a dynamic top-level segment can serve /admin/*'])
+      }
       continue
     }
     if (UNPROTECTED_ADMIN_FILES.includes(file.path)) continue
@@ -596,6 +635,12 @@ describe('staticRouteProblems (re-audit M-A)', () => {
       're-exports @/features/products/components/zz-leak',
     ],
     ['re-exports a whole feature', `export * from '@/features/products'`, 're-exports @/features/products'],
+    // Audit PR #108 L-1: a component outside the shared UI folders (measured: @/components/zz/leak read the database).
+    [
+      'imports a component outside ui and layout',
+      `import { Leak } from '@/components/zz/leak'\nexport default function L() { return <Leak /> }`,
+      'imports @/components/zz/leak',
+    ],
     ['re-exports under another name', `export { Leak as default } from './leak'`, 're-exports ./leak'],
     ['reads the env', `export default function NotFound() { return <p>{process.env.SESSION_SECRET}</p> }`, 'reads process'],
     ['imports the database at run time', `export default function L() { void import('@/db'); return null }`, 'imports @/db'],
@@ -742,6 +787,8 @@ export async function f() { if (!(await hasAdminSession())) return 1; return 2 }
   })
 })
 
+const DYNAMIC_TOP = 'a dynamic top-level segment can serve /admin/*'
+
 describe('adminRouteProblems (re-audit M-A)', () => {
   const at = (path: string, source = LEAKY): AppFile => ({ path, source })
 
@@ -759,6 +806,8 @@ describe('adminRouteProblems (re-audit M-A)', () => {
         at(`${PROTECTED_ROOT}/products/loading.tsx`, GOOD_NOT_FOUND),
         at('src/app/(shop)/products/[slug]/page.tsx'),
         at('src/app/sitemap.ts'),
+        at('src/app/(shop)/blog/[slug]/opengraph-image.tsx'),
+        at('src/app/_private/[a]/helper.ts'),
       ]),
     ).toEqual([])
   })
@@ -789,8 +838,37 @@ describe('adminRouteProblems (re-audit M-A)', () => {
     ['an admin route handler in a route group', 'src/app/(api)/admin/route.ts', 'an admin route outside src/app/admin'],
     ['an intercepted admin route', 'src/app/(shop)/(.)admin/products/page.tsx', 'an admin route outside src/app/admin'],
     ['an admin segment in another case', 'src/app/(shop)/Admin/page.tsx', 'an admin route outside src/app/admin'],
+    // Audit PR #108 L-2: a dynamic first URL segment matches `admin` and would serve /admin/* with a session.
+    ['a catch-all in a route group', 'src/app/(shop)/[...x]/page.tsx', DYNAMIC_TOP],
+    ['an optional catch-all', 'src/app/[[...x]]/page.tsx', DYNAMIC_TOP],
+    ['two dynamic segments', 'src/app/[a]/[b]/page.tsx', DYNAMIC_TOP],
+    ['two dynamic segments in a group', 'src/app/(g)/[a]/[b]/page.tsx', DYNAMIC_TOP],
+    ['a dynamic route handler', 'src/app/[a]/route.ts', DYNAMIC_TOP],
+    ['a dynamic segment behind a slot', 'src/app/@modal/(shop)/[a]/page.tsx', DYNAMIC_TOP],
+    ['an intercepted dynamic segment', 'src/app/(shop)/(.)[a]/page.tsx', DYNAMIC_TOP],
   ])('reports %s', (_, path, problem) => {
     expect(adminRouteProblems([at(path)])).toContain(`${path}: ${problem}`)
+  })
+})
+
+describe('routingConfigProblems (audit PR #108 L-2)', () => {
+  const CLEAN = 'const nextConfig = { headers: async () => [] }\nexport default nextConfig'
+  it('accepts a config that moves no path', () => {
+    expect(routingConfigProblems(CLEAN, '{ "framework": "nextjs" }')).toEqual([])
+  })
+
+  it.each([
+    ['rewrites', 'const nextConfig = { rewrites: async () => [{ source: "/x/:p*", destination: "/admin/:p*" }] }'],
+    ['redirects', 'const nextConfig = { async redirects() { return [] } }'],
+    ['basePath', 'const nextConfig = { basePath: "/shop" }'],
+    ['i18n', 'const nextConfig = { i18n: { locales: ["vi"], defaultLocale: "vi" } }'],
+    ['rewrites', 'const key = "rewrites"\nconst nextConfig = { [key]: f }'],
+  ])('reports %s in next.config.ts', (name, source) => {
+    expect(routingConfigProblems(source, '{}')).toContain(`next.config.ts: ${name} is not used (conventions.md §2)`)
+  })
+
+  it.each(['rewrites', 'redirects', 'routes'])('reports %s in vercel.json', (name) => {
+    expect(routingConfigProblems(CLEAN, JSON.stringify({ [name]: [] }))).toContain(`vercel.json: ${name} is not used (conventions.md §2)`)
   })
 })
 
@@ -799,6 +877,13 @@ describe('the admin area holds only checked route files (audit PR #106 H1, re-au
 
   it('every file serving /admin is allowed and checks what it must', () => {
     expect(adminRouteProblems(appFiles)).toEqual([])
+  })
+
+  // Audit PR #108 L-2: a rewrite from a public path to /admin/… (or a redirect) is matched by next.config before
+  // the proxy's matcher sees the URL it serves. The repo uses neither, so both are refused outright, with basePath and
+  // i18n (they move /admin), in next.config.ts and in vercel.json.
+  it('next.config.ts and vercel.json move no path', () => {
+    expect(routingConfigProblems(readFileSync('next.config.ts', 'utf8'), readFileSync('vercel.json', 'utf8'))).toEqual([])
   })
 
   it('the deliberate files still exist', () => {

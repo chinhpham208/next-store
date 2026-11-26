@@ -172,23 +172,36 @@ const formFieldsSchema = z.object({
 
 const characters = (value: string): number => Array.from(value).length
 
-// Spaces, line breaks and format characters (zero-width space, word joiner, BOM…): trim() keeps the last ones, so a
-// name of U+200B alone was saved and the shop showed an empty name (audit PR #107 L-2). Only the emptiness check
-// ignores them: a zero-width joiner inside an emoji stays.
-const INVISIBLE = /[\s\p{Z}\p{Cf}]/gu
-const isBlank = (value: string): boolean => value.replace(INVISIBLE, '') === ''
+// trim() keeps format characters, so a name of U+200B alone was saved and the shop showed an empty name (audit PR
+// #107 L-2); a zero-width joiner inside an emoji stays.
+// What counts as text (audit PR #108 L-3). A name or description needs one visible letter, digit, symbol (emoji)
+// or punctuation mark. Spaces, format characters (\p{Cf}: ZWSP, ZWJ, BOM), marks with no base (\p{M}: a lone
+// U+0301 or U+FE0F) and the fillers that are letters by category but draw nothing (Hangul U+115F, U+1160, U+3164,
+// U+FFA0; braille blank U+2800) do not count, and are cut at either end. Marks are kept at the end: they belong to
+// the letter before them (an accent, the U+FE0F of an emoji). Bidi controls reorder the text around them on the
+// shop, so they are a form error, like \p{Cc}. Input is stored in NFC.
+const FILLERS = '\\u115f\\u1160\\u3164\\uffa0\\u2800'
+const FILLER = new RegExp(`[${FILLERS}]`, 'gu')
+const VISIBLE = /[\p{L}\p{N}\p{S}\p{P}]/u
+const EDGES = new RegExp(`^[\\s\\p{Z}\\p{Cf}\\p{M}${FILLERS}]+|[\\s\\p{Z}\\p{Cf}${FILLERS}]+$`, 'gu')
+const BIDI_CONTROL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u
+const SEPARATORS = /[\u2028\u2029]/g
+const isBlank = (value: string): boolean => !VISIBLE.test(value.replace(FILLER, ''))
+const cleanText = (value: string): string => value.normalize('NFC').replace(SEPARATORS, '\n')
+const trimEdges = (value: string): string => value.replace(EDGES, '')
 
 const textError = (value: string, max: number): 'empty' | 'too-long' | undefined => {
   if (isBlank(value)) return 'empty'
   return characters(value) > max ? 'too-long' : undefined
 }
 
-// A name is one line: a line break or a tab (pasted, or a forged POST) becomes one space. Any other control
-// character cannot be typed in the form: a form error, like a NUL. A description keeps \t, \n and \r.
+// A name is one line: a line break, a tab or U+2028 / U+2029 (pasted, or a forged POST) becomes one space. Any other
+// control character cannot be typed in the form: a form error, like a NUL. A description keeps \t, \n and \r, and
+// turns U+2028 / U+2029 into \n.
 const LINE_BREAKS = /\s*[\t\n\v\f\r]+\s*/g
 const CONTROL = /\p{Cc}/u
 const DESCRIPTION_CONTROL = /[^\P{Cc}\t\n\r]/u
-const oneLine = (value: string): string => value.replace(LINE_BREAKS, ' ').trim()
+const oneLine = (value: string): string => trimEdges(cleanText(value).replace(LINE_BREAKS, ' '))
 
 // ASCII digits only: "1.5", "1e3", "1.000", "0x10", "+5" and non-ASCII digits are not a whole number of đồng.
 // Leading zeros are dropped before the length check: "0000000000000001" is 1, not too large (audit PR #107 nit).
@@ -209,8 +222,10 @@ export const parseProductEdit = (formData: unknown): ProductEditParse => {
   if (!form.success) return FORM_INVALID
 
   const name = oneLine(raw.data.name)
-  const description = raw.data.description.trim()
+  const description = trimEdges(cleanText(raw.data.description))
   if (CONTROL.test(name) || DESCRIPTION_CONTROL.test(description)) return FORM_INVALID
+  // On the raw input: trimEdges would drop one at either end, and the admin should learn it was there.
+  if (BIDI_CONTROL.test(raw.data.name) || BIDI_CONTROL.test(raw.data.description)) return FORM_INVALID
   const price = amount(raw.data.price, PRODUCT_EDIT_LIMITS.priceMax)
   const stock = amount(raw.data.stock, PRODUCT_EDIT_LIMITS.stockMax)
   const fieldErrors: ProductEditFieldErrors = {}

@@ -116,6 +116,28 @@ describe('client boundary', () => {
     expect(importsOf(source)).not.toContain('@/features/products')
   })
 
+  // Audit PR #108 M-1: a client file re-exported by the shop's entry ships its chunk (and the id of the action it
+  // calls) with every shop page that imports the entry. The admin part of products has its own entry, admin.ts,
+  // which only src/app/admin/** may import (dependency-cruiser `products-admin-entry-only-from-admin`).
+  it('the products index re-exports no client file and nothing of the admin area (audit PR #108 M-1)', () => {
+    const exported = importsOf(readFileSync('src/features/products/index.ts', 'utf8'))
+    const clientModules = ALLOWED_CLIENT_FILES.map((path) => path.replace(/^src\//, '@/').replace(/\.tsx?$/, ''))
+    expect(exported.filter((specifier) => clientModules.includes(specifier))).toEqual([])
+    expect(exported.filter((specifier) => /\/(admin-queries|actions|edit-messages|admin-product-table)$/.test(specifier))).toEqual([])
+  })
+
+  it('the products admin entry carries the admin part (audit PR #108 M-1)', () => {
+    const exported = importsOf(readFileSync('src/features/products/admin.ts', 'utf8'))
+    expect(exported).toEqual(
+      expect.arrayContaining([
+        '@/features/products/admin-queries',
+        '@/features/products/components/product-edit-form',
+        '@/features/products/components/admin-product-table',
+      ]),
+    )
+    expect(exported).not.toContain('@/features/products/actions')
+  })
+
   it('the import rules refuse what they must', () => {
     expect(isAllowedProductsImport('@/features/products')).toBe(false)
     expect(isAllowedProductsImport('@/features/products/queries')).toBe(false)

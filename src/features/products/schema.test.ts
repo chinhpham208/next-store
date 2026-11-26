@@ -439,6 +439,57 @@ describe('parseProductEdit (M5 Task 9, US-13)', () => {
     },
   )
 
+  // Audit PR #108 L-3: each one was saved and looked like an empty name on the shop.
+  it.each([
+    ['a Hangul filler', '\u3164'],
+    ['the Hangul choseong and jungseong fillers', '\u115f\u1160'],
+    ['a halfwidth Hangul filler', '\uffa0'],
+    ['a braille blank', '\u2800'],
+    ['a lone variation selector', '\ufe0f'],
+    ['a lone combining accent', '\u0301'],
+    ['combining marks and spaces', ' \u0301\u0302 \u20dd'],
+    ['a zero-width joiner and a filler', '\u200d\u3164\u200d'],
+    ['line and paragraph separators', '\u2028\u2029'],
+  ])('US-13: a name of %s only is empty', (_, name) => {
+    expect(parseProductEdit(form({ name }))).toEqual({ ok: false, fieldErrors: { name: 'empty' } })
+  })
+
+  it('a description of fillers only is empty', () => {
+    expect(parseProductEdit(form({ description: '\u2800\n\u3164' }))).toEqual({
+      ok: false,
+      fieldErrors: { description: 'empty' },
+    })
+  })
+
+  it('drops invisible characters at either end of the name, keeps the marks of a letter', () => {
+    const parsed = parseProductEdit(form({ name: '\u200b\ufeff\u0301Áo\u200b' }))
+    expect(parsed.ok && parsed.value.name).toBe('Áo')
+    const accent = parseProductEdit(form({ name: 'Cafe\u0301' }))
+    expect(accent.ok && accent.value.name).toBe('Café')
+  })
+
+  it('stores names and descriptions in NFC', () => {
+    const parsed = parseProductEdit(form({ name: 'A\u0301o', description: 'Mo\u0302 ta\u0309' }))
+    expect(parsed.ok && parsed.value).toMatchObject({ name: 'Áo', description: 'Mô tả' })
+  })
+
+  it('keeps names made of emoji or digits only', () => {
+    for (const name of ['🔥', '👩‍💻', '❤️', '2026', '🇻🇳']) {
+      const parsed = parseProductEdit(form({ name }))
+      expect(parsed.ok && parsed.value.name, name).toBe(name)
+    }
+  })
+
+  it('a name stays on one line: a line or paragraph separator becomes one space', () => {
+    const parsed = parseProductEdit(form({ name: 'a\u2028b\u2029 c' }))
+    expect(parsed.ok && parsed.value.name).toBe('a b c')
+  })
+
+  it('a description turns a line or paragraph separator into a line break', () => {
+    const parsed = parseProductEdit(form({ description: 'Dòng 1\u2028Dòng 2\u2029Dòng 3' }))
+    expect(parsed.ok && parsed.value.description).toBe('Dòng 1\nDòng 2\nDòng 3')
+  })
+
   it('a description of invisible characters only is empty', () => {
     expect(parseProductEdit(form({ description: '\u200b\n\u200b' }))).toEqual({
       ok: false,
@@ -517,6 +568,13 @@ describe('parseProductEdit (M5 Task 9, US-13)', () => {
     // Audit PR #107 L-2: a control character the form cannot type (a bell); line breaks in a name are a space.
     ['a control character in the name', { name: 'Áo\u0007' }],
     ['a control character in the description', { description: 'Mô tả\u001b[31m' }],
+    // Audit PR #108 L-3: bidi controls reorder what the shop shows ("abc\u202eevil" reads "abclive").
+    ...['\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069', '\u200e', '\u200f', '\u061c'].flatMap(
+      (control): [string, Record<string, string>][] => [
+        [`a bidi control U+${control.codePointAt(0)?.toString(16).toUpperCase()} in the name`, { name: `abc${control}evil` }],
+        [`a bidi control U+${control.codePointAt(0)?.toString(16).toUpperCase()} in the description`, { description: `Mô tả${control}` }],
+      ],
+    ),
   ])('refuses %s as a form error', (_, fields) => {
     expect(parseProductEdit(form(fields))).toEqual({ ok: false, fieldErrors: {}, formError: 'invalid' })
   })

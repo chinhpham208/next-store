@@ -86,8 +86,8 @@ Quyết định 3A, 4A, 11A, 12A, 13A áp như sau.
 - `updated_at` được đặt **rõ** trong câu `UPDATE` (không dựa vào `$onUpdate` hay trigger, ADR-0014 bổ sung NS-101).
 - 0 hàng cập nhật → một truy vấn kiểm slug có tồn tại: có → `conflict` ("Sản phẩm vừa được sửa ở nơi khác. Tải lại trang để xem bản mới nhất."), không → `not-found`. Không ghi đè im lặng (13A).
 - Ghi bị lỗi hoặc `DB_QUERY_TIMEOUT` → **vẫn** `updateTag` như khi thành công (không biết đã ghi chưa, ADR-0011; xoá cache thừa vô hại) rồi trả `unavailable`. Không tự thử lại.
-- Không đổi slug, ảnh, danh mục, `featured`. Giới hạn input: tên ≤ 120 ký tự, mô tả ≤ 2.000, giá là số nguyên đồng 0..100.000.000, tồn kho 0..10.000; tên và mô tả `trim()`. Ràng buộc `CHECK` của DB là lớp cuối cho giá âm.
-- Dữ liệu admin (`listProductsForAdmin`, `getProductForAdmin`) đọc không cache, không bao giờ nằm trong `'use cache'`.
+- Không đổi slug, ảnh, danh mục, `featured`. Giới hạn input: tên ≤ 120 ký tự, mô tả ≤ 2.000, giá là số nguyên đồng 0..100.000.000, tồn kho 0..10.000; tên và mô tả `trim()`. *Sửa theo audit PR #108 L-3:* chuẩn hoá NFC; U+2028 / U+2029 thành dấu cách trong tên, thành `\n` trong mô tả; ký tự điều hướng bidi (U+202A–U+202E, U+2066–U+2069, U+200E, U+200F, U+061C) là lỗi form `invalid` như ký tự điều khiển; cắt ở hai đầu khoảng trắng, `\p{Cf}`, ký tự lấp chỗ (U+115F, U+1160, U+3164, U+FFA0, U+2800) và dấu kết hợp đứng đầu; trường phải còn ít nhất một chữ, số, ký hiệu (emoji) hay dấu câu thấy được, không thì `empty`. Emoji ZWJ giữ nguyên. Ràng buộc `CHECK` của DB là lớp cuối cho giá âm.
+- Dữ liệu admin (`listProductsForAdmin`, `getProductForAdmin`) đọc không cache, không bao giờ nằm trong `'use cache'`. Ngoại lệ duy nhất là `cache()` của React trong `admin-queries.ts` cho phần đọc bên trong `getProductForAdmin` (audit PR #108 nit): chỉ sống trong một request, để `generateMetadata` và page dùng chung một truy vấn; kiểm phiên vẫn chạy ở mỗi lần gọi, trước nó.
 
 **Chính sách xoá = ẩn (4A).** Không có code xoá hay ẩn ở M5 (3A). Khi làm (ticket và plan sau):
 

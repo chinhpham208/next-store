@@ -37,6 +37,8 @@ jobs:
         run: npm test
       - name: build
         run: npm run build
+      - name: check:bundle
+        run: npm run check:bundle
       - name: smoke
         run: npm run smoke
       # Before test:scripts: scripts/redact-report.test.sh opens a browser (NS-84).
