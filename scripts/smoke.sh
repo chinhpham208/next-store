@@ -6,7 +6,10 @@
 # lạ trả 404 ngay lần đầu, bài và sản phẩm có thật vẫn 200 ở mọi dạng vận chuyển; /sitemap.xml và /robots.txt trả 200, cùng một origin tuyệt đối, robots.txt chặn hay cho crawl đúng môi trường;
 # trang chủ có og:site_name; og:image của trang chủ, một sản phẩm và một bài blog tải được, là PNG; header bảo mật
 # của next.config.ts (X-Frame-Options, CSP frame-ancestors, X-Content-Type-Options, Referrer-Policy) có trên trang
-# chủ, trang sản phẩm, trang 404, 404 do proxy rewrite, ảnh OG, /sitemap.xml và /robots.txt.
+# chủ, trang sản phẩm, trang 404, 404 do proxy rewrite, ảnh OG, /sitemap.xml và /robots.txt; khu admin (US-12): mọi
+# /admin/* ngoài /admin/login không có phiên hợp lệ trả 307 tới /admin/login (cookie rác bị xoá), Server Action trả 401,
+# đường dẫn admin viết mã hoá / khác hoa thường trả 404 hoặc 307, /admin/login trả 200 và noindex. Đúng cả khi khu
+# admin chưa được cấu hình (đóng: không có phiên nào hợp lệ).
 #
 #   npm run smoke                                   # chạy `next start` từ bản build hiện có (.next/), kiểm rồi tắt
 #   BASE_URL=https://<deploy>.vercel.app npm run smoke   # kiểm một URL đã deploy
@@ -49,10 +52,14 @@ curl_safe() { curl -g --proto "=$SCHEME" --proto-redir "=$SCHEME" "$@"; }
 # <header> is a fixed string from this script (e.g. `rsc: 1`), checked so it cannot break out of the config value.
 # The total time of the request, in seconds as curl prints it, goes to $TMP/last-time (read with last_time_ms).
 # <method> (default GET) is a fixed word from this script; any other method sends the fixed body `smoke=1` and never
-# the `next-action` header, so it is never a Server Action (NS-103).
+# the `next-action` header, so it is never a Server Action (NS-103). The one exception is the admin check below: a
+# `next-action` POST to /admin/*, which the proxy must answer 401 before Next.js looks for the action.
 fetch() { # fetch <url> <body-file> [header] [response-headers-file] [method] → in mã HTTP
   local url=$1 body=$2 header=${3:-} dump=${4:-/dev/null} method=${5:-GET} code=0 out request=()
-  if [ -n "$header" ] && ! [[ $header =~ ^[A-Za-z0-9-]+:\ [A-Za-z0-9./-]+$ ]]; then fail "header không hợp lệ"; fi
+  if [ -n "$header" ] && ! [[ $header =~ ^[A-Za-z0-9-]+:\ [A-Za-z0-9./_=-]+$ ]]; then fail "header không hợp lệ"; fi
+  if [ "$method" != GET ] && [[ $header =~ ^[Nn][Ee][Xx][Tt]-[Aa][Cc][Tt][Ii][Oo][Nn]: ]] && [[ $url != "$BASE/admin/"* ]]; then
+    fail "next-action chỉ được gửi tới /admin/*"
+  fi
   case $method in GET) ;; POST | PUT | PATCH | DELETE) request=(-X "$method" --data 'smoke=1') ;; *) fail "method không hợp lệ" ;; esac
   xtrace_off
   {
@@ -461,5 +468,107 @@ expect_known_segment "$DETAIL_PATH" 'segment prefetch dạng đường dẫn'
 expect_known_200 "$POST_PATH?_rsc" 'bài: request RSC' 'rsc: 1'
 expect_known_200 "$POST_PATH.rsc" 'bài: hậu tố .rsc'
 expect_known_segment "$POST_PATH" 'bài: segment prefetch dạng đường dẫn'
+
+# US-12 (ADR-0018, plan M5 Task 8): src/proxy.ts guards /admin/* before the Server Action shortcut and before the slug
+# checks. Smoke never has a valid session, so every admin path but the login page must answer like a visitor without
+# one: GET → 307 to /admin/login (the real status: a redirect() in the streamed layout would only be a meta tag, D5),
+# a junk cookie cleared on the way, a Server Action → 401 before Next.js looks for it. The same holds when the admin
+# area is not configured on the deployment (no ADMIN_PASSWORD / SESSION_SECRET): it is closed, never open. A valid
+# session passing the proxy (C3, Web Crypto HMAC on Vercel) is checked by the E2E spec ns-123-admin-guard.spec.ts.
+ADMIN_FAILED=
+admin_fail() { echo "smoke: LỖI: $*" >&2; ADMIN_FAILED=1; }
+# Last value of a response header (a redirect dump may hold several blocks), reduced to a safe set: third-party text.
+header_value() { # header_value <response-headers-file> <lower-case name>
+  tr -d '\r' < "$1" | awk -v n="$2" 'tolower(substr($0, 1, length(n) + 1)) == n ":" { v = substr($0, length(n) + 2); sub(/^ +/, "", v) } END { print v }' |
+    tr -cd 'A-Za-z0-9:/._%-'
+}
+is_login_location() { [[ $1 =~ ^(https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?)?/admin/login$ ]]; }
+# A Set-Cookie that deletes <name>: empty value, Path=/, expired (Max-Age=0 or an Expires in 1970).
+clears_cookie() { # clears_cookie <response-headers-file> <name>
+  tr -d '\r' < "$1" | grep -i '^set-cookie:' | grep -F " $2=;" | grep -i 'path=/' | grep -qiE 'max-age=0|expires=thu, 01 jan 1970'
+}
+sets_admin_cookie() { tr -d '\r' < "$1" | grep -i '^set-cookie:' | grep -qE ' (__Host-)?ns_admin='; }
+# The signed-in shell (AdminShell): its "Đăng xuất" button is in no page a visitor without a session may get.
+ADMIN_CONTENT='Đăng xuất'
+# Sets ADMIN_REDIRECTED=1 when the answer is that 307 (always returns 0: the script runs under set -e).
+ADMIN_REDIRECTED=
+expect_admin_redirect() { # expect_admin_redirect <path> <label> [header]
+  local path=$1 label=$2 header=${3:-} status location
+  ADMIN_REDIRECTED=
+  status=$(fetch "$BASE$path" "$TMP/admin-body" "$header" "$TMP/admin.headers") || fail "không kết nối được $BASE$path"
+  location=$(header_value "$TMP/admin.headers" location)
+  if [ "$status" != 307 ] || ! is_login_location "$location"; then
+    admin_fail "GET $path ($label) trả $status${location:+ → $location}, cần 307 tới /admin/login"
+    return 0
+  fi
+  if grep -qF -- "$ADMIN_CONTENT" "$TMP/admin-body"; then admin_fail "GET $path ($label) có nội dung khu admin"; return 0; fi
+  ADMIN_REDIRECTED=1
+  echo "smoke: GET $path ($label) → 307 /admin/login"
+}
+ADMIN_PAGE=/admin/products
+expect_admin_redirect "$ADMIN_PAGE" 'không cookie'
+if [ -n "$ADMIN_REDIRECTED" ]; then
+  if sets_admin_cookie "$TMP/admin.headers"; then admin_fail "GET $ADMIN_PAGE (không cookie) trả Set-Cookie admin"; fi
+  location=$(header_value "$TMP/admin.headers" location)
+  case $location in *'?'*) admin_fail "GET $ADMIN_PAGE: Location có tham số (open redirect?)" ;; esac
+fi
+expect_admin_redirect /admin '/admin'
+expect_admin_redirect "$ADMIN_PAGE/ao-git-push-force" 'trang sửa sản phẩm'
+expect_admin_redirect "$ADMIN_PAGE?_rsc" 'request RSC' 'rsc: 1'
+expect_admin_redirect "$ADMIN_PAGE.rsc" 'hậu tố .rsc'
+expect_admin_redirect "$ADMIN_PAGE.segments/_tree.segment.rsc" 'segment prefetch dạng đường dẫn' 'rsc: 1'
+# Junk under each name: the proxy reads the one of the site's scheme and clears every admin cookie the request carries.
+for ADMIN_COOKIE in __Host-ns_admin ns_admin; do
+  expect_admin_redirect "$ADMIN_PAGE" "cookie $ADMIN_COOKIE rác" "cookie: $ADMIN_COOKIE=smoke-junk-$RUN_ID"
+  if [ -n "$ADMIN_REDIRECTED" ]; then
+    if clears_cookie "$TMP/admin.headers" "$ADMIN_COOKIE"; then
+      echo "smoke: GET $ADMIN_PAGE (cookie $ADMIN_COOKIE rác) → Set-Cookie xoá $ADMIN_COOKIE"
+    else
+      admin_fail "GET $ADMIN_PAGE (cookie $ADMIN_COOKIE rác) không xoá cookie (cần Set-Cookie $ADMIN_COOKIE=; Path=/; Max-Age=0)"
+    fi
+  fi
+done
+# A Server Action to an admin page without a session: 401 from the proxy, before the Server Action shortcut (Review
+# Focus 1). The action id is made up: if the proxy let it through, Next.js would find no such action and write nothing.
+# A POST without next-action and a PUT are 401 as well.
+expect_admin_401() { # expect_admin_401 <path> <label> <method> [header]
+  local path=$1 label=$2 method=$3 header=${4:-} status
+  status=$(fetch "$BASE$path" "$TMP/admin-body" "$header" "$TMP/admin.headers" "$method") || fail "không kết nối được $BASE$path"
+  if [ "$status" != 401 ]; then admin_fail "$method $path ($label) trả $status, cần 401"; return 0; fi
+  if grep -qF -- "$ADMIN_CONTENT" "$TMP/admin-body"; then admin_fail "$method $path ($label) có nội dung khu admin"; return 0; fi
+  echo "smoke: $method $path ($label) → 401"
+}
+expect_admin_401 "$ADMIN_PAGE" 'Server Action, không phiên' POST "next-action: smoke-$RUN_ID"
+expect_admin_401 "$ADMIN_PAGE/ao-git-push-force" 'Server Action, cookie rác' POST "next-action: smoke-$RUN_ID"
+expect_admin_401 "$ADMIN_PAGE" 'POST không có next-action' POST
+expect_admin_401 "$ADMIN_PAGE" 'PUT' PUT
+# Audit PR #104 L4: the proxy's admin check reads the pathname as Next.js / Vercel hand it over. A spelling that a
+# decoding or case-folding router would read as an admin page must never answer 200 with admin content: 404 (no such
+# route) or the proxy's 307. `-g` keeps curl from touching the escapes.
+for ADMIN_SPELLING in /%61dmin/products /admin%2Fproducts /Admin/products /%61dmin /ADMIN/products/ao-git-push-force; do
+  status=$(fetch "$BASE$ADMIN_SPELLING" "$TMP/admin-body" '' "$TMP/admin.headers") || fail "không kết nối được $BASE$ADMIN_SPELLING"
+  location=$(header_value "$TMP/admin.headers" location)
+  if grep -qF -- "$ADMIN_CONTENT" "$TMP/admin-body"; then
+    admin_fail "GET $ADMIN_SPELLING (đường dẫn admin viết khác) trả $status kèm nội dung khu admin"
+  elif [ "$status" = 404 ] || { [ "$status" = 307 ] && is_login_location "$location"; }; then
+    echo "smoke: GET $ADMIN_SPELLING (đường dẫn admin viết khác) → $status${location:+ $location}"
+  else
+    admin_fail "GET $ADMIN_SPELLING (đường dẫn admin viết khác) trả $status${location:+ → $location}, cần 404 hoặc 307 tới /admin/login"
+  fi
+done
+# The login page is never guarded, with or without a (junk) cookie, configured or not; it is never indexed and sets
+# no cookie on a GET. "Khu quản trị chưa được cấu hình." only shows after a submit (E2E).
+for ADMIN_LOGIN_HEADER in '' "cookie: __Host-ns_admin=smoke-junk-$RUN_ID"; do
+  status=$(fetch "$BASE/admin/login" "$TMP/admin-login.html" "$ADMIN_LOGIN_HEADER" "$TMP/admin-login.headers") ||
+    fail "không kết nối được $BASE/admin/login"
+  label=${ADMIN_LOGIN_HEADER:+cookie rác}
+  if [ "$status" != 200 ]; then admin_fail "GET /admin/login${label:+ ($label)} trả $status, cần 200"; continue; fi
+  grep -qF -- 'Đăng nhập quản trị' "$TMP/admin-login.html" || admin_fail "HTML /admin/login không có \"Đăng nhập quản trị\""
+  grep -qE '<meta name="robots" content="[^"]*noindex' "$TMP/admin-login.html" || admin_fail "/admin/login không có meta robots noindex"
+  if sets_admin_cookie "$TMP/admin-login.headers"; then admin_fail "GET /admin/login${label:+ ($label)} trả Set-Cookie admin"; fi
+  if grep -qF -- "$ADMIN_CONTENT" "$TMP/admin-login.html"; then admin_fail "GET /admin/login có nội dung khu admin đã đăng nhập"; fi
+  echo "smoke: GET /admin/login${label:+ ($label)} → 200, noindex, không Set-Cookie"
+done
+[ -z "$ADMIN_FAILED" ] || fail "khu admin không được chặn đúng (xem các dòng LỖI ở trên)"
 
 echo "smoke: qua"

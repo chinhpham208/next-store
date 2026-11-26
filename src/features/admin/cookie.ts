@@ -60,7 +60,10 @@ export const clearAdminSession = async (): Promise<void> => {
   ;(await cookies()).delete({ name: adminCookieName(), httpOnly, sameSite, path, secure })
 }
 
-/** For admin pages: no session → /admin/login. A second layer behind the proxy (plan M5 D2, D5). */
+/**
+ * The first statement of every page under (protected) (audit PR #106 H1): no session → /admin/login. A second
+ * layer behind the proxy (plan M5 D2, D5); in a layout it does not keep the page from rendering.
+ */
 export const requireAdminPage = async (): Promise<void> => {
   if (!(await hasAdminSession())) redirect(LOGIN_PATH)
 }
