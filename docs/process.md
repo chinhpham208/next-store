@@ -32,6 +32,16 @@ Orchestrator kiểm trước khi merge:
 - Đối chiếu tiêu chí chấp nhận.
 - Đòi bằng chứng: test đỏ rồi xanh, số đo, log preview.
 - PR đụng bảo mật luôn qua Auditor Opus.
+- Mỗi PR ghi một dòng `model: <Haiku|Sonnet|Opus>` (thêm số lần dừng vì hạn mức nếu có) trong comment bằng chứng, để retro đo chi phí (retro M5, đề xuất 5).
+
+### Quy tắc từ retro M5 (chủ dự án duyệt 2026-11-26)
+
+1. **Plan có mục "Cố ý không làm":** các hành vi người dùng sẽ mong (phân trang, tìm kiếm, sắp xếp, xoá, phân quyền…) mà mốc bỏ, kèm lý do và điều kiện làm sau (ticket có ngưỡng). Cổng 2 xem mục này.
+2. **Quy tắc bảo vệ có test âm tính trên build thật.** Không đóng ticket bảo vệ (phiên, CSP, tag cache, giới hạn) nếu thiếu test chạy `next build` + `next start` chứng minh trường hợp bị chặn, ngoài test tĩnh trên mã nguồn. Mỗi quy tắc trong Global Constraints của plan trỏ tới tên test đó.
+3. **Song song hoá:** đầu mốc, Orchestrator lập đồ thị phụ thuộc từ bảng "Thứ tự" của plan, ghi vào ticket `M<n>-TECH`, và giao đồng thời các task không chung file (giới hạn bởi số nhánh preview Neon). Model theo mục bên trên.
+4. **Thay đổi console phải đọc lại trước khi ghi "đạt":** WAF, secret, cài đặt Vercel / Neon / GitHub. Đọc lại Audit Log hoặc trạng thái đã publish, rồi ghi vào ticket dòng "đã đọc lại lúc <giờ>: <trạng thái>".
+5. Ghi model cho mỗi PR (xem trên).
+6. **Audit toàn mốc được sửa quyết định đã duyệt:** khi audit tìm lỗ ở một quyết định đã duyệt, Orchestrator quyết và báo chủ dự án trong cùng ngày, không chờ Cổng riêng, nếu thay đổi chỉ làm chặt hơn và không thêm chi phí hay tài khoản. Ngoài điều kiện đó vẫn leo thang (§4).
 
 ## 2. Vòng đời một mốc
 
