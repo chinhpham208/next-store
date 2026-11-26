@@ -1,6 +1,8 @@
 'use server'
 
 import { refresh } from 'next/cache'
+import { headers } from 'next/headers'
+import { redirect } from 'next/navigation'
 import { clearCartId, readCartId, writeCartId } from '@/features/cart/cookie'
 import {
   addToCartInput,
@@ -156,4 +158,14 @@ export async function removeFromCartAction(input: unknown): Promise<CartActionRe
   if (!parsed.success) return { ok: false, error: 'invalid' }
   const { slug } = parsed.data
   return writeExistingCart((cartId, now) => removeLine({ cartId, slug, now }), REMOVE_FAILED_LOG)
+}
+
+// TEMPORARY (NS-136, plan M6 Task 2, C1). Never merged. Only the masked shape of x-forwarded-for, never a real IP.
+export async function probeForwardedForAction(): Promise<void> {
+  const raw = (await headers()).get('x-forwarded-for')
+  const parts = raw === null ? [] : raw.split(',').map((part) => part.trim())
+  const first = parts[0] ?? ''
+  const shape = { count: parts.length, firstLength: first.length, firstIs1234: first === '1.2.3.4' }
+  console.log(`probe: xff count=${shape.count} firstLength=${shape.firstLength} firstIs1234=${shape.firstIs1234}`)
+  redirect(`/probe-xff?count=${shape.count}&firstLength=${shape.firstLength}&firstIs1234=${shape.firstIs1234}`)
 }

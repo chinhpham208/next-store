@@ -1,4 +1,4 @@
-export { addToCartAction, removeFromCartAction, setCartQuantityAction } from '@/features/cart/actions'
+export { addToCartAction, probeForwardedForAction, removeFromCartAction, setCartQuantityAction } from '@/features/cart/actions'
 export { CART_NETWORK_ERROR, cartErrorMessage, QUANTITY_RANGE_MESSAGE } from '@/features/cart/messages'
 export { getCart, getCartCount } from '@/features/cart/queries'
 export type { CartActionResult, CartError, CartLine, CartView } from '@/features/cart/types'

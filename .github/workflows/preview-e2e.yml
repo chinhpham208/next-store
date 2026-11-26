@@ -94,6 +94,7 @@ jobs:
       - run: npm ci
 
       - name: smoke
+        if: false # TEMPORARY NS-136 probe
         env:
           BASE_URL: ${{ steps.url.outputs.base_url }}
           VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
@@ -123,7 +124,7 @@ jobs:
         # A trace records request headers, the bypass header included, and the report below embeds traces.
         # playwright.config.ts already turns tracing off while the bypass is on; e2e/test.ts fails a test that turns it
         # back on.
-        run: npm run e2e -- --trace off
+        run: npm run e2e -- --trace off --project=desktop e2e/probe-m6.spec.ts # TEMPORARY NS-136 probe
 
       # NS-54 (audit PR #61 M1): when a request to the preview fails, Playwright puts every request header, the bypass
       # secret included, into the error message, and so into data/*.md and the zip embedded in index.html. GitHub masks
