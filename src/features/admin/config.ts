@@ -10,6 +10,6 @@ const processEnv = (): AdminEnv => ({
 
 /**
  * The admin configuration, read on each call. Missing ADMIN_PASSWORD or SESSION_SECRET → `missing`; a password under
- * 20 characters, a secret under 32, or both equal → `weak`. Disabled means the admin area is closed (ADR-0018).
+ * 20 characters or with fewer than 16 distinct characters, a secret under 32, or both equal → `weak`. Disabled means the admin area is closed (ADR-0018).
  */
 export const readAdminConfig = (env: AdminEnv = processEnv()): AdminConfig => resolveAdminConfig(env)

@@ -95,13 +95,13 @@ openssl rand -base64 24
 
 Dán thẳng vào ô giá trị trên Vercel (bật Sensitive) và vào trình quản lý mật khẩu. Production và Preview dùng hai mật khẩu khác nhau, và khác `SESSION_SECRET`. Đổi mật khẩu Preview thì cập nhật cả GitHub secret `E2E_ADMIN_PASSWORD`. Mật khẩu kiểu passphrase (4 đến 5 từ) thường có dưới 16 ký tự khác nhau và bị từ chối: đừng dùng.
 
-**Tự kiểm mà không dán mật khẩu ở đâu cả** (Mac): sao chép mật khẩu từ trình quản lý mật khẩu hoặc từ ô giá trị trên Vercel, rồi chạy lệnh dưới. Lệnh đọc clipboard và chỉ in hai số, không in mật khẩu; đừng dán mật khẩu vào cuộc trò chuyện, ticket hay terminal.
+**Tự kiểm mà không dán mật khẩu ở đâu cả** (Mac): sao chép mật khẩu từ trình quản lý mật khẩu (Vercel không cho đọc lại biến Sensitive), rồi chạy lệnh dưới. Lệnh đọc clipboard và chỉ in hai số, không in mật khẩu; đừng dán mật khẩu vào cuộc trò chuyện, ticket hay terminal.
 
 ```bash
 pbpaste | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{s=s.trim();console.log(s.length, new Set([...s]).size)})"
 ```
 
-Hai số là độ dài và số ký tự khác nhau: cần **≥ 20 và ≥ 16**. Mật khẩu từ `openssl rand -base64 24` in `32` và số thứ hai thường từ 20 đến 28. Xong thì xoá clipboard (sao chép một chuỗi bất kỳ). Không đạt: sinh mật khẩu mới như trên, thay trên Vercel, redeploy.
+Hai số là độ dài và số ký tự khác nhau: cần **≥ 20 và ≥ 16**. Mật khẩu từ `openssl rand -base64 24` in `32` và số thứ hai thường từ 20 đến 28. Trong lúc làm, tắt Handoff và lịch sử clipboard (nếu có ứng dụng quản lý clipboard); xong thì xoá clipboard bằng `pbcopy < /dev/null`. Không đạt, hoặc trình quản lý mật khẩu không còn bản: sinh mật khẩu mới như trên, thay trên Vercel, cập nhật `E2E_ADMIN_PASSWORD` nếu là Preview, rồi redeploy.
 
 ## Smoke test và E2E trên URL thật
 

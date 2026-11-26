@@ -23,7 +23,8 @@ export const resolveAdminConfig = (env: AdminEnv): AdminConfig => {
   const password = present(env.ADMIN_PASSWORD)
   const sessionSecret = present(env.SESSION_SECRET)
   if (password === undefined || sessionSecret === undefined) return { enabled: false, reason: 'missing' }
-  // Padding does not make a value stronger: these are the lengths of the trimmed values.
+  // Padding does not make a value stronger: these are the lengths of the trimmed values. Length counts UTF-16 units,
+  // distinct characters count code points; env values are ASCII, so both agree — do not "fix" one side alone.
   if (password.length < MIN_ADMIN_PASSWORD_LENGTH) return { enabled: false, reason: 'weak' }
   if (distinctCharacters(password) < MIN_PASSWORD_DISTINCT_CHARACTERS) return { enabled: false, reason: 'weak' }
   if (sessionSecret.length < MIN_SESSION_SECRET_LENGTH) return { enabled: false, reason: 'weak' }

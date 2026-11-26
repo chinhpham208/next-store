@@ -6,7 +6,7 @@ import { grepInvertFor } from './e2e/production'
 const BASE_URL = process.env.BASE_URL
 // Only for machines that cannot download Playwright's Chromium (e.g. PW_CHANNEL=chrome); CI uses the bundled one.
 const CHANNEL = process.env.PW_CHANNEL || undefined
-// E2E_PORT moves the five local servers (E2E_PORT … E2E_PORT + 5) off 3100, e.g. when scripts/verify.sh holds it;
+// E2E_PORT moves the six local servers (E2E_PORT … E2E_PORT + 5) off 3100, e.g. when scripts/verify.sh holds it;
 // CI uses the default.
 const LOCAL_PORT = Number(process.env.E2E_PORT) || 3100
 const BROKEN_DB_PORT = LOCAL_PORT + 1
