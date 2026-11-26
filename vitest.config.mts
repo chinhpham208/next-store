@@ -10,6 +10,7 @@ const DB_TEST_FILES = [
   // schema.ts checks slugs with isProductSlug from @/features/products, whose index imports @/db.
   'src/features/cart/{actions,cookie,schema,store}.test.ts',
   'src/features/admin/{login-limit,login-lock}.test.ts',
+  'src/features/checkout/webhook.test.ts',
   'src/features/orders/{queries,store}.test.ts',
   'src/features/monitoring/{store,admin-queries}.test.ts',
 ]

@@ -26,3 +26,15 @@ test.describe('closed: khu admin', () => {
     expect(new URL(response.headers().location ?? '', CLOSED_CONFIG_URL).pathname).toBe('/admin/login')
   })
 })
+
+test.describe('closed: webhook thanh toán', () => {
+  test('closed: thiếu FAKE_PAYMENT_SECRET thì webhook trả 503', async ({ request }) => {
+    // The closed server has no FAKE_PAYMENT_SECRET and a dead database: the 503 is answered before either is read.
+    const response = await request.post(`${CLOSED_CONFIG_URL}/api/webhooks/payment`, {
+      data: '{}',
+      headers: { 'content-type': 'application/json' },
+    })
+    expect(response.status()).toBe(503)
+    expect(await response.json()).toEqual({ error: 'not-configured' })
+  })
+})

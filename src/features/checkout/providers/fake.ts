@@ -41,14 +41,14 @@ export const createFakeProvider = ({ secret }: { secret: string }): PaymentProvi
   },
 
   // Order matters: size, then signature, then parse. Nothing is parsed, and no database is reached, before the MAC.
-  verifyWebhook: async (request) => {
+  verifyWebhook: async (request, now = new Date()) => {
     const body = await readCappedBody(request, MAX_WEBHOOK_BODY_BYTES)
     if (body === null) throw new WebhookRejected('too-large')
     const verdict = await verifyFakeSignature({
       secret,
       body,
       header: request.headers.get(FAKE_SIGNATURE_HEADER),
-      now: new Date(),
+      now,
     })
     if (verdict !== 'ok') throw new WebhookRejected(verdict)
     return parseEvent(body)

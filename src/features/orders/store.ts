@@ -21,6 +21,8 @@ import type { ApplyOutcome, CreateOrderError, OrderItem, PaymentEvent, PaymentPr
 // cascades to cart_items and sets orders.cart_id to NULL: the reverse order. A purge of this very cart during a
 // payment can deadlock (40P01); the webhook answers 503, the gateway resends, and the purge swallows its own error.
 
+// How long after payment a duplicate of a paid order still names its products (the signature's own tolerance, 300 s).
+const DUPLICATE_REFRESH_WINDOW_MS = 300_000
 const STORED_ITEMS_INVALID = 'orders: stored items are invalid'
 const REF_NOT_ATTACHED = 'orders: payment ref not attached'
 // The largest value of orders.total (int4); audit PR #126 L2.
@@ -146,6 +148,7 @@ export const applyPaymentEvent = async ({ event, provider, now }: ApplyPaymentEv
           total: orders.total,
           items: orders.items,
           cartId: orders.cartId,
+          updatedAt: orders.updatedAt,
         })
         .from(orders)
         .where(eq(orders.paymentRef, event.paymentRef))
@@ -154,6 +157,9 @@ export const applyPaymentEvent = async ({ event, provider, now }: ApplyPaymentEv
 
       if (order.status !== 'pending') {
         if (order.status !== 'paid') return { outcome: 'duplicate', slugs: [] }
+        // `paid` is final, so updated_at is the moment of payment. Only a resend soon after it repairs a delivery that died
+        // before revalidateTag; an older one (or a replayed event, audit PR #128 L1) must not refresh the cache again.
+        if (now.getTime() - order.updatedAt.getTime() > DUPLICATE_REFRESH_WINDOW_MS) return { outcome: 'duplicate', slugs: [] }
         const items = parseOrderItems(order.items)
         if (items === undefined) throw new Error(STORED_ITEMS_INVALID)
         return { outcome: 'duplicate', slugs: items.map((item) => item.slug) }

@@ -10,7 +10,7 @@ export type PaymentProvider = {
     returnUrl: string
     cancelUrl: string
   }) => Promise<{ checkoutUrl: string; paymentRef: string }>
-  verifyWebhook: (request: Request) => Promise<PaymentEvent>
+  verifyWebhook: (request: Request, now?: Date) => Promise<PaymentEvent>
 }
 
 export type WebhookRejectedReason = 'unsigned' | 'bad-signature' | 'expired' | 'too-large' | 'malformed'

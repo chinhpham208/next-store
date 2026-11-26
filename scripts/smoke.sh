@@ -11,7 +11,8 @@
 # Vercel (*.vercel.app); khu admin (US-12): mọi
 # /admin/* ngoài /admin/login không có phiên hợp lệ trả 307 tới /admin/login (cookie rác bị xoá), Server Action trả 401,
 # đường dẫn admin viết mã hoá / khác hoa thường trả 404 hoặc 307, /admin/login trả 200 và noindex. Đúng cả khi khu
-# admin chưa được cấu hình (đóng: không có phiên nào hợp lệ).
+# admin chưa được cấu hình (đóng: không có phiên nào hợp lệ); webhook thanh toán (NS-142): POST không chữ ký trả 400
+# `unsigned` (503 = chưa cấu hình FAKE_PAYMENT_SECRET là lỗi, kể cả Preview / Dev).
 #
 #   npm run smoke                                   # chạy `next start` từ bản build hiện có (.next/), kiểm rồi tắt
 #   BASE_URL=https://<deploy>.vercel.app npm run smoke   # kiểm một URL đã deploy
@@ -97,6 +98,13 @@ port_busy() {
 start_server() {
   port_busy "$SMOKE_PORT" && fail "cổng $SMOKE_PORT đang bận: đã có tiến trình lắng nghe. Tắt nó hoặc đặt SMOKE_PORT khác."
   [ -d .next ] || fail "chưa có bản build (.next/). Chạy npm run build trước."
+  # The webhook check below needs a configured gateway (503 fails it). The server this script starts gets a throwaway
+  # FAKE_PAYMENT_SECRET of its own unless the caller exported one (verify.sh does); a value made here never leaves this
+  # run and is never printed.
+  xtrace_off
+  [ -n "${FAKE_PAYMENT_SECRET:-}" ] || FAKE_PAYMENT_SECRET=$(node -e "process.stdout.write(require('crypto').randomBytes(32).toString('base64'))")
+  export FAKE_PAYMENT_SECRET
+  xtrace_restore
   echo "smoke: next start -p $SMOKE_PORT"
   if command -v setsid >/dev/null; then
     setsid node_modules/.bin/next start -p "$SMOKE_PORT" > "$TMP/server.log" 2>&1 &
@@ -639,5 +647,21 @@ if [ "${#ADMIN_NONCES[@]}" = 2 ] && [ "${ADMIN_NONCES[0]}" = "${ADMIN_NONCES[1]}
   admin_fail "GET /admin/login hai lần trả cùng một nonce: nonce phải mới mỗi request"
 fi
 [ -z "$ADMIN_FAILED" ] || fail "khu admin không được chặn đúng (xem các dòng LỖI ở trên)"
+
+# NS-142 (ADR-0021, plan M6 Task 8): the payment webhook. A POST without a signature must be 400 `unsigned` on every
+# environment, Production included: it proves the route is deployed and its signature check runs before anything
+# else. 503 means no usable FAKE_PAYMENT_SECRET (missing, under 32 characters, or equal to SESSION_SECRET): that fails,
+# on Preview and Dev too, because a deployment that cannot take a payment is not healthy. The request has no
+# `next-action` header (fetch adds the fixed body `smoke=1` only), so it is not a Server Action. The answer is read
+# for its fixed code only; it is never an error text.
+status=$(fetch "$BASE/api/webhooks/payment" "$TMP/webhook-body" '' "$TMP/webhook.headers" POST) ||
+  fail "không kết nối được $BASE/api/webhooks/payment"
+if [ "$status" = 503 ]; then
+  fail "POST /api/webhooks/payment trả 503: webhook chưa được cấu hình (FAKE_PAYMENT_SECRET thiếu, dưới 32 ký tự hoặc trùng SESSION_SECRET); cần 400"
+fi
+[ "$status" = 400 ] || fail "POST /api/webhooks/payment (không chữ ký) trả $status, cần 400"
+[ "$(cat "$TMP/webhook-body")" = '{"error":"unsigned"}' ] ||
+  fail 'POST /api/webhooks/payment (không chữ ký) trả 400 nhưng thân không phải {"error":"unsigned"}'
+echo "smoke: POST /api/webhooks/payment (không chữ ký) → 400 unsigned"
 
 echo "smoke: qua"
