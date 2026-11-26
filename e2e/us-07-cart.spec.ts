@@ -13,11 +13,13 @@ import {
   productWithStock,
   removeLine,
   setQuantity,
+  waitForActionResponse,
   waitForHydration,
 } from './cart'
 import { VIEWPORT_INDEPENDENT } from './catalog'
 import { WRITE_TAG } from './production'
 import { readMeta, readSitemap } from './seo'
+import { delayActionTitleRow, heldTitleRows, titleCount, titleGaps, watchTitle } from './title'
 import { CART_TTL_DAYS } from '@/features/cart/limits'
 import { formatPrice } from '@/lib/format-price'
 
@@ -31,6 +33,31 @@ const SECOND = productWithStock('ao-404-not-found', 2)
 const DAY_SECONDS = 86_400
 // The cookie's Max-Age is CART_TTL_DAYS; a day off for clock skew and the time the test itself takes.
 const MIN_COOKIE_LIFETIME = (CART_TTL_DAYS - 1) * DAY_SECONDS
+
+// NS-113: the cart's own title, which every line action must leave in place (WCAG 2.4.2).
+const CART_TITLE = 'Giỏ hàng · next-store'
+// As US-06 (NS-107): longer than the gap measured on a loaded server, short enough for every step of one test.
+const TITLE_ROW_DELAY_MS = 600
+// "+" from 1 up to the line limit: 9 actions, each re-rendering the route (plan M4 D2). Stock of FIRST is 12.
+const TITLE_STEPS = 9
+const TITLE_STEPPED = productWithStock('ao-git-push-force', TITLE_STEPS + 1)
+// Removed one by one, the last leaving the empty cart: four actions.
+const TITLE_REMOVED = ['ao-git-push-force', 'ao-404-not-found', 'ao-hello-world', 'ao-sudo-make-me-coffee'].map((slug) =>
+  productWithStock(slug, 1),
+)
+const SERVER_ANSWER = { timeout: 15_000 }
+
+// Runs one line action and waits until the whole response is in, the held title row included, then checks the head
+// is back to exactly the cart's title: nothing stays behind (a held copy or a second <title>).
+const runAndSettle = async (page: Parameters<typeof addToCart>[0], act: () => Promise<void>, step: string) => {
+  const answered = waitForActionResponse(page)
+  await act()
+  expect((await answered).status(), step).toBe(200)
+  await expect(page.getByRole('main').locator('[aria-busy="true"]'), step).toHaveCount(0, SERVER_ANSWER)
+  await expect.poll(() => heldTitleRows(page), SERVER_ANSWER).toBe(0)
+  await expect(page, step).toHaveTitle(CART_TITLE)
+  await expect.poll(() => titleCount(page)).toBe(1)
+}
 
 const addBoth = async (page: Parameters<typeof addToCart>[0]) => {
   await addToCart(page, { slug: FIRST.slug })
@@ -87,6 +114,42 @@ test.describe('ghi vào giỏ', { tag: WRITE_TAG }, () => {
 
     await openCart(page)
     await expect(emptyCart(page)).toBeVisible()
+  })
+
+  // NS-113 (WCAG 2.4.2), as NS-107 on the product page: every line action re-renders the route in its response
+  // (plan M4 D2) and Next.js remounts the head's metadata on each one, so /cart had no <title> until the title row
+  // landed. The row is held back on every action (e2e/title.ts), which is the order that loses the title.
+  test('US-07: /cart luôn có <title> khi sửa số lượng', async ({ page }) => {
+    await delayActionTitleRow(page, TITLE_ROW_DELAY_MS)
+    await addToCart(page, { slug: TITLE_STEPPED.slug })
+    await openCart(page)
+    const increase = cartLine(page, TITLE_STEPPED.name).getByRole('button', {
+      name: `Tăng số lượng ${TITLE_STEPPED.name}`,
+    })
+    await waitForHydration(increase)
+    await watchTitle(page)
+    for (let quantity = 2; quantity <= TITLE_STEPS + 1; quantity++) {
+      await runAndSettle(page, () => increase.click(), `lên ${quantity}`)
+      await expect(lineQuantity(page, TITLE_STEPPED.name)).toHaveValue(String(quantity))
+    }
+    expect(await titleGaps(page)).toEqual([])
+  })
+
+  test('US-07: /cart luôn có <title> khi xoá dòng', async ({ page }) => {
+    await delayActionTitleRow(page, TITLE_ROW_DELAY_MS)
+    for (const product of TITLE_REMOVED) await addToCart(page, { slug: product.slug })
+    await openCart(page)
+    await expect(cartLines(page)).toHaveCount(TITLE_REMOVED.length)
+    await watchTitle(page)
+    for (const [index, product] of TITLE_REMOVED.entries()) {
+      const button = cartLine(page, product.name).getByRole('button', { name: `Xoá ${product.name}`, exact: true })
+      await waitForHydration(button)
+      await runAndSettle(page, () => button.click(), `xoá ${product.name}`)
+      await expect(cartLine(page, product.name)).toHaveCount(0)
+      await expect(cartLines(page)).toHaveCount(TITLE_REMOVED.length - index - 1)
+    }
+    await expect(emptyCart(page)).toBeVisible()
+    expect(await titleGaps(page)).toEqual([])
   })
 
   test('US-07: đóng trình duyệt và mở lại thì giỏ vẫn còn', async ({ newContext }) => {

@@ -39,7 +39,9 @@ const BASE_CLIENT_IMPORT = (specifier: string): boolean =>
   specifier === 'next/link' ||
   /^@\/components\/ui\/[a-z-]+$/.test(specifier) ||
   specifier === '@/lib/cn' ||
-  specifier === '@/lib/format-price'
+  specifier === '@/lib/format-price' ||
+  // NS-113 (plan M5 Task 11): the NS-107 title workaround, one place for every form (NS-114 removes it).
+  specifier === '@/lib/use-held-title'
 
 // The cart: the action reference and the import-free modules; the four cart client files may use one another.
 const isAllowedCartImport = (specifier: string): boolean =>
