@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { readAdminConfig } from '@/features/admin/config'
 
@@ -38,7 +39,35 @@ describe('readAdminConfig', () => {
       enabled: false,
       reason: 'weak',
     })
-    expect(readAdminConfig({ ADMIN_PASSWORD: 'x'.repeat(20), SESSION_SECRET: SECRET }).enabled).toBe(true)
+    expect(readAdminConfig({ ADMIN_PASSWORD: 'abcdefghijklmnopqrst', SESSION_SECRET: SECRET }).enabled).toBe(true)
+  })
+
+  it('is disabled when the password has fewer than 16 distinct characters', () => {
+    for (const password of [
+      'abababababababababababab',
+      '12345678901234567890',
+      'x'.repeat(20),
+      // 15 distinct characters, 30 long: length alone does not make it pass.
+      'abcdefghijklmno'.repeat(2),
+      // Counted on the trimmed value: spaces around it are not characters of the password.
+      `   ${'abcdefghijklmno'.repeat(2)}   `,
+    ]) {
+      expect(readAdminConfig({ ADMIN_PASSWORD: password, SESSION_SECRET: SECRET }), password).toEqual({
+        enabled: false,
+        reason: 'weak',
+      })
+    }
+    // Exactly 16 distinct characters passes; counted per code point, so an emoji is one character.
+    expect(readAdminConfig({ ADMIN_PASSWORD: 'abcdefghijklmnop'.repeat(2), SESSION_SECRET: SECRET }).enabled).toBe(true)
+    const fifteenAndEmoji = `${'abcdefghijklmno'.repeat(2)}\u{1F600}`
+    expect(readAdminConfig({ ADMIN_PASSWORD: fifteenAndEmoji, SESSION_SECRET: SECRET }).enabled).toBe(true)
+  })
+
+  it('accepts passwords made like openssl rand -base64 24', () => {
+    for (let i = 0; i < 1000; i += 1) {
+      const password = randomBytes(24).toString('base64')
+      expect(readAdminConfig({ ADMIN_PASSWORD: password, SESSION_SECRET: SECRET }).enabled).toBe(true)
+    }
   })
 
   it('is disabled when the secret is under 32 characters', () => {

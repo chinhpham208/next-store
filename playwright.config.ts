@@ -6,13 +6,14 @@ import { grepInvertFor } from './e2e/production'
 const BASE_URL = process.env.BASE_URL
 // Only for machines that cannot download Playwright's Chromium (e.g. PW_CHANNEL=chrome); CI uses the bundled one.
 const CHANNEL = process.env.PW_CHANNEL || undefined
-// E2E_PORT moves the five local servers (E2E_PORT … E2E_PORT + 4) off 3100, e.g. when scripts/verify.sh holds it;
+// E2E_PORT moves the five local servers (E2E_PORT … E2E_PORT + 5) off 3100, e.g. when scripts/verify.sh holds it;
 // CI uses the default.
 const LOCAL_PORT = Number(process.env.E2E_PORT) || 3100
 const BROKEN_DB_PORT = LOCAL_PORT + 1
 const HUNG_DB_PORT = LOCAL_PORT + 2
 const SILENT_TCP_PORT = LOCAL_PORT + 3
 const FAR_DB_PORT = LOCAL_PORT + 4
+const CLOSED_CONFIG_PORT = LOCAL_PORT + 5
 // Nothing listens on port 9, so every query fails at once (no 10 s connect wait); a local host needs no TLS.
 const BROKEN_DATABASE_URL = 'postgres://ns:ns@127.0.0.1:9/ns'
 // The silent listener accepts the connection and never answers, like a database that hangs (NS-55).
@@ -32,6 +33,11 @@ export const HUNG_DB_LOG = '.verify/e2e-hung-db.log'
 // seen from a far Vercel edge: the proxy must still answer an unknown product slug at once (ADR-0017, NS-79).
 export const FAR_DB_URL = `http://localhost:${FAR_DB_PORT}`
 export const FAR_DB_LOG = '.verify/e2e-far-db.log'
+// Sixth server of the same build with a closed configuration (ADR-0023, plan M6 Task 14): a weak ADMIN_PASSWORD (24
+// characters, 2 distinct) and no FAKE_PAYMENT_SECRET, so the specs can see the fail-closed paths on a real build. Its
+// database is dead: the closed paths answer before any query, and a second server must not open the PGlite directory.
+export const CLOSED_CONFIG_URL = `http://localhost:${CLOSED_CONFIG_PORT}`
+export const CLOSED_CONFIG_LOG = '.verify/e2e-closed-config.log'
 // PGlite has no cross-process lock (next.config.ts): two servers on one data directory corrupt it, so this server
 // reads a copy of the seeded database made when it starts.
 const FAR_DB_PGLITE_DIR = '.verify/e2e-far-db-pglite'
@@ -45,6 +51,9 @@ if (!BASE_URL) {
   process.env.E2E_ADMIN_PASSWORD ||= randomBytes(24).toString('base64')
   process.env.E2E_SESSION_SECRET ||= randomBytes(32).toString('base64')
 }
+// What the closed server runs with (a fake value, like the rest): `abab…` is long enough and weak (ADR-0023); the
+// session secret is the valid one of this run, so a token signed with it is exactly what the area must still refuse.
+const CLOSED_CONFIG_ADMIN_PASSWORD = 'ab'.repeat(12)
 const LOCAL_ADMIN_ENV = {
   ADMIN_PASSWORD: process.env.E2E_ADMIN_PASSWORD ?? '',
   SESSION_SECRET: process.env.E2E_SESSION_SECRET ?? '',
@@ -122,6 +131,18 @@ export default defineConfig({
           command: `mkdir -p .verify && rm -rf ${FAR_DB_PGLITE_DIR} && cp -R .data/pglite ${FAR_DB_PGLITE_DIR} && npm run start -- -p ${FAR_DB_PORT} > ${FAR_DB_LOG} 2>&1`,
           url: FAR_DB_URL,
           env: { NODE_OPTIONS: '--import ./e2e/far-db.mjs', PGLITE_DATA_DIR: FAR_DB_PGLITE_DIR },
+          reuseExistingServer: false,
+          timeout: 60_000,
+        },
+        {
+          command: `mkdir -p .verify && npm run start -- -p ${CLOSED_CONFIG_PORT} > ${CLOSED_CONFIG_LOG} 2>&1`,
+          url: CLOSED_CONFIG_URL,
+          env: {
+            DATABASE_URL: BROKEN_DATABASE_URL,
+            ADMIN_PASSWORD: CLOSED_CONFIG_ADMIN_PASSWORD,
+            SESSION_SECRET: process.env.E2E_SESSION_SECRET ?? '',
+            FAKE_PAYMENT_SECRET: '',
+          },
           reuseExistingServer: false,
           timeout: 60_000,
         },
