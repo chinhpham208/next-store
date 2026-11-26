@@ -198,6 +198,17 @@ describe('hasValidAdminCookie', () => {
     expect(await hasValidAdminCookie(requestWith(cookie))).toBe(false)
   })
 
+  it('the proxy closes /admin for a weak password', async () => {
+    // A cookie that is valid for the secret still gets no pass while the password has fewer than 16 distinct characters.
+    const token = await signSession({ secret: SECRET, now: new Date() })
+    const cookie = `__Host-ns_admin=${token}`
+    expect(await hasValidAdminCookie(requestWith(cookie))).toBe(true)
+    for (const weak of ['abababababababababababab', '12345678901234567890']) {
+      vi.stubEnv('ADMIN_PASSWORD', weak)
+      expect(await hasValidAdminCookie(requestWith(cookie)), weak).toBe(false)
+    }
+  })
+
   it('rejects a token signed with an empty secret while a real secret is configured', async () => {
     // What an attacker could compute if the code ever fell back to signing with ''.
     const { createHmac } = await import('node:crypto')

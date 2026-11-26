@@ -83,6 +83,26 @@ Biến SEO (`src/lib/site-url.ts`, design.md §7):
 
 `SITE_URL` được đọc **lúc build** (`sitemap.xml`, `robots.txt` prerender; `metadataBase` ở root layout): đổi giá trị thì phải deploy lại. Sai dạng (có đường dẫn, query, user, `http://` tới host không phải local) thì build dừng; thông báo chỉ nêu tên biến.
 
+## Sinh mật khẩu admin
+
+`ADMIN_PASSWORD` phải có **ít nhất 20 ký tự và ít nhất 16 ký tự khác nhau** (ADR-0018, ADR-0023). Không đạt thì khu `/admin` **đóng** như khi thiếu cấu hình: đăng nhập báo "Khu quản trị chưa được cấu hình.", cookie phiên còn hạn cũng bị chuyển tới `/admin/login`. Luật chỉ chặn mật khẩu lặp hoặc dãy số; nó không đo được entropy, nên mật khẩu phải được **sinh ngẫu nhiên**, không tự nghĩ.
+
+Sinh (Mac hoặc Linux), 24 byte ngẫu nhiên, khoảng 144 bit, luôn qua luật:
+
+```bash
+openssl rand -base64 24
+```
+
+Dán thẳng vào ô giá trị trên Vercel (bật Sensitive) và vào trình quản lý mật khẩu. Production và Preview dùng hai mật khẩu khác nhau, và khác `SESSION_SECRET`. Đổi mật khẩu Preview thì cập nhật cả GitHub secret `E2E_ADMIN_PASSWORD`. Mật khẩu kiểu passphrase (4 đến 5 từ) thường có dưới 16 ký tự khác nhau và bị từ chối: đừng dùng.
+
+**Tự kiểm mà không dán mật khẩu ở đâu cả** (Mac): sao chép mật khẩu từ trình quản lý mật khẩu (Vercel không cho đọc lại biến Sensitive), rồi chạy lệnh dưới. Lệnh đọc clipboard và chỉ in hai số, không in mật khẩu; đừng dán mật khẩu vào cuộc trò chuyện, ticket hay terminal.
+
+```bash
+pbpaste | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{s=s.trim();console.log(s.length, new Set([...s]).size)})"
+```
+
+Hai số là độ dài và số ký tự khác nhau: cần **≥ 20 và ≥ 16**. Mật khẩu từ `openssl rand -base64 24` in `32` và số thứ hai thường từ 20 đến 28. Trong lúc làm, tắt Handoff và lịch sử clipboard (nếu có ứng dụng quản lý clipboard); xong thì xoá clipboard bằng `pbcopy < /dev/null`. Không đạt, hoặc trình quản lý mật khẩu không còn bản: sinh mật khẩu mới như trên, thay trên Vercel, cập nhật `E2E_ADMIN_PASSWORD` nếu là Preview, rồi redeploy.
+
 ## Smoke test và E2E trên URL thật
 
 ```bash
@@ -103,7 +123,7 @@ E2E Playwright (từ Task 10 của M1) dùng cùng `BASE_URL` và `VERCEL_AUTOMA
 
 Khi bypass bật, trace luôn tắt vì trace ghi lại mọi header. `playwright.config.ts` đặt `trace: 'off'`; nếu spec bật lại bằng `test.use({ trace })` hoặc chạy với `--trace`, fixture cho test đỏ trước khi gửi request. ESLint cũng cấm `trace` khác `'off'` trong `test.use` của spec.
 
-Không có `BASE_URL`, `npm run e2e` tự chạy bốn `next start` từ cùng bản build: cổng 3100; cổng 3101 với `DATABASE_URL` trỏ vào cổng đóng (trang lỗi của US-05); cổng 3102 với `DATABASE_URL` trỏ vào một listener TCP im lặng ở cổng 3103 và `DB_QUERY_TIMEOUT_MS=1000` (DB treo, NS-55); cổng 3104 nạp `e2e/far-db.mjs` (mỗi truy vấn PGlite chờ 600 ms như Neon nhìn từ edge xa, NS-109: proxy vẫn phải trả 404 cho slug sản phẩm lạ ngay, không chờ DB, ADR-0017) và đọc bản sao `.data/pglite` ở `.verify/e2e-far-db-pglite` (PGlite không khoá giữa các tiến trình). Log của ba server này ghi vào `.verify/e2e-broken-db.log`, `.verify/e2e-hung-db.log`, `.verify/e2e-far-db.log`. Các nhóm test này bỏ qua khi có `BASE_URL`. `E2E_PORT=<n>` dời năm cổng sang `n` … `n+4`. `scripts/verify.sh` đọc `E2E_PORT` và `SMOKE_PORT`; chỉ đặt một biến thì biến kia lấy cùng giá trị. Nó chỉ tắt tiến trình do chính nó khởi động; cổng bận bởi tiến trình khác thì dừng với lỗi.
+Không có `BASE_URL`, `npm run e2e` tự chạy năm `next start` từ cùng bản build: cổng 3100; cổng 3101 với `DATABASE_URL` trỏ vào cổng đóng (trang lỗi của US-05); cổng 3102 với `DATABASE_URL` trỏ vào một listener TCP im lặng ở cổng 3103 và `DB_QUERY_TIMEOUT_MS=1000` (DB treo, NS-55); cổng 3104 nạp `e2e/far-db.mjs` (mỗi truy vấn PGlite chờ 600 ms như Neon nhìn từ edge xa, NS-109: proxy vẫn phải trả 404 cho slug sản phẩm lạ ngay, không chờ DB, ADR-0017) và đọc bản sao `.data/pglite` ở `.verify/e2e-far-db-pglite` (PGlite không khoá giữa các tiến trình); cổng 3105 là server cấu hình đóng (`CLOSED_CONFIG_URL`, ADR-0023): `ADMIN_PASSWORD` yếu (24 ký tự, 2 ký tự khác nhau), không `FAKE_PAYMENT_SECRET`, `DATABASE_URL` trỏ vào cổng đóng. Log của bốn server này ghi vào `.verify/e2e-broken-db.log`, `.verify/e2e-hung-db.log`, `.verify/e2e-far-db.log`, `.verify/e2e-closed-config.log`. Các nhóm test này bỏ qua khi có `BASE_URL`. `E2E_PORT=<n>` dời sáu cổng sang `n` … `n+5`. `scripts/verify.sh` đọc `E2E_PORT` và `SMOKE_PORT`; chỉ đặt một biến thì biến kia lấy cùng giá trị. Nó chỉ tắt tiến trình do chính nó khởi động; cổng bận bởi tiến trình khác thì dừng với lỗi.
 
 ### Tự chạy sau mỗi deploy: check `e2e-preview`
 

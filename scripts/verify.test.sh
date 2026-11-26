@@ -22,13 +22,13 @@ check() {
 }
 ports() { env -u E2E_PORT -u SMOKE_PORT "$@" bash scripts/verify.sh __ports 2>/dev/null || echo "exit $?"; }
 
-check 'default-3100' 'SMOKE_PORT=3100 E2E_PORTS=3100 3101 3102 3103 3104' "$(ports)"
-check 'e2e-only-moves-smoke' 'SMOKE_PORT=3200 E2E_PORTS=3200 3201 3202 3203 3204' "$(ports E2E_PORT=3200)"
-check 'smoke-only-moves-e2e' 'SMOKE_PORT=3300 E2E_PORTS=3300 3301 3302 3303 3304' "$(ports SMOKE_PORT=3300)"
-check 'both-set' 'SMOKE_PORT=3570 E2E_PORTS=3560 3561 3562 3563 3564' "$(ports SMOKE_PORT=3570 E2E_PORT=3560)"
-check 'leading-zero-is-decimal' 'SMOKE_PORT=8 E2E_PORTS=8 9 10 11 12' "$(ports E2E_PORT=08)"
-check 'e2e-top-of-range' 'SMOKE_PORT=65531 E2E_PORTS=65531 65532 65533 65534 65535' "$(ports E2E_PORT=65531)"
-check 'e2e-past-range' 'exit 2' "$(ports E2E_PORT=65532)"
+check 'default-3100' 'SMOKE_PORT=3100 E2E_PORTS=3100 3101 3102 3103 3104 3105' "$(ports)"
+check 'e2e-only-moves-smoke' 'SMOKE_PORT=3200 E2E_PORTS=3200 3201 3202 3203 3204 3205' "$(ports E2E_PORT=3200)"
+check 'smoke-only-moves-e2e' 'SMOKE_PORT=3300 E2E_PORTS=3300 3301 3302 3303 3304 3305' "$(ports SMOKE_PORT=3300)"
+check 'both-set' 'SMOKE_PORT=3570 E2E_PORTS=3560 3561 3562 3563 3564 3565' "$(ports SMOKE_PORT=3570 E2E_PORT=3560)"
+check 'leading-zero-is-decimal' 'SMOKE_PORT=8 E2E_PORTS=8 9 10 11 12 13' "$(ports E2E_PORT=08)"
+check 'e2e-top-of-range' 'SMOKE_PORT=65530 E2E_PORTS=65530 65531 65532 65533 65534 65535' "$(ports E2E_PORT=65530)"
+check 'e2e-past-range' 'exit 2' "$(ports E2E_PORT=65531)"
 check 'e2e-not-a-number' 'exit 2' "$(ports E2E_PORT=31a0)"
 check 'e2e-zero' 'exit 2' "$(ports E2E_PORT=0)"
 check 'smoke-too-long' 'exit 2' "$(ports SMOKE_PORT=310000)"
