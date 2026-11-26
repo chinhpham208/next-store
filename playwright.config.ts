@@ -50,6 +50,9 @@ const LOCAL_ADMIN_ENV = {
   SESSION_SECRET: process.env.E2E_SESSION_SECRET ?? '',
 }
 
+// The two specs that log in and write; they run in their own project below.
+const ADMIN_SPECS = [/us-12-admin-login\.spec\.ts$/, /us-13-admin-edit\.spec\.ts$/]
+
 export default defineConfig({
   testDir: 'e2e',
   forbidOnly: Boolean(process.env.CI),
@@ -67,10 +70,21 @@ export default defineConfig({
     // fixtures of e2e/test.ts, only for the origin of BASE_URL (NS-54, e2e/bypass.ts).
   },
   projects: [
-    { name: 'desktop', use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } } },
+    { name: 'desktop', testIgnore: ADMIN_SPECS, use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } } },
     {
       name: 'mobile',
+      testIgnore: ADMIN_SPECS,
       use: { ...devices['Desktop Chrome'], viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
+    },
+    // US-12 and US-13 (plan M5 Task 14, 15): one worker, after every other project, so the product they edit is never
+    // read by a spec running beside them and the writes of the two files never overlap. Desktop only: the specs set
+    // their own viewport where the width matters (axe at 390 px).
+    {
+      name: 'admin-write',
+      testMatch: ADMIN_SPECS,
+      dependencies: ['desktop', 'mobile'],
+      workers: 1,
+      use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 800 } },
     },
   ],
   // A deployed BASE_URL is tested as is; locally the production build from `npm run build` is served.

@@ -4,6 +4,14 @@
 //   REDACT_SECRET=<secret> node scripts/redact-report.mjs redact <thư mục>...   # thay secret bằng *** tại chỗ
 //   REDACT_SECRET=<secret> node scripts/redact-report.mjs check <thư mục>...    # còn sót thì mã thoát 1
 //
+// Nhiều secret: REDACT_SECRETS, mỗi dòng một secret (dòng trống bỏ qua), dùng được cùng REDACT_SECRET. Một secret
+// ngắn hơn MIN_SECRET_LENGTH hay không có secret nào thì mã thoát 2.
+//
+// Token phiên admin (NS-129, audit PR #106 L3) không phải secret biết trước: nó sinh lúc đăng nhập, nên che theo hình
+// dạng, luôn luôn, không cần khai báo: giá trị sau `__Host-ns_admin=` / `ns_admin=` (tên cookie giữ lại) và mọi
+// `v1.<hạn>.<chữ ký 43 ký tự>`. Cùng các dạng ANSI như secret. Không che được token đã mã hoá base64 ở giữa văn bản
+// khác (không có dạng nào để tìm); zip / gzip / data:application/zip thì được mở ra.
+//
 // Khi một request API fail, Playwright ghi mọi request header (kể cả x-vercel-protection-bypass) vào message lỗi.
 // Message đó nằm ở data/*.md và trong index.html, nơi report được nhúng dưới dạng zip nén rồi mã hoá base64, nên
 // sed trên file không thấy. Script mở mọi zip (file .zip và data:application/zip;base64 trong file text) và gzip, đệ
@@ -37,6 +45,15 @@ const base64Forms = (secret) => {
   }
   return forms
 }
+
+// What an admin session cookie looks like (ADR-0018: `v1.<exp>.<sig>`, sig = 43 base64url characters), found by shape
+// because the token is made at login. The first keeps the cookie's name and masks its value, whatever it is; the
+// second finds a token wherever it is. `name=` also as `%3D` (URL encoded). Global, so matchAll works; test with
+// `search`, which ignores lastIndex.
+export const SESSION_PATTERNS = [
+  /(?<=(?<![A-Za-z0-9_])(?:__Host-)?ns_admin(?:=|%3[Dd]))[A-Za-z0-9._-]+/g,
+  /v1\.\d+\.[A-Za-z0-9_-]{43,}/g,
+]
 
 // [form, replacement]: the text forms can be masked in place; a base64 form cannot, so it only fails `check`.
 export const secretForms = (secretText) => {
@@ -89,8 +106,15 @@ const withoutAnsi = (layer) => {
   return { stripped, toLayer }
 }
 
+// The layer with each session pattern replaced by the mask (latin1 keeps every byte as it was).
+const maskPatterns = (layer, patterns) => {
+  const text = layer.toString('latin1')
+  const masked = patterns.reduce((current, pattern) => current.replace(pattern, MASK), text)
+  return masked === text ? layer : Buffer.from(masked, 'latin1')
+}
+
 // Masks each form also where ANSI codes cut it: the whole span, from its first byte to its last, codes included.
-const maskAcrossAnsi = (layer, forms) => {
+const maskAcrossAnsi = (layer, forms, patterns) => {
   const view = withoutAnsi(layer)
   if (!view) return layer
   const spans = []
@@ -100,6 +124,9 @@ const maskAcrossAnsi = (layer, forms) => {
     for (let at = view.stripped.indexOf(needle); at !== -1; at = view.stripped.indexOf(needle, at + needle.length))
       spans.push([view.toLayer(at), view.toLayer(at + needle.length - 1) + 1])
   }
+  for (const pattern of patterns)
+    for (const match of view.stripped.matchAll(pattern))
+      spans.push([view.toLayer(match.index), view.toLayer(match.index + match[0].length - 1) + 1])
   if (spans.length === 0) return layer
   spans.sort((a, b) => a[0] - b[0])
   const parts = []
@@ -117,10 +144,16 @@ const maskAcrossAnsi = (layer, forms) => {
   return Buffer.concat(parts)
 }
 
-const hasForm = (layer, forms) => {
+const hasForm = (layer, forms, patterns) => {
   if (forms.some(([form]) => layer.includes(form))) return true
+  const text = layer.toString('latin1')
+  if (patterns.some((pattern) => text.search(pattern) !== -1)) return true
   const view = withoutAnsi(layer)
-  return view !== undefined && forms.some(([form]) => view.stripped.includes(form.toString('latin1')))
+  return (
+    view !== undefined &&
+    (forms.some(([form]) => view.stripped.includes(form.toString('latin1'))) ||
+      patterns.some((pattern) => view.stripped.search(pattern) !== -1))
+  )
 }
 
 const isZip = (buffer) => buffer.length >= 4 && buffer.readUInt32LE(0) === 0x04034b50
@@ -231,19 +264,20 @@ const walk = (buffer, location, onText) => {
   return text
 }
 
-export const redactBuffer = (buffer, forms, location = '') =>
+export const redactBuffer = (buffer, forms, location = '', patterns = SESSION_PATTERNS) =>
   walk(buffer, location, (layer) => {
     let next = layer
     for (const [form, mask] of forms) if (mask) next = replaceAll(next, form, mask)
-    return maskAcrossAnsi(next, forms)
+    // Across ANSI first: a pattern masked piece by piece on each side of a code would no longer look like itself.
+    return maskPatterns(maskAcrossAnsi(next, forms, patterns), patterns)
   })
 
 // Locations (never the secret) where a form of it is left. A container that cannot be read counts as a finding.
-export const findSecret = (buffer, forms, location = '') => {
+export const findSecret = (buffer, forms, location = '', patterns = SESSION_PATTERNS) => {
   const found = []
   try {
     walk(buffer, location, (layer, where) => {
-      if (hasForm(layer, forms)) found.push(where)
+      if (hasForm(layer, forms, patterns)) found.push(where)
       return layer
     })
   } catch (error) {
@@ -255,18 +289,27 @@ export const findSecret = (buffer, forms, location = '') => {
 const filesIn = (path) =>
   statSync(path).isDirectory() ? readdirSync(path).flatMap((name) => filesIn(join(path, name))) : [path]
 
+// REDACT_SECRET and every line of REDACT_SECRETS; empty lines are the secrets a workflow does not have (an unset
+// GitHub secret expands to nothing), so they are left out. A line is the secret as it is: not trimmed.
+export const secretsFrom = (env) =>
+  [env.REDACT_SECRET ?? '', ...(env.REDACT_SECRETS ?? '').split('\n')]
+    .map((line) => line.replace(/\r$/, ''))
+    .filter((line) => line !== '')
+
 const main = () => {
   const [command, ...paths] = process.argv.slice(2)
-  const secret = process.env.REDACT_SECRET ?? ''
+  const secrets = secretsFrom(process.env)
   if ((command !== 'redact' && command !== 'check') || paths.length === 0) {
-    console.error('Cách dùng: REDACT_SECRET=<secret> node scripts/redact-report.mjs redact|check <thư mục>...')
+    console.error('Cách dùng: REDACT_SECRET=<secret> (hoặc REDACT_SECRETS, mỗi dòng một secret) node scripts/redact-report.mjs redact|check <thư mục>...')
     process.exit(2)
   }
-  if (secret.length < MIN_SECRET_LENGTH) {
-    console.error(`redact-report: REDACT_SECRET trống hoặc ngắn hơn ${MIN_SECRET_LENGTH} ký tự; không kiểm được.`)
+  if (secrets.length === 0 || secrets.some((secret) => secret.length < MIN_SECRET_LENGTH)) {
+    console.error(
+      `redact-report: không có secret nào trong REDACT_SECRET / REDACT_SECRETS, hoặc có secret ngắn hơn ${MIN_SECRET_LENGTH} ký tự; không kiểm được.`,
+    )
     process.exit(2)
   }
-  const forms = secretForms(secret)
+  const forms = secrets.flatMap(secretForms)
   const files = paths.flatMap((path) => {
     try {
       return filesIn(path)
