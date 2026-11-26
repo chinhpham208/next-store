@@ -28,9 +28,13 @@ module.exports = {
       comment:
         'Outside a feature, import it only via @/features/<name> (index.ts). Exceptions: src/proxy.ts (and its test) ' +
         'use the narrow entry @/features/<name>/proxy-api, see proxy-narrow-entry; src/app/admin/** uses the admin ' +
-        'entry @/features/products/admin, see products-admin-entry-only-from-admin.',
-      from: { pathNot: '^src/(features/|proxy(\\.test)?\\.ts$)' },
-      to: { path: '^src/features/[^/]+/(?!index\\.ts$)', pathNot: '^src/features/(products/admin|admin/ui)\\.ts$' },
+        'entries @/features/(products|orders|monitoring)/admin, see admin-entries-only-from-admin; ' +
+        'src/instrumentation.ts uses @/features/monitoring/report, see instrumentation-narrow.',
+      from: { pathNot: '^src/(features/|proxy(\\.test)?\\.ts$|instrumentation(\\.test)?\\.ts$)' },
+      to: {
+        path: '^src/features/[^/]+/(?!index\\.ts$)',
+        pathNot: '^src/features/((products|orders|monitoring)/admin|admin/ui)\\.ts$',
+      },
     },
     {
       name: 'stock-only-from-orders',
@@ -44,14 +48,15 @@ module.exports = {
       to: { path: '^src/features/products/stock\\.ts$' },
     },
     {
-      name: 'products-admin-entry-only-from-admin',
+      name: 'admin-entries-only-from-admin',
       severity: 'error',
       comment:
-        'admin.ts is the admin entry of products (audit PR #108 M-1): the edit form and the admin table are client ' +
-        'references, and a shop page that imports them ships their chunk and the id of updateProductAction. Only ' +
-        'src/app/admin/** (and files of products itself) may import it; scripts/check-admin-bundle.mjs checks the build.',
-      from: { pathNot: '^src/(app/admin/|features/products/)' },
-      to: { path: '^src/features/products/admin\\.ts$' },
+        'admin.ts is the admin entry of products, orders and monitoring (audit PR #108 M-1, ADR-0023): the edit form ' +
+        'and the admin tables are client references or admin-only code, and a shop page that imports them ships their ' +
+        'chunk, and for products the id of updateProductAction. Only src/app/admin/** (and files of the same feature) ' +
+        'may import it; scripts/check-admin-bundle.mjs checks the build.',
+      from: { pathNot: '^src/(app/admin/|features/(products|orders|monitoring)/)' },
+      to: { path: '^src/features/(products|orders|monitoring)/admin\\.ts$' },
     },
     {
       name: 'admin-ui-entry-only-from-admin',
@@ -91,6 +96,46 @@ module.exports = {
         path: '^(src/db/|node_modules/(postgres|pg|@neondatabase/serverless|@electric-sql/pglite|drizzle-orm)/)',
         reachable: true,
       },
+    },
+    {
+      name: 'instrumentation-narrow',
+      severity: 'error',
+      comment:
+        'src/instrumentation.ts is bundled for the edge runtime too (C4, ADR-0022): it may import statically only the ' +
+        'pure @/features/monitoring/report; the part that writes (@/features/monitoring, with @/db) only with import(), ' +
+        'at run time, on the Node.js runtime. Nothing else of src. scripts/check-proxy-bundle.mjs checks the build.',
+      from: { path: '^src/instrumentation\\.ts$' },
+      // Nothing of src but the two monitoring files, and no package but Next.js itself (the type of onRequestError):
+      // a static import of @/db, drizzle-orm, postgres or @electric-sql/pglite is refused, whatever its spelling.
+      to: {
+        path: '^(src/|node_modules/(?!next/))',
+        pathNot: '^src/features/monitoring/(report\\.ts|index\\.ts)$',
+      },
+    },
+    {
+      name: 'instrumentation-index-only-dynamic',
+      severity: 'error',
+      comment: 'The writing half of monitoring is loaded with import(), never at the top of src/instrumentation.ts.',
+      from: { path: '^src/instrumentation\\.ts$' },
+      to: { path: '^src/features/monitoring/index\\.ts$', dynamic: false },
+    },
+    {
+      name: 'monitoring-report-pure',
+      severity: 'error',
+      comment:
+        'report.ts is imported statically by src/instrumentation.ts, so it is in the edge bundle: it imports nothing ' +
+        '(no @/db, no server-only, no zod; Web Crypto is a global). Not even a type, so the rule stays one line.',
+      from: { path: '^src/features/monitoring/report\\.ts$' },
+      to: { path: '^(src/|node_modules/)' },
+    },
+    {
+      name: 'monitoring-report-no-builtins',
+      severity: 'error',
+      comment:
+        'report.ts uses Web Crypto (a global), not node:crypto or any other Node.js builtin: it runs on the edge runtime ' +
+        'too, where a builtin is not there (or is bundled in as a polyfill).',
+      from: { path: '^src/features/monitoring/report\\.ts$' },
+      to: { dependencyTypes: ['core'] },
     },
     {
       name: 'proxy-api-only-from-proxy',

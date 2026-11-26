@@ -98,3 +98,12 @@ test.describe('NS-123: proxy kiểm phiên admin bằng HMAC (C3)', { tag: WRITE
     )
   })
 })
+
+// NS-146 (plan M6 Task 12): the errors page is behind the same proxy check as every /admin page, and it checks the
+// session itself too (src/admin-session-checks.test.ts). Without a cookie there is no login: a read, so it also runs
+// on Production.
+test('NS-123: /admin/errors không phiên thì 307 tới /admin/login', async ({ request }) => {
+  const response = await request.get('/admin/errors', { maxRedirects: 0 })
+  expect(isLoginRedirect(response)).toBe(true)
+  expect(await response.text()).not.toContain('nhóm lỗi')
+})

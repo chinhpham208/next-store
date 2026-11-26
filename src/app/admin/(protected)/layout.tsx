@@ -1,11 +1,13 @@
 import { connection } from "next/server";
 import { Suspense } from "react";
 import { AdminGate, AdminShellSkeleton } from "@/features/admin/ui";
+import { countRecentErrorsForAdmin } from "@/features/monitoring/admin";
 
 // The signed-in shell of every protected admin page (US-12, ADR-0018). AdminGate checks the session for the shell
 // only: a layout does not keep its page from rendering, so every page here starts with `await requireAdminPage()`
 // itself (audit PR #106 H1, src/admin-session-checks.test.ts). Inside <Suspense> so the check reads the request at
-// request time; the fallback shows nothing of the admin area.
+// request time; the fallback shows nothing of the admin area. The chip of "Lỗi" in the bar is counted by monitoring
+// (M6, ADR-0022), handed to the gate as a function because `admin` imports no domain.
 //
 // ADR-0020: every page here runs under the proxy's nonce CSP ('strict-dynamic'), and Next.js puts the nonce only on
 // what it renders for the request (D3). With the <Suspense> below as the first boundary, the route had a prerendered
@@ -18,7 +20,7 @@ export default async function ProtectedAdminLayout({ children }: LayoutProps<"/a
   await connection();
   return (
     <Suspense fallback={<AdminShellSkeleton />}>
-      <AdminGate>{children}</AdminGate>
+      <AdminGate countErrors={countRecentErrorsForAdmin}>{children}</AdminGate>
     </Suspense>
   );
 }

@@ -70,7 +70,7 @@ const prerender = ({ routes = {}, dynamicRoutes = {}, redirectStatus = 307 } = {
   const root = mkdtempSync(join(tmpdir(), 'admin-shell-'))
   dirs.push(root)
   const manifest = {
-    routes: { '/admin': { response: 'complete', htmlSize: 12344 }, '/admin/login': EMPTY, '/admin/products': EMPTY, '/': SHELL, ...routes },
+    routes: { '/admin': { response: 'complete', htmlSize: 12344 }, '/admin/login': EMPTY, '/admin/products': EMPTY, '/admin/errors': EMPTY, '/': SHELL, ...routes },
     dynamicRoutes: { '/admin/products/[slug]': EMPTY, '/admin/[...rest]': EMPTY, '/products/[slug]': SHELL, ...dynamicRoutes },
   }
   put(root, 'prerender-manifest.json', JSON.stringify(manifest))
@@ -105,7 +105,19 @@ test('a manifest without the admin routes, or without the catch-all, is reported
   const root = prerender()
   put(root, 'prerender-manifest.json', JSON.stringify({ routes: {}, dynamicRoutes: {} }))
   const problems = adminShellProblems(root)
-  for (const route of ['/admin/login', '/admin/products', '/admin/[...rest]']) {
+  for (const route of ['/admin/login', '/admin/products', '/admin/errors', '/admin/[...rest]']) {
     assert.ok(problems.some((p) => p.includes(route) && p.includes('xanh vì rỗng')), problems.join('\n'))
   }
+})
+
+test('a manifest without /admin/errors is reported (NS-146)', () => {
+  const root = prerender()
+  const manifest = {
+    routes: { '/admin': { response: 'complete', htmlSize: 12344 }, '/admin/login': EMPTY, '/admin/products': EMPTY },
+    dynamicRoutes: { '/admin/[...rest]': EMPTY },
+  }
+  put(root, 'prerender-manifest.json', JSON.stringify(manifest))
+  const problems = adminShellProblems(root)
+  assert.deepEqual(problems.length, 1, problems.join('\n'))
+  assert.ok(problems[0].includes('/admin/errors') && problems[0].includes('xanh vì rỗng'), problems.join('\n'))
 })

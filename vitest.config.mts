@@ -11,6 +11,7 @@ const DB_TEST_FILES = [
   'src/features/cart/{actions,cookie,schema,store}.test.ts',
   'src/features/admin/{login-limit,login-lock}.test.ts',
   'src/features/orders/{queries,store}.test.ts',
+  'src/features/monitoring/{store,admin-queries}.test.ts',
 ]
 
 export default defineConfig({

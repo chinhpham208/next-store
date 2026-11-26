@@ -148,6 +148,27 @@ test('NS-133: trang 404 dưới /admin khi đã đăng nhập hydrate dưới CS
   expect(violations).toEqual([])
 })
 
+// NS-146 (plan M6 Task 12): the errors page is rendered per request, so its scripts carry the proxy's nonce and the
+// bar (the chip of "Lỗi" is read there) hydrates: "Đăng xuất" gets React's props.
+test('NS-csp: /admin/errors hydrate dưới CSP nonce', { tag: WRITE_TAG }, async ({ page }) => {
+  test.skip(!PASSWORD, 'Không có E2E_ADMIN_PASSWORD: không đăng nhập được')
+  await withoutToolbar(page)
+  const violations = await watchCsp(page)
+  await logIn(page)
+  const response = await page.goto('/admin/errors')
+  expect(response?.status()).toBe(200)
+  const policy = response?.headers()['content-security-policy'] ?? ''
+  expect(policy).toMatch(NONCE_POLICY)
+  const nonce = /'nonce-([^']+)'/.exec(policy)?.[1]
+  const scripts = ((await response?.text()) ?? '').match(/<script[ >][^>]*/g) ?? []
+  expect(scripts.length).toBeGreaterThan(0)
+  for (const script of scripts) expect(script).toContain(`nonce="${nonce}"`)
+  await expect(page.getByRole('heading', { level: 1, name: 'Lỗi' })).toBeVisible()
+  await expect(page).toHaveTitle('Lỗi · Quản trị')
+  await waitForHydration(page.getByRole('button', { name: 'Đăng xuất' }))
+  expect(violations).toEqual([])
+})
+
 // ADR-0020 10A: HSTS comes from Vercel (`*.vercel.app` is preloaded). Not set by the app, so not checked locally.
 test('NS-127: HSTS có trên deployment Vercel', async ({ request }) => {
   test.skip(!BASE_URL?.startsWith('https://'), 'HSTS do Vercel đặt: chỉ kiểm trên deployment')
