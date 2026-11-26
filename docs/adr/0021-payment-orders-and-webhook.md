@@ -1,6 +1,6 @@
 # ADR-0021: Thanh toán thử, đơn hàng và webhook ký chữ ký (M6)
 
-- Trạng thái: Đề xuất (chờ chủ dự án duyệt PR)
+- Trạng thái: Đã chấp nhận (PR #120, chủ dự án duyệt 2026-11-26)
 - Ngày: 2026-11-26
 - Quyết định của chủ dự án: 2026-11-26 (plan M6, Cổng 1, quyết định 1, 2, 3, 4, 5, 11, 13, 14, phương án A)
 - Bổ sung: [ADR-0004](./0004-payment-vietnam.md) (interface `PaymentProvider`, bảng `orders`, webhook; M6 dựng `FakeProvider`), [ADR-0015](./0015-edge-rate-limit.md) (Hệ quả "Webhook thanh toán (M6)": trả lời bằng quyết định 11), [ADR-0020](./0020-content-security-policy-and-hsts.md) (Hệ quả M6: trả lời bằng quyết định 5)

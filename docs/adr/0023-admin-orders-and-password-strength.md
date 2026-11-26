@@ -1,6 +1,6 @@
 # ADR-0023: Danh sách đơn và danh sách lỗi cho admin, độ mạnh `ADMIN_PASSWORD` (M6)
 
-- Trạng thái: Đề xuất (chờ chủ dự án duyệt PR)
+- Trạng thái: Đã chấp nhận (PR #120, chủ dự án duyệt 2026-11-26)
 - Ngày: 2026-11-26
 - Quyết định của chủ dự án: 2026-11-26 (plan M6, Cổng 1, quyết định 6, 7, 10, phương án A)
 - Bổ sung: [ADR-0018](./0018-admin-auth.md) (quyết định 5A: thêm luật độ mạnh mật khẩu; thêm hai trang admin chỉ đọc)
