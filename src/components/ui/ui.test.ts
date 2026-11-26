@@ -92,6 +92,17 @@ describe('Button', () => {
     expect(classes).toEqual(expect.arrayContaining(['border-border-strong', 'text-foreground', 'w-full']))
     expect(classes).not.toContain('bg-foreground')
   })
+  it('Button styles aria-disabled like disabled, for the admin forms (M5 Gate 2)', () => {
+    const classes = classOf(render(Button, { 'aria-disabled': true, children: 'Đăng nhập' }))
+    expect(classes).toEqual(
+      expect.arrayContaining([
+        'aria-disabled:cursor-not-allowed',
+        'aria-disabled:border-surface-muted',
+        'aria-disabled:bg-surface-muted',
+        'aria-disabled:text-muted-foreground',
+      ]),
+    )
+  })
   it('Button forwards disabled and event props', () => {
     expect(render(Button, { disabled: true, children: 'Thêm vào giỏ' })).toContain('disabled=""')
   })

@@ -1,6 +1,7 @@
 import 'server-only'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
+import { connection } from 'next/server'
 import { readAdminConfig } from '@/features/admin/config'
 import { type AdminCookieName, adminCookieNameFor } from '@/features/admin/cookie-name'
 import { ADMIN_SESSION_TTL_SECONDS, signSession, verifySession } from '@/features/admin/session'
@@ -10,6 +11,7 @@ import { getSiteUrl } from '@/lib/site-url'
 // it through proxy-api.ts. Never logs the cookie or a config value.
 
 const LOGIN_PATH = '/admin/login'
+const HOME_PATH = '/admin/products'
 
 type AdminCookieOptions = { httpOnly: true; sameSite: 'strict'; path: '/'; secure: boolean; maxAge: number }
 
@@ -30,9 +32,15 @@ export const adminCookieOptions = (): AdminCookieOptions => ({
 
 /** A valid session cookie under the current scheme's name. A disabled config closes the area: always false. */
 export const hasAdminSession = async (): Promise<boolean> => {
+  // The request first, the config after (audit PR #105 M1): reading env first returned before any dynamic API when
+  // the build had no ADMIN_PASSWORD / SESSION_SECRET (CI), so "no session" was prerendered into /admin/login and a
+  // requireAdminPage redirect would be baked into every admin page. Read this way, the route is dynamic whatever
+  // the build env. cookies() alone does not keep new Date() out of a prerender (blocking-prerender-current-time, as
+  // the cart's NS-104): the clock is read only after connection().
+  const token = (await cookies()).get(adminCookieName())?.value
+  await connection()
   const config = readAdminConfig()
   if (!config.enabled) return false
-  const token = (await cookies()).get(adminCookieName())?.value
   return verifySession({ token, secret: config.sessionSecret, now: new Date() })
 }
 
@@ -55,4 +63,9 @@ export const clearAdminSession = async (): Promise<void> => {
 /** For admin pages: no session → /admin/login. A second layer behind the proxy (plan M5 D2, D5). */
 export const requireAdminPage = async (): Promise<void> => {
   if (!(await hasAdminSession())) redirect(LOGIN_PATH)
+}
+
+/** For /admin/login: an admin who is already signed in has nothing to do there (plan M5 Task 7). */
+export const redirectSignedInAdmin = async (): Promise<void> => {
+  if (await hasAdminSession()) redirect(HOME_PATH)
 }

@@ -30,6 +30,10 @@ test('NS-105: only the reviewed Server Functions are exposed', () => {
     .map((entry) => `${entry.filename} ${entry.exportedName.startsWith('$$RSC_SERVER_CACHE_') ? "'use cache'" : entry.exportedName}`)
     .sort()
   expect(exposed).toEqual([
+    // M5 Task 7 (ADR-0018): loginAction checks the config, the input and the lock before the password; logoutAction
+    // only clears the cookie.
+    'src/features/admin/actions.ts loginAction',
+    'src/features/admin/actions.ts logoutAction',
     'src/features/cart/actions.ts addToCartAction',
     'src/features/cart/actions.ts removeFromCartAction',
     'src/features/cart/actions.ts setCartQuantityAction',

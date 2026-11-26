@@ -1,9 +1,12 @@
+import { readFileSync } from 'node:fs'
+import { cookies } from 'next/headers'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   adminCookieName,
   adminCookieOptions,
   clearAdminSession,
   hasAdminSession,
+  redirectSignedInAdmin,
   requireAdminPage,
   writeAdminSession,
 } from '@/features/admin/cookie'
@@ -29,6 +32,10 @@ const redirect = vi.hoisted(() =>
   }),
 )
 vi.mock('next/navigation', () => ({ redirect }))
+
+// Outside a request the real one throws; here it only marks the moment the clock may be read.
+const connection = vi.hoisted(() => vi.fn(async () => {}))
+vi.mock('next/server', () => ({ connection }))
 
 // Fake values, test only.
 const PASSWORD = 'test-admin-password-0123'
@@ -162,5 +169,61 @@ describe('requireAdminPage', () => {
     jar.incoming.set('ns_admin', await signSession({ secret: SECRET, now: new Date() }))
     await expect(requireAdminPage()).resolves.toBeUndefined()
     expect(redirect).not.toHaveBeenCalled()
+  })
+})
+
+describe('redirectSignedInAdmin', () => {
+  it('sends a signed-in admin from /admin/login to /admin/products', async () => {
+    jar.incoming.set('ns_admin', await signSession({ secret: SECRET, now: new Date() }))
+    await expect(redirectSignedInAdmin()).rejects.toThrow('NEXT_REDIRECT /admin/products')
+  })
+
+  it('returns without a session', async () => {
+    await expect(redirectSignedInAdmin()).resolves.toBeUndefined()
+    expect(redirect).not.toHaveBeenCalled()
+  })
+})
+
+describe('hasAdminSession and the clock', () => {
+  it('waits for the request (connection) before reading the clock', async () => {
+    jar.incoming.set('ns_admin', await signSession({ secret: SECRET, now: new Date() }))
+    expect(await hasAdminSession()).toBe(true)
+    expect(connection).toHaveBeenCalledTimes(1)
+    // new Date() cannot be spied on reliably; the order in the source is what Next.js sees.
+    const source = readFileSync('src/features/admin/cookie.ts', 'utf8')
+    const body = /export const hasAdminSession = [\s\S]*?\n}\n/.exec(source)?.[0] ?? ''
+    expect(body.indexOf('await connection()')).toBeGreaterThan(-1)
+    expect(body.indexOf('await connection()')).toBeLessThan(body.indexOf('now: new Date()'))
+  })
+})
+
+// Audit PR #105 M1: the request must be read before the config, or a build without ADMIN_PASSWORD / SESSION_SECRET
+// returns before any dynamic API and prerenders /admin/login (and every page behind requireAdminPage) as static.
+describe('hasAdminSession is dynamic whatever the build env', () => {
+  it('hasAdminSession reads the request even when the config is disabled', async () => {
+    vi.stubEnv('ADMIN_PASSWORD', '')
+    vi.stubEnv('SESSION_SECRET', '')
+    expect(await hasAdminSession()).toBe(false)
+    expect(cookies).toHaveBeenCalledTimes(1)
+    expect(connection).toHaveBeenCalledTimes(1)
+  })
+
+  it('requireAdminPage and redirectSignedInAdmin read the request when the config is disabled', async () => {
+    vi.stubEnv('SESSION_SECRET', '')
+    await expect(requireAdminPage()).rejects.toThrow('NEXT_REDIRECT /admin/login')
+    await expect(redirectSignedInAdmin()).resolves.toBeUndefined()
+    expect(cookies).toHaveBeenCalledTimes(2)
+    expect(connection).toHaveBeenCalledTimes(2)
+  })
+
+  it('calls cookies() and connection() before readAdminConfig() in the source', () => {
+    const source = readFileSync('src/features/admin/cookie.ts', 'utf8')
+    const body = /export const hasAdminSession = [\s\S]*?\n}\n/.exec(source)?.[0] ?? ''
+    const config = body.indexOf('readAdminConfig()')
+    expect(config).toBeGreaterThan(-1)
+    expect(body.indexOf('await cookies()')).toBeGreaterThan(-1)
+    expect(body.indexOf('await cookies()')).toBeLessThan(config)
+    expect(body.indexOf('await connection()')).toBeGreaterThan(-1)
+    expect(body.indexOf('await connection()')).toBeLessThan(config)
   })
 })

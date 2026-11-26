@@ -29,3 +29,11 @@ it('the root layout sets metadataBase from getSiteUrl', () => {
 it('no source file hard-codes the production domain', () => {
   expect(sourceFiles('src').filter((file) => /vercel\.app/.test(readFileSync(file, 'utf8')))).toEqual([])
 })
+
+it('the admin area is noindex, titled "… · Quản trị" (requirements.md §5, plan M5 Task 7)', async () => {
+  const { metadata } = await import('@/app/admin/layout')
+  expect(metadata.robots).toEqual({ index: false, follow: false })
+  expect(metadata.title).toEqual({ template: '%s · Quản trị', default: 'Quản trị' })
+  const login = await import('@/app/admin/login/page')
+  expect(login.metadata.title).toBe('Đăng nhập')
+})

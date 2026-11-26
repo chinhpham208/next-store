@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import { defineConfig, devices } from '@playwright/test'
 import { RUN_BYPASS } from './e2e/bypass'
 import { grepInvertFor } from './e2e/production'
@@ -35,6 +36,20 @@ export const FAR_DB_LOG = '.verify/e2e-far-db.log'
 // reads a copy of the seeded database made when it starts.
 const FAR_DB_PGLITE_DIR = '.verify/e2e-far-db-pglite'
 
+// Admin area of the local server (ADR-0018, plan M5 Task 7): fake values made for this run, never real secrets.
+// scripts/verify.sh makes them; a run without it (CI's `npm run e2e`, a developer's `npx playwright test`) gets them
+// here. Written into process.env before any worker starts, so every worker re-reading this file finds the same
+// values (workers inherit the runner's environment) and the specs read E2E_ADMIN_PASSWORD (Task 14). Against a
+// deployed BASE_URL the server has its own secrets and E2E_ADMIN_PASSWORD comes from the workflow (Preview only).
+if (!BASE_URL) {
+  process.env.E2E_ADMIN_PASSWORD ||= randomBytes(24).toString('base64')
+  process.env.E2E_SESSION_SECRET ||= randomBytes(32).toString('base64')
+}
+const LOCAL_ADMIN_ENV = {
+  ADMIN_PASSWORD: process.env.E2E_ADMIN_PASSWORD ?? '',
+  SESSION_SECRET: process.env.E2E_SESSION_SECRET ?? '',
+}
+
 export default defineConfig({
   testDir: 'e2e',
   forbidOnly: Boolean(process.env.CI),
@@ -65,6 +80,7 @@ export default defineConfig({
         {
           command: `npm run start -- -p ${LOCAL_PORT}`,
           url: `http://localhost:${LOCAL_PORT}`,
+          env: LOCAL_ADMIN_ENV,
           reuseExistingServer: false,
           timeout: 60_000,
         },
