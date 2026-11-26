@@ -1,5 +1,6 @@
 import 'server-only'
 import { asc, eq } from 'drizzle-orm'
+import { cache } from 'react'
 import { dbQuery, products } from '@/db'
 import { hasAdminSession } from '@/features/admin'
 import { isProductSlug } from '@/features/products/slug'
@@ -23,9 +24,10 @@ export async function listProductsForAdmin(): Promise<AdminProductRow[]> {
   })
 }
 
-export async function getProductForAdmin(slug: string): Promise<AdminProductForm | null> {
-  if (!(await hasAdminSession())) throw new Error('admin: no session')
-  if (!isProductSlug(slug)) return null
+// generateMetadata and the page of /admin/products/[slug] both read the product: React's cache() shares one query
+// within the request and forgets it when the request ends (audit PR #108 nit), so it is no cache in the sense of
+// ADR-0019. It wraps the inner read only: the session is checked on every call, first.
+const readProductForAdmin = cache(async (slug: string): Promise<AdminProductForm | null> => {
   const [row] = await dbQuery({
     name: 'products.admin-get',
     run: (db) =>
@@ -42,4 +44,10 @@ export async function getProductForAdmin(slug: string): Promise<AdminProductForm
         .where(eq(products.slug, slug)),
   })
   return row ?? null
+})
+
+export async function getProductForAdmin(slug: string): Promise<AdminProductForm | null> {
+  if (!(await hasAdminSession())) throw new Error('admin: no session')
+  if (!isProductSlug(slug)) return null
+  return readProductForAdmin(slug)
 }

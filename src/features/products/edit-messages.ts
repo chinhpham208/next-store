@@ -26,6 +26,21 @@ export const productEditErrorMessage = <Field extends ProductEditField>(
 
 export const PRODUCT_EDIT_SAVING = 'Đang lưu…'
 
+// The hint under each label (Gate 2 decision 3): the field's aria-describedby is the hint, then the error if any.
+export const PRODUCT_EDIT_HINTS: Record<ProductEditField, string> = {
+  name: 'Tối đa 120 ký tự.',
+  price: 'Chỉ gõ chữ số, đơn vị đồng. Ví dụ: 199000.',
+  stock: '0 là hết hàng: cửa hàng hiện "Hết hàng" và khoá nút "Thêm vào giỏ".',
+  description: 'Tối đa 2.000 ký tự.',
+}
+
+/**
+ * When the action itself rejects and the session is still there (the network failed, a 500, a new deploy no
+ * longer knows the action's id): the cart's CART_NETWORK_ERROR word for word (Gate 2 decision 6), repeated as the
+ * login form does, since a client file may not reach into another feature.
+ */
+export const PRODUCT_EDIT_NETWORK_ERROR = 'Không kết nối được. Vui lòng tải lại trang và thử lại.'
+
 // A sentence with one link inside: before + link.label + after is the whole text of the alert.
 export type ProductEditStateMessage = { before: string; link: { label: string; href: string }; after: string }
 

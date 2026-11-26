@@ -2,7 +2,7 @@
 # Chạy kiểm tra của next-store, chịu được giới hạn ~180 giây mỗi lệnh shell của agent.
 #
 #   bash scripts/verify.sh quick   # typecheck, lint, check:deps, unit test
-#   bash scripts/verify.sh full    # quick + build + smoke + e2e (nếu đã có)
+#   bash scripts/verify.sh full    # quick + build + check:bundle + smoke + e2e (nếu đã có)
 #   bash scripts/verify.sh wait    # đợi tiếp lần chạy đang dở
 #
 # Chạy nền, ghi log vào .verify/<thời gian>.log. Mỗi lần gọi đợi tối đa VERIFY_WAIT giây (mặc định 160).
@@ -95,7 +95,8 @@ ports_free() {
 pipeline() {
   local mode=$1
   local steps=(typecheck lint check:deps test)
-  [ "$mode" = full ] && steps+=(build smoke e2e)
+  # check:bundle right after build: reads .next (audit PR #108 M-1, scripts/check-admin-bundle.mjs).
+  [ "$mode" = full ] && steps+=(build check:bundle smoke e2e)
   for s in "${steps[@]}"; do
     if ! has_script "$s"; then echo "::skip $s (chưa có script)"; continue; fi
     if [ "$s" = smoke ] || [ "$s" = e2e ]; then

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
+  PRODUCT_EDIT_HINTS,
+  PRODUCT_EDIT_NETWORK_ERROR,
   PRODUCT_EDIT_SAVING,
   productEditErrorMessage,
   productEditStateMessage,
@@ -70,5 +72,20 @@ describe('productEditStateMessage (Cổng 2 M5 decision 4)', () => {
 
   it('says it is saving', () => {
     expect(PRODUCT_EDIT_SAVING).toBe('Đang lưu…')
+  })
+})
+
+describe('form text of Gate 2 M5 (Task 10)', () => {
+  it('has the approved hint of each field', () => {
+    expect(PRODUCT_EDIT_HINTS).toEqual({
+      name: 'Tối đa 120 ký tự.',
+      price: 'Chỉ gõ chữ số, đơn vị đồng. Ví dụ: 199000.',
+      stock: '0 là hết hàng: cửa hàng hiện "Hết hàng" và khoá nút "Thêm vào giỏ".',
+      description: 'Tối đa 2.000 ký tự.',
+    })
+  })
+
+  it('a rejected save reads like the cart (CART_NETWORK_ERROR, Gate 2 decision 6)', () => {
+    expect(PRODUCT_EDIT_NETWORK_ERROR).toBe('Không kết nối được. Vui lòng tải lại trang và thử lại.')
   })
 })

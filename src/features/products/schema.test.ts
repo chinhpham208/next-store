@@ -424,6 +424,109 @@ describe('parseProductEdit (M5 Task 9, US-13)', () => {
     expect(parseProductEdit(form({ stock: '2.5' }))).toEqual({ ok: false, fieldErrors: { stock: 'not-integer' } })
   })
 
+  it('accepts updated_at exactly as getProductForAdmin writes it', () => {
+    for (const expectedUpdatedAt of ['1970-01-01T00:00:00.000000Z', '2026-11-25T23:59:59.999999Z', '9999-12-31T23:59:59.999999Z']) {
+      expect(parseProductEdit(form({ expectedUpdatedAt })).ok, expectedUpdatedAt).toBe(true)
+    }
+  })
+
+  // Audit PR #107 L-2: String.prototype.trim() keeps format characters (\p{Cf}), so a zero-width space was saved as
+  // the name and the shop showed an empty one.
+  it.each(['\u200b', '\u200b \u200b', '\u2060\ufeff', '\u00a0\u200d', '\u3000\u180e'])(
+    'US-13: a name of invisible characters only is empty (%j)',
+    (name) => {
+      expect(parseProductEdit(form({ name }))).toEqual({ ok: false, fieldErrors: { name: 'empty' } })
+    },
+  )
+
+  // Audit PR #108 L-3: each one was saved and looked like an empty name on the shop.
+  it.each([
+    ['a Hangul filler', '\u3164'],
+    ['the Hangul choseong and jungseong fillers', '\u115f\u1160'],
+    ['a halfwidth Hangul filler', '\uffa0'],
+    ['a braille blank', '\u2800'],
+    ['a lone variation selector', '\ufe0f'],
+    ['a lone combining accent', '\u0301'],
+    ['combining marks and spaces', ' \u0301\u0302 \u20dd'],
+    ['a zero-width joiner and a filler', '\u200d\u3164\u200d'],
+    ['line and paragraph separators', '\u2028\u2029'],
+  ])('US-13: a name of %s only is empty', (_, name) => {
+    expect(parseProductEdit(form({ name }))).toEqual({ ok: false, fieldErrors: { name: 'empty' } })
+  })
+
+  it('a description of fillers only is empty', () => {
+    expect(parseProductEdit(form({ description: '\u2800\n\u3164' }))).toEqual({
+      ok: false,
+      fieldErrors: { description: 'empty' },
+    })
+  })
+
+  it('drops invisible characters at either end of the name, keeps the marks of a letter', () => {
+    const parsed = parseProductEdit(form({ name: '\u200b\ufeff\u0301Áo\u200b' }))
+    expect(parsed.ok && parsed.value.name).toBe('Áo')
+    const accent = parseProductEdit(form({ name: 'Cafe\u0301' }))
+    expect(accent.ok && accent.value.name).toBe('Café')
+  })
+
+  it('stores names and descriptions in NFC', () => {
+    const parsed = parseProductEdit(form({ name: 'A\u0301o', description: 'Mo\u0302 ta\u0309' }))
+    expect(parsed.ok && parsed.value).toMatchObject({ name: 'Áo', description: 'Mô tả' })
+  })
+
+  it('keeps names made of emoji or digits only', () => {
+    for (const name of ['🔥', '👩‍💻', '❤️', '2026', '🇻🇳']) {
+      const parsed = parseProductEdit(form({ name }))
+      expect(parsed.ok && parsed.value.name, name).toBe(name)
+    }
+  })
+
+  it('a name stays on one line: a line or paragraph separator becomes one space', () => {
+    const parsed = parseProductEdit(form({ name: 'a\u2028b\u2029 c' }))
+    expect(parsed.ok && parsed.value.name).toBe('a b c')
+  })
+
+  it('a description turns a line or paragraph separator into a line break', () => {
+    const parsed = parseProductEdit(form({ description: 'Dòng 1\u2028Dòng 2\u2029Dòng 3' }))
+    expect(parsed.ok && parsed.value.description).toBe('Dòng 1\nDòng 2\nDòng 3')
+  })
+
+  it('a description of invisible characters only is empty', () => {
+    expect(parseProductEdit(form({ description: '\u200b\n\u200b' }))).toEqual({
+      ok: false,
+      fieldErrors: { description: 'empty' },
+    })
+  })
+
+  it('keeps an emoji joined by a zero-width joiner', () => {
+    const parsed = parseProductEdit(form({ name: 'Áo 👩‍💻' }))
+    expect(parsed.ok && parsed.value.name).toBe('Áo 👩‍💻')
+  })
+
+  it('a name stays on one line: a line break or a tab becomes one space', () => {
+    const parsed = parseProductEdit(form({ name: 'Áo\nthun \r\n\t git' }))
+    expect(parsed.ok && parsed.value.name).toBe('Áo thun git')
+  })
+
+  it('a description keeps its line breaks', () => {
+    const parsed = parseProductEdit(form({ description: 'Dòng 1\nDòng 2\r\n\tDòng 3' }))
+    expect(parsed.ok && parsed.value.description).toBe('Dòng 1\nDòng 2\r\n\tDòng 3')
+  })
+
+  // Audit PR #107 nit: the length was counted with the zeros.
+  it('reads leading zeros as the number they spell', () => {
+    const parsed = parseProductEdit(form({ price: '0000000000000001', stock: '007' }))
+    expect(parsed.ok && parsed.value).toMatchObject({ price: 1, stock: 7 })
+    expect(parseProductEdit(form({ price: '000' })).ok && parseProductEdit(form({ price: '000' }))).toMatchObject({
+      value: { price: 0 },
+    })
+    expect(parseProductEdit(form({ price: `${'0'.repeat(400)}100000000` })).ok).toBe(true)
+    expect(parseProductEdit(form({ price: `${'0'.repeat(400)}100000001` }))).toEqual({
+      ok: false,
+      fieldErrors: { price: 'too-large' },
+    })
+    expect(parseProductEdit(form({ stock: '-007' }))).toEqual({ ok: false, fieldErrors: { stock: 'negative' } })
+  })
+
   it('trims name and description', () => {
     const parsed = parseProductEdit(form({ name: '  Áo  ', description: '\n Mô tả \n' }))
     expect(parsed.ok && parsed.value).toMatchObject({ name: 'Áo', description: 'Mô tả' })
@@ -454,6 +557,24 @@ describe('parseProductEdit (M5 Task 9, US-13)', () => {
     ['a missing expectedUpdatedAt', { expectedUpdatedAt: undefined }],
     ['a missing field', { stock: undefined }],
     ['a NUL in the name', { name: 'Áo\u0000' }],
+    // Audit PR #107 L-1: these passed Zod and made Postgres throw (unavailable, updateTag, an error log).
+    ['the year 0000', { expectedUpdatedAt: '0000-01-01T00:00:00.000000Z' }],
+    ['a year before 1970', { expectedUpdatedAt: '1969-12-31T23:59:59.999999Z' }],
+    ['milliseconds only', { expectedUpdatedAt: '2026-11-25T08:00:00.123Z' }],
+    ['no fraction', { expectedUpdatedAt: '2026-11-25T08:00:00Z' }],
+    ['an offset', { expectedUpdatedAt: '2026-11-25T08:00:00.123456+07:00' }],
+    ['the 30th of February', { expectedUpdatedAt: '2026-02-30T08:00:00.123456Z' }],
+    ['a five-digit year', { expectedUpdatedAt: '+12026-11-25T08:00:00.123456Z' }],
+    // Audit PR #107 L-2: a control character the form cannot type (a bell); line breaks in a name are a space.
+    ['a control character in the name', { name: 'Áo\u0007' }],
+    ['a control character in the description', { description: 'Mô tả\u001b[31m' }],
+    // Audit PR #108 L-3: bidi controls reorder what the shop shows ("abc\u202eevil" reads "abclive").
+    ...['\u202a', '\u202b', '\u202c', '\u202d', '\u202e', '\u2066', '\u2067', '\u2068', '\u2069', '\u200e', '\u200f', '\u061c'].flatMap(
+      (control): [string, Record<string, string>][] => [
+        [`a bidi control U+${control.codePointAt(0)?.toString(16).toUpperCase()} in the name`, { name: `abc${control}evil` }],
+        [`a bidi control U+${control.codePointAt(0)?.toString(16).toUpperCase()} in the description`, { description: `Mô tả${control}` }],
+      ],
+    ),
   ])('refuses %s as a form error', (_, fields) => {
     expect(parseProductEdit(form(fields))).toEqual({ ok: false, fieldErrors: {}, formError: 'invalid' })
   })

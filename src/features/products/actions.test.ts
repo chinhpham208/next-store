@@ -150,6 +150,19 @@ describe('updateProductAction (US-13, ADR-0019)', () => {
     expect(calls.names).toEqual([])
   })
 
+  // Audit PR #107 L-1: measured, the year 0 reached Postgres, which threw: unavailable, two updateTag and a log line.
+  it('refuses the year 0000 as a form error without the database, updateTag or a log', async () => {
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+    expect(await updateProductAction(IDLE, await edit({ expectedUpdatedAt: '0000-01-01T00:00:00.000000Z' }))).toEqual({
+      status: 'invalid',
+      fieldErrors: {},
+      formError: 'invalid',
+    })
+    expect(calls.names).toEqual([])
+    expect(updateTag).not.toHaveBeenCalled()
+    expect(log).not.toHaveBeenCalled()
+  })
+
   it('refuses without a session before parsing or touching the database', async () => {
     session.hasAdminSession.mockResolvedValue(false)
     const data = await edit({ price: '1' })

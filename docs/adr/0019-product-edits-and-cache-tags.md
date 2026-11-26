@@ -86,8 +86,8 @@ Quyết định 3A, 4A, 11A, 12A, 13A áp như sau.
 - `updated_at` được đặt **rõ** trong câu `UPDATE` (không dựa vào `$onUpdate` hay trigger, ADR-0014 bổ sung NS-101).
 - 0 hàng cập nhật → một truy vấn kiểm slug có tồn tại: có → `conflict` ("Sản phẩm vừa được sửa ở nơi khác. Tải lại trang để xem bản mới nhất."), không → `not-found`. Không ghi đè im lặng (13A).
 - Ghi bị lỗi hoặc `DB_QUERY_TIMEOUT` → **vẫn** `updateTag` như khi thành công (không biết đã ghi chưa, ADR-0011; xoá cache thừa vô hại) rồi trả `unavailable`. Không tự thử lại.
-- Không đổi slug, ảnh, danh mục, `featured`. Giới hạn input: tên ≤ 120 ký tự, mô tả ≤ 2.000, giá là số nguyên đồng 0..100.000.000, tồn kho 0..10.000; tên và mô tả `trim()`. Ràng buộc `CHECK` của DB là lớp cuối cho giá âm.
-- Dữ liệu admin (`listProductsForAdmin`, `getProductForAdmin`) đọc không cache, không bao giờ nằm trong `'use cache'`.
+- Không đổi slug, ảnh, danh mục, `featured`. Giới hạn input: tên ≤ 120 ký tự, mô tả ≤ 2.000, giá là số nguyên đồng 0..100.000.000, tồn kho 0..10.000; tên và mô tả `trim()`. *Sửa theo audit PR #108 L-3:* chuẩn hoá NFC; U+2028 / U+2029 thành dấu cách trong tên, thành `\n` trong mô tả; ký tự điều hướng bidi (U+202A–U+202E, U+2066–U+2069, U+200E, U+200F, U+061C) là lỗi form `invalid` như ký tự điều khiển; cắt ở hai đầu khoảng trắng, `\p{Cf}`, ký tự lấp chỗ (U+115F, U+1160, U+3164, U+FFA0, U+2800) và dấu kết hợp đứng đầu; trường phải còn ít nhất một chữ, số, ký hiệu (emoji) hay dấu câu thấy được, không thì `empty`. Emoji ZWJ giữ nguyên. Ràng buộc `CHECK` của DB là lớp cuối cho giá âm.
+- Dữ liệu admin (`listProductsForAdmin`, `getProductForAdmin`) đọc không cache, không bao giờ nằm trong `'use cache'`. Ngoại lệ duy nhất là `cache()` của React trong `admin-queries.ts` cho phần đọc bên trong `getProductForAdmin` (audit PR #108 nit): chỉ sống trong một request, để `generateMetadata` và page dùng chung một truy vấn; kiểm phiên vẫn chạy ở mỗi lần gọi, trước nó.
 
 **Chính sách xoá = ẩn (4A).** Không có code xoá hay ẩn ở M5 (3A). Khi làm (ticket và plan sau):
 
@@ -115,6 +115,7 @@ Quyết định 3A, 4A, 11A, 12A, 13A áp như sau.
 - **Ghi bị hết giờ làm mới cache dù có thể chưa ghi.** Giá là một lần render lại thừa; ngược lại (không làm mới khi đã ghi) cửa hàng giữ giá cũ tới hết `hours`.
 - **Xung đột hai tab** là một trạng thái lỗi mới trên form; form mang `updatedAt` mới sau mỗi lần lưu thành công nên lưu liên tiếp trong cùng tab không báo xung đột.
 - **Khách không được báo khi giá đổi** (12A). Tổng giỏ luôn khớp giá sẽ thanh toán; M6 chụp giá vào `orders.items`. Muốn báo thì thêm cột giá chụp nullable trong `cart_items` (expand), ADR mới.
+- **M6: mọi câu trừ kho PHẢI đặt `updated_at = now()`** (audit PR #107 L-4). Form admin ghi tồn kho **tuyệt đối** (`stock = <giá trị của form>`) và chỉ biết có người ghi chen vào nhờ `updated_at` (13A). Nếu checkout trừ kho mà không đổi `updated_at`, một form admin mở từ trước lần mua sẽ lưu đè tồn kho cũ mà không bị `conflict`, và cửa hàng bán quá số còn. Đổi `updated_at` không đảo thứ tự "Mới nhất" (11A: theo `created_at`). Admin vừa mở form khi có đơn thì nhận `conflict` và tải lại, đúng ý. Ghi trên ticket M6 (NS-6) và trong plan M5, mục "Chuyển sang M6".
 - **Ẩn sản phẩm (khi làm) không bao giờ xoá khỏi DB;** sản phẩm ẩn vẫn chiếm slug. Đổi FK sang `RESTRICT` là contract, phải đi sau release cuối cùng còn code dựa vào cascade.
 - **Một migration expand + một backfill ở M5** (Task 5): `products.created_at` và bảng `admin_login_failures` (ADR-0018). Code cũ chạy được trên schema mới (không đọc `created_at`, không chạm bảng mới).
 - **Cách kiểm:**

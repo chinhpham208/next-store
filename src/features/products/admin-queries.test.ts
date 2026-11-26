@@ -21,6 +21,23 @@ vi.mock('@/db', async (importOriginal) => {
   return { ...actual, dbQuery }
 })
 
+// React's cache() memoises only inside a server request; in Vitest (client build of React) it does not. This one
+// memoises per test, like a request does, so the test sees what generateMetadata + page do in one request.
+const memo = vi.hoisted(() => ({ maps: [] as Map<string, unknown>[] }))
+vi.mock('react', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('react')>()
+  const cache = <A extends unknown[], R>(fn: (...args: A) => R) => {
+    const map = new Map<string, unknown>()
+    memo.maps.push(map)
+    return (...args: A): R => {
+      const key = JSON.stringify(args)
+      if (!map.has(key)) map.set(key, fn(...args))
+      return map.get(key) as R
+    }
+  }
+  return { ...actual, cache }
+})
+
 const SLUG = 'ao-git-push-force'
 // What getProductForAdmin returns for updatedAt: UTC with microseconds, the precision of timestamptz.
 const MICRO_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/
@@ -32,6 +49,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   calls.names = []
+  for (const map of memo.maps) map.clear()
   session.hasAdminSession.mockResolvedValue(true)
 })
 
@@ -74,6 +92,22 @@ describe('getProductForAdmin', () => {
   })
 })
 
+describe('getProductForAdmin reads once per request (audit PR #108 nit)', () => {
+  it('generateMetadata and the page share one query', async () => {
+    const first = await getProductForAdmin(SLUG)
+    const second = await getProductForAdmin(SLUG)
+    expect(second).toEqual(first)
+    expect(calls.names).toEqual(['products.admin-get'])
+  })
+
+  it('checks the session on every call, before the memoised read', async () => {
+    await getProductForAdmin(SLUG)
+    session.hasAdminSession.mockResolvedValue(false)
+    await expect(getProductForAdmin(SLUG)).rejects.toThrow('admin: no session')
+    expect(session.hasAdminSession).toHaveBeenCalledTimes(2)
+  })
+})
+
 describe('admin reads check the session first (audit PR #106 H1)', () => {
   it.each([
     ['listProductsForAdmin', () => listProductsForAdmin()],
@@ -90,7 +124,11 @@ describe('admin reads are never cached (ADR-0019)', () => {
   it('is not cached', () => {
     const source = readFileSync('src/features/products/admin-queries.ts', 'utf8')
     expect(source).not.toMatch(/['"]use cache/)
-    expect(source).not.toMatch(/\bcacheTag\b|\bcacheLife\b|unstable_cache|from 'react'/)
+    expect(source).not.toMatch(/\bcacheTag\b|\bcacheLife\b|unstable_cache/)
+    // React's cache() only: a memo for one request, dropped when it ends (audit PR #108 nit), never on an export
+    // (src/admin-session-checks.test.ts reports `export const f = cache(…)`).
+    expect([...source.matchAll(/from 'react'/g)]).toHaveLength(source.includes("import { cache } from 'react'") ? 1 : 0)
+    expect(source).not.toMatch(/export\s+const\s+\w+\s*=\s*cache\(/)
     expect(source).toMatch(/^import 'server-only'/)
   })
 })

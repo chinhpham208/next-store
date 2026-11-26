@@ -1,3 +1,5 @@
+// The shop's entry of products. The admin part (edit form, admin table, admin reads, edit messages) is in admin.ts,
+// which only src/app/admin/** imports (audit PR #108 M-1).
 export {
   getAllProductSlugs,
   getCategories,
@@ -7,14 +9,6 @@ export {
   listProducts,
   type ProductSitemapEntry,
 } from '@/features/products/queries'
-export { getProductForAdmin, listProductsForAdmin } from '@/features/products/admin-queries'
-export { updateProductAction } from '@/features/products/actions'
-export {
-  PRODUCT_EDIT_SAVING,
-  productEditErrorMessage,
-  productEditStateMessage,
-  type ProductEditStateMessage,
-} from '@/features/products/edit-messages'
 export { getProductMetadata } from '@/features/products/metadata'
 export { renderProductName } from '@/features/products/components/product-name'
 export { ProductGrid, type ProductGridProps } from '@/features/products/components/product-grid'
@@ -34,14 +28,8 @@ export {
   type ProductPurchase,
 } from '@/features/products/components/product-detail'
 export type {
-  AdminProductForm,
-  AdminProductRow,
   CategoryOption,
   ProductDetail,
-  ProductEditErrors,
-  ProductEditField,
-  ProductEditFieldErrors,
-  ProductEditState,
   ProductListing,
   ProductSummary,
 } from '@/features/products/types'
@@ -51,9 +39,7 @@ export {
   isProductSlug,
   MAX_QUERY_LENGTH,
   PAGE_SIZE,
-  parseProductEdit,
   parseProductQuery,
-  PRODUCT_EDIT_LIMITS,
   PRODUCT_SORTS,
   type ProductQuery,
   type ProductSort,

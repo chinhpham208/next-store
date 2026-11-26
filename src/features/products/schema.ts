@@ -154,22 +154,59 @@ const editFormSchema = z.object({
   description: editText,
   stock: editText,
 })
+// updated_at exactly as UPDATED_AT_TEXT writes it (getProductForAdmin, the save's RETURNING): UTC, six fraction digits,
+// a real calendar day, from 1970 on. Anything else is not this form's value, and some of it (the year 0000) passed
+// z.iso.datetime() and made Postgres throw, which read as `unavailable` (audit PR #107 L-1).
+const UPDATED_AT_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/
+const FIRST_YEAR = '1970'
+const isUpdatedAtText = (value: string): boolean => {
+  if (!UPDATED_AT_PATTERN.test(value) || value.slice(0, 4) < FIRST_YEAR) return false
+  // Date keeps milliseconds: the same text back up to them means the day and time exist (no 30 February, no 24:00).
+  const date = new Date(value)
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 23) === value.slice(0, 23)
+}
 const formFieldsSchema = z.object({
   slug: z.string().refine(isProductSlug),
-  // updated_at as getProductForAdmin writes it (UTC, up to microseconds); Postgres compares it exactly.
-  expectedUpdatedAt: z.iso.datetime(),
+  expectedUpdatedAt: z.iso.datetime({ precision: 6 }).refine(isUpdatedAtText),
 })
 
 const characters = (value: string): number => Array.from(value).length
 
+// trim() keeps format characters, so a name of U+200B alone was saved and the shop showed an empty name (audit PR
+// #107 L-2); a zero-width joiner inside an emoji stays.
+// What counts as text (audit PR #108 L-3). A name or description needs one visible letter, digit, symbol (emoji)
+// or punctuation mark. Spaces, format characters (\p{Cf}: ZWSP, ZWJ, BOM), marks with no base (\p{M}: a lone
+// U+0301 or U+FE0F) and the fillers that are letters by category but draw nothing (Hangul U+115F, U+1160, U+3164,
+// U+FFA0; braille blank U+2800) do not count, and are cut at either end. Marks are kept at the end: they belong to
+// the letter before them (an accent, the U+FE0F of an emoji). Bidi controls reorder the text around them on the
+// shop, so they are a form error, like \p{Cc}. Input is stored in NFC.
+const FILLERS = '\\u115f\\u1160\\u3164\\uffa0\\u2800'
+const FILLER = new RegExp(`[${FILLERS}]`, 'gu')
+const VISIBLE = /[\p{L}\p{N}\p{S}\p{P}]/u
+const EDGES = new RegExp(`^[\\s\\p{Z}\\p{Cf}\\p{M}${FILLERS}]+|[\\s\\p{Z}\\p{Cf}${FILLERS}]+$`, 'gu')
+const BIDI_CONTROL = /[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/u
+const SEPARATORS = /[\u2028\u2029]/g
+const isBlank = (value: string): boolean => !VISIBLE.test(value.replace(FILLER, ''))
+const cleanText = (value: string): string => value.normalize('NFC').replace(SEPARATORS, '\n')
+const trimEdges = (value: string): string => value.replace(EDGES, '')
+
 const textError = (value: string, max: number): 'empty' | 'too-long' | undefined => {
-  if (value.length === 0) return 'empty'
+  if (isBlank(value)) return 'empty'
   return characters(value) > max ? 'too-long' : undefined
 }
 
+// A name is one line: a line break, a tab or U+2028 / U+2029 (pasted, or a forged POST) becomes one space. Any other
+// control character cannot be typed in the form: a form error, like a NUL. A description keeps \t, \n and \r, and
+// turns U+2028 / U+2029 into \n.
+const LINE_BREAKS = /\s*[\t\n\v\f\r]+\s*/g
+const CONTROL = /\p{Cc}/u
+const DESCRIPTION_CONTROL = /[^\P{Cc}\t\n\r]/u
+const oneLine = (value: string): string => trimEdges(cleanText(value).replace(LINE_BREAKS, ' '))
+
 // ASCII digits only: "1.5", "1e3", "1.000", "0x10", "+5" and non-ASCII digits are not a whole number of đồng.
+// Leading zeros are dropped before the length check: "0000000000000001" is 1, not too large (audit PR #107 nit).
 const amount = (raw: string, max: number): { value: number } | { error: 'negative' | 'not-integer' | 'too-large' } => {
-  const value = raw.trim()
+  const value = raw.trim().replace(/^(-?)0+(?=\d)/, '$1')
   if (/^-\d+$/.test(value)) return { error: 'negative' }
   if (!/^\d+$/.test(value)) return { error: 'not-integer' }
   if (value.length > MAX_AMOUNT_DIGITS || Number(value) > max) return { error: 'too-large' }
@@ -184,8 +221,11 @@ export const parseProductEdit = (formData: unknown): ProductEditParse => {
   const form = formFieldsSchema.safeParse(raw.data)
   if (!form.success) return FORM_INVALID
 
-  const name = raw.data.name.trim()
-  const description = raw.data.description.trim()
+  const name = oneLine(raw.data.name)
+  const description = trimEdges(cleanText(raw.data.description))
+  if (CONTROL.test(name) || DESCRIPTION_CONTROL.test(description)) return FORM_INVALID
+  // On the raw input: trimEdges would drop one at either end, and the admin should learn it was there.
+  if (BIDI_CONTROL.test(raw.data.name) || BIDI_CONTROL.test(raw.data.description)) return FORM_INVALID
   const price = amount(raw.data.price, PRODUCT_EDIT_LIMITS.priceMax)
   const stock = amount(raw.data.stock, PRODUCT_EDIT_LIMITS.stockMax)
   const fieldErrors: ProductEditFieldErrors = {}
